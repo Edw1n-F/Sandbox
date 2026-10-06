@@ -153,7 +153,26 @@ render nothing:
    exactly the class of bug that makes an overlay silently never appear. Fixed
    in `backend/.env`; **the backend must be restarted for `.env` to take
    effect.**
-7. **Cesium 1.146 API drift.** `CesiumTerrainProvider` no longer accepts a `url`;
+7. **The overlays rendered nothing, three separate causes.** Each one alone
+   looks like "the toggle just doesn't work", and all three were present at once:
+   - **React StrictMode destroyed the viewer out from under its siblings.** The
+     create-effect's cleanup calls `viewer.destroy()`; the other effects'
+     cleanups then ran against the destroyed instance, and `viewer.imageryLayers`
+     dereferences an internal that `destroy()` already released. Fixed with a
+     single `isLive()` predicate guarding every touch of the viewer.
+   - **`SingleTileImageryProvider` was added before its image had loaded.** The
+     provider starts empty; adding such a layer makes Cesium's render loop throw
+     a bare `DeveloperError` with an empty stack, which took the whole React tree
+     down. Now built with `SingleTileImageryProvider.fromUrl()`, which resolves
+     only once the image is ready.
+   - **`/static` was not in the Vite dev proxy.** Overlay URLs are same-origin
+     relative, correct for production, but the dev server only forwarded `/api`
+     — so the PNG request returned `index.html`, the image failed to decode, and
+     the layer silently never appeared.
+   A fourth, quieter issue: with `requestRenderMode: true`, a layer whose texture
+   finishes loading asynchronously never paints until something asks for a
+   frame, so `scene.requestRender()` is required after adding an overlay.
+8. **Cesium 1.146 API drift.** `CesiumTerrainProvider` no longer accepts a `url`;
    `ImageryLayer` has no `imageryIndex`; `RectangleGraphics` members are
    `Property` objects, not booleans. All handled. Terrain wiring is reported as
    unsupported rather than cast around — see §6.
@@ -173,7 +192,8 @@ render nothing:
 | **No physics tests** | 🟡 | Monotonicity and the constants are covered; there is no test against a real flood record. |
 | **`interventionLayer.ts` written but not wired** | 🟢 | Renders discrete features; no features exist yet. Deliberate, not forgotten. |
 | **Overlay PNGs are committed** | 🟡 | ~16 KB each, so harmless, but they should arguably be build artefacts. |
-| ~~No browser-render verification~~ | ✅ | **Done** — headless Chromium, 1440x860, zero console errors. |
+| ~~No browser-render verification~~ | ✅ | **Done** — headless Chromium, 1440x860, zero console errors, with all four layers on. |
+| **Overlay failure is invisible in Cesium** | ✅ | A failed imagery layer looks identical to one that was never switched on, so `LayerToggle` now reports load failure in the panel. |
 
 ---
 

@@ -168,17 +168,34 @@ export function polygonToRectangle(bbox: Polygon | null | undefined): Rectangle 
  * in payload size and in frame rate. Extrusion is reserved for discrete
  * features such as projects and interventions.
  */
-export function createOverlayLayer(
+/**
+ * Build a georeferenced overlay layer from a PNG produced by
+ * `scripts/make_wetgrid.py` / `scripts/make_heatmap.py`.
+ *
+ * `SingleTileImageryProvider` is the right technique for a continuous field
+ * (ADR-032): one georeferenced image beats thousands of extruded polygons, both
+ * in payload size and in frame rate. Extrusion is reserved for discrete
+ * features such as projects and interventions.
+ *
+ * **Resolution is async and that is not optional.** The provider starts with no
+ * image; adding such a layer to a scene throws a bare `DeveloperError` from
+ * Cesium's render loop, which surfaces as an empty-stack page error and takes
+ * the React tree down with it. `fromUrl` resolves only once the image has
+ * loaded, so the layer is added to a ready provider or not at all.
+ *
+ * Z-order follows insertion order — overlays are added after the base layer, so
+ * they sit on top. `ImageryLayer` in Cesium 1.146 exposes `alpha` but no
+ * `imageryIndex`, so ordering is managed by when the layer is added.
+ */
+export async function createOverlayLayer(
   url: string | null | undefined,
   rectangle: Rectangle | null,
   alpha: number,
-): ImageryLayer | null {
+): Promise<ImageryLayer | null> {
   if (!url || !rectangle) return null
 
-  // Z-order follows insertion order: overlays are added after the base layer,
-  // so they sit on top. ImageryLayer in Cesium 1.146 exposes `alpha` but no
-  // `imageryIndex`, so ordering is managed by when the layer is added.
-  return new ImageryLayer(new SingleTileImageryProvider({ url, rectangle }), { alpha })
+  const provider = await SingleTileImageryProvider.fromUrl(url, { rectangle })
+  return new ImageryLayer(provider, { alpha })
 }
 
 export { OSM_ATTRIBUTION, OSM_TILE_TEMPLATE }

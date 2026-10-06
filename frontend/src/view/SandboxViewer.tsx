@@ -9,6 +9,7 @@
  * remount. StrictMode double-mounts in development, which is where that shows.
  */
 import { useEffect, useRef } from 'react'
+import { create } from 'zustand'
 import { Cartesian3, Color, ConstantProperty, Viewer, type ImageryLayer } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 
@@ -19,6 +20,33 @@ import {
   createTerrainProvider,
   polygonToRectangle,
 } from './terrainLoader'
+
+/**
+ * A viewer is only usable while it exists and has not been destroyed.
+ *
+ * React StrictMode mounts, unmounts and remounts every effect in development.
+ * The create-effect's cleanup destroys the viewer, and the *other* effects'
+ * cleanups then run against that destroyed instance -- `viewer.imageryLayers`
+ * reaches `Viewer.scene`, which dereferences an internal that `destroy()` has
+ * already released, and throws. Every touch of the viewer goes through here.
+ */
+function isLive(viewer: Viewer | null): viewer is Viewer {
+  return viewer !== null && !viewer.isDestroyed()
+}
+
+/**
+ * Records why an overlay is not on screen, so the panel can say "failed" rather
+ * than leaving a switch that silently does nothing.
+ */
+function setOverlayStatus(key: 'wetGrid' | 'heatmap', status: string): void {
+  useOverlayStatus.setState((s) => ({ ...s, [key]: status }))
+}
+
+/** Overlay load status, keyed by layer. Consumed by `LayerToggle`. */
+export const useOverlayStatus = create<Record<'wetGrid' | 'heatmap', string>>(() => ({
+  wetGrid: 'idle',
+  heatmap: 'idle',
+}))
 
 /** Camera actions for `CameraController`, without prop drilling. */
 export const cameraControl: {
@@ -82,7 +110,7 @@ export default function SandboxViewer() {
   // ---- terrain + base imagery -------------------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!viewer || !terrainMeta) return
+    if (!isLive(viewer) || !terrainMeta) return
 
     const binding = createTerrainProvider(terrainMeta)
     viewer.terrainProvider = binding.terrainProvider
@@ -99,7 +127,10 @@ export default function SandboxViewer() {
     baseRef.current = base
 
     return () => {
-      if (viewer.imageryLayers.contains(base)) viewer.imageryLayers.remove(base, false)
+      // Guarded: under StrictMode this cleanup can run after destroy().
+      if (isLive(viewer) && viewer.imageryLayers.contains(base)) {
+        viewer.imageryLayers.remove(base, false)
+      }
       baseRef.current = null
     }
   }, [terrainMeta])
@@ -107,7 +138,7 @@ export default function SandboxViewer() {
   // ---- boundary outline --------------------------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!viewer) return
+    if (!isLive(viewer)) return
     const rectangle = polygonToRectangle(bbox)
 
     if (!rectangle) {
@@ -143,7 +174,7 @@ export default function SandboxViewer() {
   // ---- overlay layers follow the toggles --------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!viewer || !terrainMeta) return
+    if (!isLive(viewer) || !terrainMeta) return
     const rectangle = polygonToRectangle(terrainMeta.bbox)
     if (!rectangle) return
 
@@ -152,27 +183,53 @@ export default function SandboxViewer() {
       ['heatmap', terrainMeta.heatmapUrl, 0.6],
     ]
 
+    let cancelled = false
+
     for (const [key, url, alpha] of wanted) {
       const existing = overlaysRef.current[key]
       const shouldShow = layers[key] && Boolean(url)
       if (existing) {
         // Toggling visibility is cheap; rebuilding the provider re-downloads.
         existing.show = shouldShow
+        if (shouldShow && isLive(viewer)) viewer.scene.requestRender()
         continue
       }
       if (!shouldShow) continue
-      const layer = createOverlayLayer(url, rectangle, alpha)
-      if (layer) {
-        viewer.imageryLayers.add(layer)
-        overlaysRef.current[key] = layer
-      }
+
+      // The provider resolves only once its image has loaded; see the note on
+      // createOverlayLayer. Await it, then re-check that this viewer is still
+      // the live one and that the layer is still wanted -- the user can toggle
+      // off, or StrictMode can remount, while the PNG is in flight.
+      void createOverlayLayer(url, rectangle, alpha)
+        .then((layer) => {
+          if (!layer || cancelled) return
+          const live = viewerRef.current
+          if (!isLive(live) || live !== viewer) return
+          if (!useSceneStore.getState().layers[key]) return
+          live.imageryLayers.add(layer)
+          overlaysRef.current[key] = layer
+          // requestRenderMode is on, so a layer whose texture finished loading
+          // asynchronously will never paint until something asks for a frame.
+          // This is the single most common reason an overlay silently does
+          // nothing in Cesium.
+          live.scene.requestRender()
+          setOverlayStatus(key, 'ready')
+        })
+        .catch((err: unknown) => {
+          console.warn(`[sandbox] ${key} overlay failed to load:`, err)
+          setOverlayStatus(key, 'failed')
+        })
+    }
+
+    return () => {
+      cancelled = true
     }
   }, [layers, terrainMeta])
 
   // ---- initial camera placement -----------------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!viewer) return
+    if (!isLive(viewer)) return
     flyTo(viewer, true, 0)
     // Placement happens once per scene load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -183,6 +240,7 @@ export default function SandboxViewer() {
 
 /** Fly to the bbox extent, or fall back to the scene's `defaultCamera`. */
 function flyTo(viewer: Viewer, useBbox: boolean, duration = 1.2): void {
+  if (!isLive(viewer)) return
   const store = useSceneStore.getState()
   const scene = store.scene
   if (!scene) return

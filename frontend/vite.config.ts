@@ -19,6 +19,15 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // Overlay PNGs are served by the backend at /static (StaticFiles mount in
+      // app/main.py). Without this the relative overlay URL hits the Vite dev
+      // server, which answers with index.html, the image fails to decode, and
+      // the layer silently never appears. In production the API and the static
+      // files are same-origin, so no proxy is involved.
+      '/static': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
   build: {
