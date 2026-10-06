@@ -1,0 +1,57 @@
+{
+  "artefact": "heatmap",
+  "generated": "2026-10-06",
+  "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
+  "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
+  "inputs": {
+    "resolution_m": 5.0,
+    "rows": 664,
+    "cols": 474,
+    "bounds": [
+      113.982,
+      22.425,
+      114.005,
+      22.455
+    ],
+    "cellAreaM2": 24.990737872452772
+  },
+  "assumptions": {
+    "heatIndexByClass": {
+      "paved": 1.0,
+      "bare": 0.85,
+      "green": 0.4,
+      "wetland": 0.2,
+      "water": 0.05
+    },
+    "heatIndexSource": "Hand-authored screening index; awaiting verification",
+    "heatwaveStretch": null,
+    "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
+  },
+  "results": {
+    "meanIndex": 0.5083,
+    "maxIndex": 1.0,
+    "cellCountByClass": {
+      "water": 42591,
+      "wetland": 41658,
+      "green": 128224,
+      "bare": 26929,
+      "paved": 75334
+    },
+    "areaHaByClass": {
+      "water": 106.44,
+      "wetland": 104.11,
+      "green": 320.44,
+      "bare": 67.3,
+      "paved": 188.27
+    },
+    "imperviousShare": 0.2394
+  },
+  "landClasses": [
+    "water",
+    "wetland",
+    "green",
+    "bare",
+    "paved"
+  ],
+  "landClassProvenance": "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping landclass_hsk.npy into backend/data/."
+}

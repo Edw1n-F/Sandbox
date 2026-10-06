@@ -1,0 +1,66 @@
+{
+  "artefact": "wetgrid",
+  "generated": "2026-10-06",
+  "status": "SCREENING_VIEW_SYNTHETIC_TERRAIN",
+  "warning": "Terrain is SYNTHETIC (see _overlay_common). No DEM was available, so this shows where water would collect over a plausible surface. It is not a flood prediction and carries no surveyed elevation.",
+  "inputs": {
+    "rainfall_mm": 450.0,
+    "resolution_m": 5.0,
+    "rows": 664,
+    "cols": 474,
+    "bounds": [
+      113.982,
+      22.425,
+      114.005,
+      22.455
+    ],
+    "cell_area_m2": 24.990737872452772
+  },
+  "assumptions": {
+    "hydrologicSoilGroup": "D",
+    "curveNumberByClass": {
+      "paved": 96.0,
+      "bare": 86.0,
+      "green": 68.0,
+      "wetland": 90.0,
+      "water": 100.0
+    },
+    "curveNumberSource": "USDA NRCS TR-55; awaiting independent verification",
+    "storageDepthM": {
+      "water": 1.5,
+      "wetland": 0.6
+    },
+    "depressionStorageM": 0.02,
+    "countedAs": {
+      "paved": "generation",
+      "bare": "generation",
+      "green": "generation",
+      "wetland": "retention",
+      "water": "retention"
+    },
+    "doubleCountingRule": "Land cover sets the generation term; explicit storage sets the retention term. Open water generates nothing so a pond is never counted in both (ADR-015).",
+    "verticalDatum": "mPD"
+  },
+  "results": {
+    "runoffVolumeM3": 2596816.6,
+    "unstoredVolumeM3": 2046639.7,
+    "wetCells": 53431,
+    "wetAreaHa": 133.53,
+    "totalAreaHa": 786.55,
+    "wetAreaFraction": 0.1698,
+    "meanDepthInWetAreaM": 1.5327
+  },
+  "render": {
+    "minVisibleDepthM": 0.005,
+    "maxVisibleDepthM": 0.3,
+    "note": "Depth beyond maxVisibleDepthM is visually saturated, not capped in the data."
+  },
+  "landClasses": [
+    "water",
+    "wetland",
+    "green",
+    "bare",
+    "paved"
+  ],
+  "landClassProvenance": "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping landclass_hsk.npy into backend/data/."
+}

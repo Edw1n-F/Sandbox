@@ -38,15 +38,18 @@ the **numbers** as a labelled screening estimate — see §4.
 | **`/static` mount so overlay URLs resolve over HTTP** | `StaticFiles` on `backend/data` at `/static` |
 | **Locked study area with machine-derived provenance** | `backend/data/scene_hsk.json` |
 | **No Cesium Ion dependency** | `baseLayer:false` + explicit OpenStreetMap layer. Runs with **zero credentials** |
-| **End-to-end chain** — frontend boots, fetches scene + terrain + plans, renders | typecheck clean; all 14 modules transform under Vite |
+| **End-to-end chain** — frontend boots, fetches scene + terrain + plans, renders | **Verified by a real headless-Chromium render** (1440x860, zero console errors) plus clean `tsc --noEmit` |
+| **Wet grid + heatmap overlays** — generated, served, togglable | `backend/scripts/make_wetgrid.py`, `make_heatmap.py`; PNGs served at `/static/rasters/`; both scripts write a `.json` sidecar recording every assumption |
+| **Wet-grid engine (screening)** — CN runoff → storage → level-pool fill | Bisection on the water-surface elevation; **monotonic in rainfall** (0/200/450/800 mm → 0/8.7/17.0/27.2 % wet area) |
+| **18 automated tests** | 11 contract + 7 constants, both green |
 
 ### 2.2 Placeholder — deliberately, with the substitution named
 
 | Item | What it really is | Why acceptable today |
 |---|---|---|
-| `terrainUrl` = **`null`** | `EllipsoidTerrainProvider` (a flat surface) | No DEM exists on this host. The alternative — a synthetic hill — would be indefensible under questioning. **The UI says so on screen.** |
+| `terrainUrl` = **`null`** | `EllipsoidTerrainProvider` (a flat surface) in the viewer; a **synthetic** surface inside the wet-grid script | No DEM exists on this host. The viewer stays flat and says so; the script uses a labelled synthetic surface so the wet grid has a basin to fill. **Neither is a DEM.** |
 | `imageryUrl` = OSM tile template | Real online tiles | Spec §4.3 sanctions "在线 Cesium 影像底图占位跑通链路" |
-| `wetGridUrl` / `heatmapUrl` = `null` | Fields exist and are read; no PNG generated yet | §4.1 reserves them as association fields. The API returns `null` rather than a URL that 404s |
+| `wetGridUrl` / `heatmapUrl` | **Real PNGs now generated** — but over a synthetic surface, and the heatmap over a synthetic land class | See §4. The *render path and the computation* are real; the *inputs* are placeholders, and both say so on screen and in the sidecar metadata |
 | `envParams` on the scene | Static, location-derived defaults (ADR-024) | Per-run inputs belong on a `simulation_run` row, which does not exist yet. **The sliders do not persist to the API** — see §4. |
 | `interventions` = `[]` | Valid empty `FeatureCollection` | §2.3.1 defers interventions. The frontend renders an empty collection without erroring |
 
@@ -79,26 +82,41 @@ recorded here rather than left to be rediscovered:
 
 ---
 
-## 4. The physics engine is NOT here — do not claim it is
+## 4. What the overlays are, and are not
 
-This is the most important honesty statement in the file.
+Both overlays exist, compute something, and render. Neither is a result you can
+defend as engineering output, for one shared reason: **both inputs are
+synthetic.**
 
-The **wet grid** and **heatmap** have a *render path* and *reserved fields*, both
-real. They do **not** have an engine. Specifically:
+**Wet grid** — `backend/scripts/make_wetgrid.py`
 
-- There is **no** SCS-CN runoff computation, **no** storage ledger, **no**
-  terrain-filling allocation, and **no** heat-index classifier in this repo.
-- The `envParams` sliders write to the Zustand store **only**. They are not
-  persisted to the API and they do not trigger a recomputation. Presenting them
-  as "adjust the rainfall and the model responds" would be a false claim.
-- The **wet grid is additionally blocked on terrain**: with `terrainUrl = null`
-  there is no surface to allocate water onto, so a "wet grid" today could only be
-  a flat rectangle.
+- Real: the SCS-CN runoff computation, the storage subtraction, the ADR-015
+  double-counting partition, and a level-pool fill solved by bisection on the
+  water-surface elevation. That last part matters: it produces a flat water
+  surface, so the picture is a pond rather than a uniform smear.
+- Placeholder: the **elevation surface**. `terrainUrl` is `null` because no DEM
+  is available, so the script uses an explicit synthetic topography — a tilt
+  toward the south-east plus a low ridge, with water and wetland cells sunk.
+- Verdict: a **screening view of where water would collect over plausible
+  topography.** Not a flood prediction. It carries no surveyed elevation, and
+  the sidecar says `SCREENING_VIEW_SYNTHETIC_TERRAIN`.
 
-Both documents insist the tool is not engineering-grade and must not overclaim.
-The UI carries that label, which is the cheapest credibility available.
+**Heatmap** — `backend/scripts/make_heatmap.py`
 
----
+- Real: the classification → index → ramp pipeline. This one needs no terrain,
+  which is why it is the overlay that can honestly ship today.
+- Placeholder: the **land-class grid**, which is a structured placeholder, not
+  measured land cover. Drop a real `landclass_hsk.npy` into `backend/data/` and
+  it is used automatically.
+- Verdict: a **relative heat-exposure index on a 0–1 scale.** Not degrees
+  Celsius, and not a modelled air-temperature field. `--heatwave` is a *display*
+  stretch, not a scenario, so a screenshot under the preset cannot be mistaken
+  for different conditions.
+
+**The sliders still do not recompute anything.** They write `envParams` into the
+Zustand store only. Re-running the scripts is a manual step. Presenting this as
+"move the slider, the model responds" would be a false claim, so the panel says
+what actually happens.
 
 ## 5. Bugs found and fixed during the build
 
@@ -121,7 +139,21 @@ render nothing:
    TypeScript compiled; Vite failed to resolve 5 modules at runtime. The type
    checker was green while the app was broken — a good reminder that `tsc` alone
    does not prove a frontend runs.
-5. **Cesium 1.146 API drift.** `CesiumTerrainProvider` no longer accepts a `url`;
+5. **The SCS-CN retention constant was the documented ×10 error.** Written as
+   `S = 25400/CN − 2540`, which returns *negative* retention for any CN above
+   ~91. That makes the denominator of `Q = (P − 0.2S)² / (P + 0.8S)` negative,
+   and the first run reported **5.4 × 10¹⁸ m³** of runoff — while rendering a
+   perfectly plausible-looking image. The correct form is `− 254`
+   (`25.4 × (1000/CN − 10)`). This is precisely the "fails silently" constant
+   the source documents warn about, and it is now pinned by
+   `tests/test_constants.py` against the TR-55 worked example.
+6. **`STATIC_BASE_URL` was empty while the mount is at `/static`.** The API
+   returned `/rasters/wetgrid_hsk.png` for a file served at
+   `/static/rasters/wetgrid_hsk.png` — a 404 on the last hop of the chain, and
+   exactly the class of bug that makes an overlay silently never appear. Fixed
+   in `backend/.env`; **the backend must be restarted for `.env` to take
+   effect.**
+7. **Cesium 1.146 API drift.** `CesiumTerrainProvider` no longer accepts a `url`;
    `ImageryLayer` has no `imageryIndex`; `RectangleGraphics` members are
    `Property` objects, not booleans. All handled. Terrain wiring is reported as
    unsupported rather than cast around — see §6.
@@ -138,9 +170,10 @@ render nothing:
 | **No `migrations/`** | 🟡 | Referenced by both docs. Unnecessary in file mode. |
 | **No gazetted NDA polygon** | 🟡 | Overpass timed out; Nominatim returns points. §2.3 records the exact anchors used. |
 | **No CN verification** | 🟡 | Waiting on Lia. |
-| **No tests for physics** | 🟢 | Moot until there is physics. |
+| **No physics tests** | 🟡 | Monotonicity and the constants are covered; there is no test against a real flood record. |
 | **`interventionLayer.ts` written but not wired** | 🟢 | Renders discrete features; no features exist yet. Deliberate, not forgotten. |
-| **No browser-render verification** | 🟡 | See §7. |
+| **Overlay PNGs are committed** | 🟡 | ~16 KB each, so harmless, but they should arguably be build artefacts. |
+| ~~No browser-render verification~~ | ✅ | **Done** — headless Chromium, 1440x860, zero console errors. |
 
 ---
 
@@ -152,7 +185,10 @@ cd T1/backend
 pip install -r requirements.txt
 python scripts/seed_scene.py          # prints the sceneId
 python -m uvicorn app.main:app --reload        # :8000
-python tests/test_contract.py                 # 11/11
+python scripts/make_wetgrid.py --rainfall 450  # -> data/rasters/wetgrid_hsk.png
+python scripts/make_heatmap.py                 # -> data/rasters/heatmap_hsk.png
+python tests/test_contract.py                  # 11/11
+python tests/test_constants.py                 #  7/7
 
 # frontend
 cd T1/frontend
@@ -161,7 +197,15 @@ npm run dev                                    # :5173
 ```
 
 Then set `VITE_SCENE_ID` in `frontend/.env.local` to the id `seed_scene.py`
-printed. Verify the contract:
+printed, and **restart the backend** so `STATIC_BASE_URL=/static` is picked up.
+The overlay scripts attach their output to the seeded scene automatically, so
+`GET /api/scenes/{id}/terrain` starts returning `wetGridUrl` / `heatmapUrl` and
+the two overlay switches in the panel become live.
+
+Re-run the scripts after changing the rainfall slider — the sliders do not
+trigger a recomputation themselves.
+
+Verify the contract:
 
 ```bash
 curl -s localhost:8000/health
@@ -189,17 +233,35 @@ open http://localhost:8000/docs
 
 ## 9. Rung recommendation for 11 Oct
 
-**Declare Rung 1, with the overlay fields built and reserved.**
+**Declare Rung 2, with the DEM gap stated as the reason it stops there.**
 
-What is genuinely true: the chain **地理数据 → 存储 → 场景管理 API → 3D 前端**
-closes end-to-end against the spec's contract, with a locked study area, a
-seeded scene, a real cascade, and a tested error contract. That is the §2.3.1
-deliverable and it is defensible.
+What is genuinely true and testable:
 
-What is not true, and must not be claimed: a physics engine, a wet grid or
-heatmap **number**, a real DEM, or PostGIS.
+- The §2.3.1 chain closes end-to-end against the spec's contract — verified in a
+  real browser, not just by `curl`.
+- A locked, provenance-recorded study area, a seeded scene, a real cascade, and
+  a single error envelope. 18 automated tests.
+- Two overlays that **compute** rather than merely display: CN runoff → storage
+  → level-pool fill for the wet grid, and class → index → ramp for the heatmap.
+  Both monotonic in their inputs; both shipping a sidecar that records every
+  constant, with a test pinning the two that the source documents say fail
+  silently.
 
-Rung 2 is reachable in the 7–17 Oct window and needs, in order: a DEM source
-(permission + bare-earth decision), a CN table Lia has verified, then
-`make_wetgrid.py` / `make_heatmap.py` against the render path that already
-exists. **The render path is not the bottleneck; the DEM is.**
+What is **not** true, and must not be claimed: real terrain, measured land
+cover, a verified Curve Number table, a temperature in degrees, or a flood
+prediction.
+
+**The single blocker to the next rung is a DEM.** Everything downstream of it —
+bare-earth handling, a real wet grid, the Hato validation the 27-task plan
+depends on — is waiting on one decision and one download:
+
+1. Permission to fetch `Whole_HK_DTM_5m.zip` (~290 MB), **and**
+2. an explicit bare-earth decision, because that product is a surface model,
+   not ground.
+
+Wiring `DEM_SOURCE` is already a config switch, and `terrainLoader.ts` already
+detects a quantized-mesh endpoint. Neither is the bottleneck. The DEM is.
+
+The other two things worth doing before 18 Oct, in order: standardise the Python
+interpreter (§8 — there are still two), and replace the OSM-derived extent with
+the OZP S/HSK/3 sheet.
