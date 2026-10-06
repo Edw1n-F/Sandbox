@@ -28,23 +28,23 @@
     "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
   },
   "results": {
-    "meanIndex": 0.5083,
+    "meanIndex": 0.8102,
     "maxIndex": 1.0,
     "cellCountByClass": {
-      "water": 42591,
-      "wetland": 41658,
-      "green": 128224,
-      "bare": 26929,
-      "paved": 75334
+      "water": 1185,
+      "wetland": 0,
+      "green": 96408,
+      "bare": 5092,
+      "paved": 212051
     },
     "areaHaByClass": {
-      "water": 106.44,
-      "wetland": 104.11,
-      "green": 320.44,
-      "bare": 67.3,
-      "paved": 188.27
+      "water": 2.96,
+      "wetland": 0.0,
+      "green": 240.93,
+      "bare": 12.73,
+      "paved": 529.93
     },
-    "imperviousShare": 0.2394
+    "imperviousShare": 0.6737
   },
   "landClasses": [
     "water",
@@ -53,5 +53,6 @@
     "bare",
     "paved"
   ],
-  "landClassProvenance": "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping landclass_hsk.npy into backend/data/."
+  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0, tiles ['N21E111', 'N21E114'], resampled to 5 m by nearest neighbour. See data/landcover_hsk.json for the ESA->ours class mapping.",
+  "landCoverSource": "esa-worldcover"
 }

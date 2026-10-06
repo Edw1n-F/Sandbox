@@ -4,12 +4,19 @@ pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
 
-# Raster / overlay generation (scripts/make_wetgrid.py, scripts/make_heatmap.py).
-# Pure numpy + pillow: the Lands Dept 5 m DTM is an ArcInfo ASCII grid (plain
-# text), so no GDAL / rasterio / Pillow-geo stack is required.  See
-# docs/OCT6_STATUS.md (ADR-012, ADR-035).
+# Raster / overlay generation.
+#
+# numpy + pillow do the analysis. `rasterio` is present for ONE reason: reading
+# the ESA WorldCover GeoTIFF as a windowed COG in scripts/fetch_landcover.py.
+# Its wheels bundle GDAL, which is why no Homebrew GDAL is needed on this host
+# -- that was previously logged as an untried option and is now settled.
+#
+# Everything else stays pure numpy + pillow. The overlay maths needs no GDAL, and
+# adding it to the critical path would have made a Homebrew install a hard
+# dependency for no benefit.
 numpy>=1.26
 pillow>=10.0
+rasterio>=1.3
 
 # Test-only: powers fastapi.testclient in tests/test_contract.py (ADR-036).
 httpx>=0.27

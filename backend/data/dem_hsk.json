@@ -1,0 +1,37 @@
+{
+  "artefact": "dem",
+  "generated": "2026-10-06",
+  "status": "REAL_TERRAIN_SAMPLED",
+  "source": {
+    "name": "Open-Meteo elevation API",
+    "url": "https://api.open-meteo.com/v1/elevation",
+    "keyRequired": false,
+    "upstreamModels": "SRTM 30 m and coarser open elevation models",
+    "note": "Verified against Everest and open-ocean control points on every run. The AWS elevation-tiles-prod bucket was tested and rejected: it returns HTTP 200 with non-terrarium pixels that decode to nonsense (Everest ~1e6 m)."
+  },
+  "grid": {
+    "rows": 110,
+    "cols": 78,
+    "resolutionM": 30.0,
+    "bounds": [
+      113.982,
+      22.425,
+      114.005,
+      22.455
+    ],
+    "orientation": "north-up, row 0 = northernmost",
+    "verticalDatum": "mPD (Open-Meteo returns orthometric heights)"
+  },
+  "elevation": {
+    "minM": 2.0,
+    "maxM": 141.0,
+    "meanM": 16.75139808654785,
+    "reliefM": 139.0
+  },
+  "caveats": [
+    "Sampled, not a survey product: 30 m postings over a 5 m analysis grid.",
+    "Orthometric (mPD), not ellipsoidal. No vertical datum shift applied.",
+    "No bare-earth correction. If vegetation/structures bias this upward, a deficit estimate would be biased too.",
+    "Sinks are not filled and there is no flow routing; the wet grid fills by water-surface level, not by routing water downhill."
+  ]
+}

@@ -1,8 +1,10 @@
 {
   "artefact": "wetgrid",
   "generated": "2026-10-06",
-  "status": "SCREENING_VIEW_SYNTHETIC_TERRAIN",
-  "warning": "Terrain is SYNTHETIC (see _overlay_common). No DEM was available, so this shows where water would collect over a plausible surface. It is not a flood prediction and carries no surveyed elevation.",
+  "status": "REAL_TERRAIN_SATISFACTORY",
+  "terrainSource": "open-meteo",
+  "landCoverSource": "esa-worldcover",
+  "warning": "Real 1 arc-second elevation (Open-Meteo / SRTM) and real ESA WorldCover land cover, but this is still a screening view: sinks are not conditioned, there is no flow routing, and it is not a flood prediction.",
   "inputs": {
     "rainfall_mm": 450.0,
     "resolution_m": 5.0,
@@ -42,13 +44,13 @@
     "verticalDatum": "mPD"
   },
   "results": {
-    "runoffVolumeM3": 2596816.6,
-    "unstoredVolumeM3": 2046639.7,
-    "wetCells": 53431,
-    "wetAreaHa": 133.53,
+    "runoffVolumeM3": 3171780.2,
+    "unstoredVolumeM3": 3015062.8,
+    "wetCells": 79160,
+    "wetAreaHa": 197.83,
     "totalAreaHa": 786.55,
-    "wetAreaFraction": 0.1698,
-    "meanDepthInWetAreaM": 1.5327
+    "wetAreaFraction": 0.2515,
+    "meanDepthInWetAreaM": 1.5241
   },
   "render": {
     "minVisibleDepthM": 0.005,
@@ -62,5 +64,5 @@
     "bare",
     "paved"
   ],
-  "landClassProvenance": "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping landclass_hsk.npy into backend/data/."
+  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0; see data/landcover_hsk.json"
 }

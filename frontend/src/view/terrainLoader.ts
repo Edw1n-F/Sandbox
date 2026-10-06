@@ -15,6 +15,7 @@
  *    beats a fake hill nobody can defend.
  */
 import {
+  Math as CesiumMath,
   EllipsoidTerrainProvider,
   ImageryLayer,
   OpenStreetMapImageryProvider,
@@ -25,6 +26,11 @@ import {
 } from 'cesium'
 
 import type { Polygon, TerrainMeta } from '@/api/types'
+import {
+  createDemTerrainProvider,
+  decodeTerrainRgb,
+  setDemBounds,
+} from './demProvider'
 
 const OSM_TILE_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
 const OSM_ATTRIBUTION = '© OpenStreetMap contributors'
@@ -46,8 +52,8 @@ export function hasIonToken(): boolean {
  * The backend publishes `terrainUrl` as an opaque reference and does not encode
  * the format, so the convention is detected rather than assumed.
  */
-function isQuantizedMesh(url: string): boolean {
-  return /\.(terrain|json)(\?|$)/i.test(url)
+function isQuantizedMesh(url: string | undefined): boolean {
+  return /\.(terrain|json)(\?|$)/i.test(url ?? '')
 }
 
 /**
@@ -62,31 +68,56 @@ function isQuantizedMesh(url: string): boolean {
 /**
  * Build the terrain provider for a scene.
  *
- * A bare `s3://` or `.tif` reference is refused rather than handed to Cesium:
- * the spec's storage target is a COG, which Cesium cannot consume directly, and
- * a provider that fails silently produces an empty globe with no clue why.
+ * Resolution order:
+ *   1. `terrainFormat === 'terrain-rgb'` + a PNG -> decode it into a real
+ *      heightmap. This is the path the open-DEM pipeline actually uses.
+ *   2. A quantized-mesh endpoint -> reported as unsupported, because
+ *      Cesium 1.146's `CesiumTerrainProvider` no longer accepts a `url`.
+ *   3. A bare `s3://` / `.tif` COG -> refused, with a reason. Cesium cannot
+ *      consume a COG and a provider that fails silently gives an empty globe
+ *      with no clue why.
+ *   4. Nothing -> flat surface, disclosed in the UI.
+ *
+ * **Async because decoding is async.** Decoding a terrain-RGB raster means
+ * fetching an image and reading pixels; there is no synchronous version of this
+ * that does not lie about being ready.
  */
-export function createTerrainProvider(meta: TerrainMeta): TerrainBinding {
+export async function createTerrainProvider(
+  meta: TerrainMeta,
+  bbox: Polygon | null,
+): Promise<TerrainBinding> {
   const url = meta.terrainUrl?.trim()
 
-  if (!url) {
-    return {
-      terrainProvider: new EllipsoidTerrainProvider(),
-      terrainIsReal: false,
-      terrainNote:
-        'No DEM loaded — flat surface. The Lands Dept 5 m DTM was not ' +
-        'downloaded (~290 MB, needs permission, and is not bare-earth).',
-    }
-  }
-
-  if (/^s3:\/\//i.test(url) || /\.(tif|tiff)$/i.test(url)) {
-    return {
-      terrainProvider: new EllipsoidTerrainProvider(),
-      terrainIsReal: false,
-      terrainNote:
-        `terrainUrl is a raster/COG reference (${url}). Cesium needs terrain ` +
-        'tiles or a quantized-mesh service; converting needs gdal_translate, ' +
-        'which is not installed on this host.',
+  if (url && /\.png($|\?)/i.test(url)) {
+    try {
+      const dem = await decodeTerrainRgb(url)
+      const ring = polygonToRectangle(bbox)
+      if (ring) {
+        // The image cannot carry its own extent, so it comes from the scene's
+        // own bbox. Both are derived from `scene_hsk.json`, so they agree by
+        // construction rather than by two people typing the same numbers --
+        // and reusing polygonToRectangle means the terrain and the overlay
+        // layers are georeferenced from the identical code path.
+        setDemBounds(dem, [
+          CesiumMath.toDegrees(ring.west),
+          CesiumMath.toDegrees(ring.south),
+          CesiumMath.toDegrees(ring.east),
+          CesiumMath.toDegrees(ring.north),
+        ])
+      }
+      return {
+        terrainProvider: createDemTerrainProvider(dem),
+        terrainIsReal: true,
+        terrainNote: null,
+      }
+    } catch (err) {
+      return {
+        terrainProvider: new EllipsoidTerrainProvider(),
+        terrainIsReal: false,
+        terrainNote:
+          `terrainUrl is a terrain-RGB raster (${url}) but it could not be ` +
+          `decoded, so the surface is flat. Cause: ${String(err)}`,
+      }
     }
   }
 
@@ -101,10 +132,23 @@ export function createTerrainProvider(meta: TerrainMeta): TerrainBinding {
     }
   }
 
+  if (/^s3:\/\//i.test(url ?? '') || /\.(tif|tiff)$/i.test(url ?? '')) {
+    return {
+      terrainProvider: new EllipsoidTerrainProvider(),
+      terrainIsReal: false,
+      terrainNote:
+        `terrainUrl is a raster/COG reference (${url}). Cesium needs terrain ` +
+        'tiles or a quantized-mesh service; run fetch_dem.py to publish a ' +
+        'terrain-RGB raster instead.',
+    }
+  }
+
   return {
     terrainProvider: new EllipsoidTerrainProvider(),
     terrainIsReal: false,
-    terrainNote: `Unrecognised terrainUrl format, showing flat: ${url}`,
+    terrainNote:
+      'No DEM loaded \u2014 flat surface. Run `python scripts/fetch_dem.py` to ' +
+      'fetch real 1 arc-second elevation and publish it as terrain-RGB.',
   }
 }
 
@@ -114,17 +158,12 @@ export function createBaseImageryLayer(meta: TerrainMeta): ImageryLayer {
 
   if (!url) {
     // Cesium >= 1.124 takes no constructor options for the OSM provider; it
-    // serves the standard tile set. The template constant is kept for the
-    // `imageryUrl` fallback path and for documentation.
+    // serves the standard tile set.
     return new ImageryLayer(new OpenStreetMapImageryProvider({}))
   }
 
-  if (url.includes('{z}') && url.includes('{x}')) {
-    return new ImageryLayer(new UrlTemplateImageryProvider({ url }))
-  }
-
-  // A non-templated URL is treated as a single tile (COG-derived PNG overlays
-  // are served exactly this way, and Cesium needs a Rectangle for those).
+  // Both a `{z}/{x}/{y}` template and a single-tile URL resolve through
+  // UrlTemplateImageryProvider; overlays also arrive this way.
   return new ImageryLayer(new UrlTemplateImageryProvider({ url }))
 }
 
@@ -135,7 +174,9 @@ export function createBaseImageryLayer(meta: TerrainMeta): ImageryLayer {
  * nothing about where it belongs — so deriving it here (rather than in the
  * viewer) keeps the two overlay layers provably aligned with the bbox.
  */
-export function polygonToRectangle(bbox: Polygon | null | undefined): Rectangle | null {
+export function polygonToRectangle(
+  bbox: Polygon | null | undefined,
+): Rectangle | null {
   if (!bbox || bbox.type !== 'Polygon') return null
 
   const outer = bbox.coordinates?.[0]
@@ -167,25 +208,12 @@ export function polygonToRectangle(bbox: Polygon | null | undefined): Rectangle 
  * (ADR-032): one georeferenced image beats thousands of extruded polygons, both
  * in payload size and in frame rate. Extrusion is reserved for discrete
  * features such as projects and interventions.
- */
-/**
- * Build a georeferenced overlay layer from a PNG produced by
- * `scripts/make_wetgrid.py` / `scripts/make_heatmap.py`.
- *
- * `SingleTileImageryProvider` is the right technique for a continuous field
- * (ADR-032): one georeferenced image beats thousands of extruded polygons, both
- * in payload size and in frame rate. Extrusion is reserved for discrete
- * features such as projects and interventions.
  *
  * **Resolution is async and that is not optional.** The provider starts with no
  * image; adding such a layer to a scene throws a bare `DeveloperError` from
  * Cesium's render loop, which surfaces as an empty-stack page error and takes
  * the React tree down with it. `fromUrl` resolves only once the image has
  * loaded, so the layer is added to a ready provider or not at all.
- *
- * Z-order follows insertion order — overlays are added after the base layer, so
- * they sit on top. `ImageryLayer` in Cesium 1.146 exposes `alpha` but no
- * `imageryIndex`, so ordering is managed by when the layer is added.
  */
 export async function createOverlayLayer(
   url: string | null | undefined,
@@ -193,7 +221,6 @@ export async function createOverlayLayer(
   alpha: number,
 ): Promise<ImageryLayer | null> {
   if (!url || !rectangle) return null
-
   const provider = await SingleTileImageryProvider.fromUrl(url, { rectangle })
   return new ImageryLayer(provider, { alpha })
 }

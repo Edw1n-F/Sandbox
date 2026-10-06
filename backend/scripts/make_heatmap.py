@@ -93,6 +93,15 @@ def main() -> int:
     if args.heatwave:
         index = np.clip(index * HEATWAVE_STRETCH, 0.0, 1.0)
 
+    landcover_meta: dict = {}
+    _lc = settings.data_dir / "landcover_hsk.json"
+    if _lc.exists():
+        import json as _json
+        try:
+            landcover_meta = _json.loads(_lc.read_text())
+        except (OSError, ValueError):
+            landcover_meta = {}
+
     out = Path(args.out) if args.out else settings.rasters_dir / "heatmap_hsk.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(ramp_rgba(index), mode="RGBA").save(out)
@@ -140,9 +149,15 @@ def main() -> int:
         },
         "landClasses": list(LAND_CLASSES),
         "landClassProvenance": (
-            "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping "
-            "landclass_hsk.npy into backend/data/."
+            f"ESA WorldCover 10 m v200 (2021), CC BY 4.0, tiles "
+            f"{landcover_meta.get('source', {}).get('tiles')}, resampled to "
+            f"{args.resolution:g} m by nearest neighbour. See "
+            f"data/landcover_hsk.json for the ESA->ours class mapping."
+            if ov.landcover_source == "esa-worldcover"
+            else "SYNTHETIC PLACEHOLDER, not measured land cover. Run "
+                 "scripts/fetch_landcover.py to replace it with ESA WorldCover."
         ),
+        "landCoverSource": ov.landcover_source,
     }
     out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
@@ -156,6 +171,7 @@ def main() -> int:
     print(f"[heatmap] area by class (ha):")
     for name, value in area_ha.items():
         print(f"[heatmap]   {name:<9} {value:>9,.1f}")
+    print(f"[heatmap] land cover: {ov.landcover_source}  terrain: {ov.terrain_source}")
     print(f"[heatmap] RELATIVE INDEX - not degrees, not a modelled temperature field")
     return 0
 

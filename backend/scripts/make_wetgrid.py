@@ -175,11 +175,21 @@ def main() -> int:
     meta = {
         "artefact": "wetgrid",
         "generated": "2026-10-06",
-        "status": "SCREENING_VIEW_SYNTHETIC_TERRAIN",
+        "status": (
+            "REAL_TERRAIN_SATISFACTORY"
+            if ov.terrain_source == "open-meteo"
+            else "SCREENING_VIEW_SYNTHETIC_TERRAIN"
+        ),
+        "terrainSource": ov.terrain_source,
+        "landCoverSource": ov.landcover_source,
         "warning": (
-            "Terrain is SYNTHETIC (see _overlay_common). No DEM was available, so "
-            "this shows where water would collect over a plausible surface. It is "
-            "not a flood prediction and carries no surveyed elevation."
+            "Real 1 arc-second elevation (Open-Meteo / SRTM) and real ESA "
+            "WorldCover land cover, but this is still a screening view: sinks are "
+            "not conditioned, there is no flow routing, and it is not a flood "
+            "prediction."
+            if ov.terrain_source == "open-meteo"
+            else "Terrain is SYNTHETIC (see _overlay_common). Run "
+                 "scripts/fetch_dem.py to replace it with real elevation."
         ),
         "inputs": {
             "rainfall_mm": args.rainfall,
@@ -227,8 +237,9 @@ def main() -> int:
         },
         "landClasses": list(LAND_CLASSES),
         "landClassProvenance": (
-            "SYNTHETIC PLACEHOLDER, not measured land cover. Replace by dropping "
-            "landclass_hsk.npy into backend/data/."
+            "ESA WorldCover 10 m v200 (2021), CC BY 4.0; see data/landcover_hsk.json"
+            if ov.landcover_source == "esa-worldcover"
+            else "SYNTHETIC PLACEHOLDER; run scripts/fetch_landcover.py"
         ),
     }
     out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -245,7 +256,8 @@ def main() -> int:
     print(f"[wetgrid] wet area    {r['wet_area_ha']:>12,.1f} ha "
           f"({meta['results']['wetAreaFraction'] * 100:.1f}% of extent)")
     print(f"[wetgrid] mean depth {meta['results']['meanDepthInWetAreaM']:>12.3f} m")
-    print("[wetgrid] SYNTHETIC TERRAIN - screening view, not a flood prediction")
+    print(f"[wetgrid] terrain: {ov.terrain_source}   land cover: {ov.landcover_source}")
+    print("[wetgrid] screening view - not a flood prediction, no flow routing")
     return 0
 
 

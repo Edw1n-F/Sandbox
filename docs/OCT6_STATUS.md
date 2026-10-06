@@ -1,3 +1,15 @@
+> **This is a point-in-time snapshot taken at the end of 6 Oct 2026.** It is kept
+> unedited because the reasoning matters, but parts of it have since been
+> overtaken by events. For current state see [`README.md`](../README.md);
+> for the reasoning behind the current design see
+> [`ARCHITECTURE.md`](ARCHITECTURE.md).
+>
+> **Since this was written:** the synthetic terrain has been replaced with real
+> 1 arc-second elevation (Open-Meteo/SRTM), the synthetic land class with real
+> ESA WorldCover 10 m land cover, and the flat Cesium surface with a
+> `CustomHeightmapTerrainProvider` serving a terrain-RGB raster. Sections 2.2, 4
+> and 6 below therefore describe a state that no longer holds.
+
 # OCT6_STATUS — what actually landed on 6 Oct 2026
 
 **This is the evidence base for the 11 Oct rung declaration.** It records what is

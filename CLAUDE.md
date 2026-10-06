@@ -1,116 +1,190 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI agents working in this repository.
 
-## Project Overview
+> **Read [`README.md`](README.md) first** — it has the setup guide, tech stack
+> and troubleshooting. This file is the conventions and the "don't get this
+> wrong" list.
 
-SDG hackathon project: a 3D geospatial visualization sandbox for scene/plan/intervention management. The current phase focuses on the chain: **geographic data → PostgreSQL/PostGIS → scene management API → CesiumJS 3D frontend**. Physics engine, data analysis, AI modules are out of scope for now.
+## Project
 
-## Tech Stack
+A 3D geospatial sandbox for flood and heat-risk scenarios in Hong Kong. The
+current phase delivers the chain **geographic data → storage → scene management
+API → CesiumJS 3D frontend**. Physics, AI modules and PostGIS are out of scope
+for now.
 
-**Backend:** Python FastAPI + SQLAlchemy + PostgreSQL/PostGIS + MinIO  
-**Frontend:** Vite + React + TypeScript + CesiumJS + Zustand + MUI + Tailwind CSS
+Study area: **Hung Shui Kiu / Ha Tsuen (HSK/HT)**, ~786 ha. The 27-task project
+plan points at Deep Bay; that conflict was resolved on 6 Oct 2026 in favour of
+HSK/HT, which has the stronger public evidence base. Do not silently switch.
 
-## Development Commands
+## Tech stack — as actually built
 
-### Backend
+**Backend:** Python 3.13 · FastAPI · Pydantic v2 · numpy · Pillow · rasterio
+**Frontend:** Vite · React 18 · TypeScript · CesiumJS 1.146 · Zustand · MUI
+
+**Storage is JSON files, not PostGIS.** `STORE_MODE=file`. The documented target
+is PostGIS + MinIO; the seam is `app/db.py` + `app/services/scene_service.py`
+only, so that migration is a swap rather than a rewrite. **No SQLAlchemy, no
+alembic, no migrations directory** — the spec references one, it does not exist,
+and it is flagged in `docs/OCT6_STATUS.md` rather than faked.
+
+**No Cesium Ion token.** The Viewer sets `baseLayer: false` and supplies
+OpenStreetMap explicitly, so the app runs with zero credentials. Leave
+`VITE_CESIUM_ION_TOKEN` empty.
+
+## Commands
+
 ```bash
-cd backend
-pip install -r requirements.txt
-alembic upgrade head          # run migrations
-uvicorn app.main:app --reload # dev server (default: localhost:8000)
+# Backend -- always activate the venv first; there are two Pythons on this host
+cd backend && source .venv/bin/activate
+python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy
+python scripts/fetch_dem.py --arcsec 1       # Open-Meteo/SRTM -> dem_hsk.npy
+python scripts/seed_scene.py                 # prints the sceneId
+python scripts/make_wetgrid.py --rainfall 450
+python scripts/make_heatmap.py
+python -m uvicorn app.main:app --reload      # :8000
+python tests/test_contract.py                # 11/11
+python tests/test_constants.py               #  7/7
+
+# Frontend
+cd frontend && npm install && npm run dev    # :5173
+npx tsc --noEmit                             # must be clean
 ```
 
-### Frontend
-```bash
-cd frontend
-npm install
-npm run dev    # Vite dev server
-npm run build
-npm run lint
-```
+`cp backend/.env.example backend/.env` on first run. `STATIC_BASE_URL=/static` is
+the one setting with no safe default.
 
 ## Architecture
 
-### Core Design Principles
+### Principles
 
-1. **Single data authority**: Frontend never connects directly to the database. All reads/writes go through the FastAPI scene management module.
-2. **GeoJSON pass-through**: PostGIS `geometry` column ↔ GeoJSON ↔ Cesium `GeoJsonDataSource` — no coordinate conversion at any layer.
-3. **Unified coordinate system**: EPSG:4326 everywhere — database, API, and Cesium rendering.
-4. **Scene as entry anchor**: All frontend rendering begins by fetching `GET /api/scenes/{sceneId}` to get `center / bbox / terrainUrl / imageryUrl / defaultCamera`.
+1. **Single data authority.** The frontend never touches the filesystem or a
+   database. Everything goes through the API.
+2. **GeoJSON pass-through.** EPSG:4326 everywhere on the wire -- geometry <->>
+   GeoJSON <-> Cesium, no coordinate conversion at any layer.
+3. **Degrees on the wire, metres in the maths.** Exactly one function converts:
+   `build_grid()` in `app/services/geo_import.py`. Nothing else converts units.
+4. **Scene as the entry anchor.** The viewer boots from
+   `GET /api/scenes/{sceneId}` -> `center / bbox / terrainUrl / imageryUrl /
+   defaultCamera`.
 
-### Data Flow
+### Data flow
 
 ```
-GeoJSON/DEM input
-  → geo_import.py (validate + route)
-    → vector: PostGIS (scene.bbox, intervention.geom)
-    → raster: MinIO (COG), URL registered in scene.terrain_url / imagery_url
-  → scene record (sceneId issued)
-    → frontend: GET /api/scenes/{sceneId}
-      → Cesium Viewer init (terrain + imagery)
-        → GET /api/plans/{planId}/interventions (GeoJSON FeatureCollection)
-          → Cesium GeoJsonDataSource render
+open data (fetch_*.py)  ->  backend/data/*.npy, *.png
+  -> scene record (scene_hsk.json -> POST /api/scenes -> sceneId)
+    -> frontend: GET /api/scenes/{sceneId}
+      -> Cesium Viewer (terrain + imagery + overlays)
+        -> GET /api/scenes/{sceneId}/plans
+          -> GET /api/plans/{planId}/interventions -> GeoJSON FeatureCollection
 ```
 
-### Backend Layer Responsibilities
+### Layer responsibilities
 
 | Layer | Path | Role |
 |---|---|---|
-| Routers | `app/routers/` | HTTP endpoints, request validation |
-| Services | `app/services/` | Business logic, data validation |
-| Models | `app/models/` | SQLAlchemy ORM (PostGIS geometry columns) |
-| Schemas | `app/schemas/` | Pydantic request/response models |
-| Geo import | `app/services/geo_import.py` | GeoJSON/raster ingestion, EPSG:4326 normalization |
+| Routers | `app/routers/` | HTTP only. Parse, delegate, serialise. |
+| Schemas | `app/schemas/` | The wire contract. `RowModel` translates storage <-> wire. |
+| Services | `app/services/` | Business logic: cascade, bbox repair, URL resolution. |
+| Store | `app/db.py` | The **only** module that knows storage is files. |
+| Config | `app/config.py` | Settings; paths anchored to `backend/`, never cwd. |
+| Raster scripts | `scripts/` | Fetch + analysis. Attach results to a scene. |
 
-### Frontend Layer Responsibilities
+Frontend: `src/view/` is **rendering only** -- it reads state and never fetches.
+`src/components/` triggers state changes and holds no rendering logic. Data flows
+API -> Zustand -> View.
 
-| Layer | Path | Role |
-|---|---|---|
-| State | `src/state/` | Zustand stores (sceneStore, planStore) — source of truth |
-| API | `src/api/` | REST calls to backend (axios/fetch wrapper in `client.ts`) |
-| View | `src/view/` | CesiumJS rendering only — reads from state, never fetches directly |
-| Components | `src/components/` | MUI UI layer — triggers state changes, no rendering logic |
-
-The rendering layer (`src/view/`) must not fetch data itself. Data flows: API → State (Zustand) → View (Cesium).
-
-## Database Schema
-
-Three core tables with `ON DELETE CASCADE` chain: `scene → plan → intervention`.
-
-- **scene**: geographic anchor. Key fields: `center GEOMETRY(Point,4326)`, `bbox GEOMETRY(Polygon,4326)`, `terrain_url TEXT`, `imagery_url TEXT`, `default_camera JSONB`, `env_params JSONB`.
-- **plan**: `plan_type` ∈ `{baseline, economic, environmental, comprehensive, custom}`, `source` ∈ `{manual, ai}`.
-- **intervention**: `geom GEOMETRY` (SRID 4326), `params JSONB`, `style JSONB` (color/opacity/extrusionHeight), `status` ∈ `{draft, validated}`.
-
-All geometry columns have GIST indexes. Use `ST_Transform` to normalize to EPSG:4326 on import.
-
-## API Contract (key endpoints)
+## API contract
 
 ```
-POST   /api/scenes                          # create scene
-GET    /api/scenes/{sceneId}                # 3D sandbox init entry point
+GET    /health
+POST   /api/scenes
+GET    /api/scenes/{sceneId}
 PUT    /api/scenes/{sceneId}
 DELETE /api/scenes/{sceneId}                # cascades to plans + interventions
+GET    /api/scenes/{sceneId}/terrain        # + bbox, center, overlay URLs
 GET    /api/scenes/{sceneId}/plans
-POST   /api/scenes/{sceneId}/plans
 PUT    /api/plans/{planId}
-GET    /api/plans/{planId}/interventions    # returns GeoJSON FeatureCollection
-GET    /api/scenes/{sceneId}/terrain        # terrainUrl + imageryUrl + bbox
+GET    /api/plans/{planId}/interventions    # GeoJSON FeatureCollection
 ```
 
-Error responses: 422 for validation errors, 404 with `{"detail": "..."}`, all errors use `{"error": {"code": "...", "message": "..."}}`.
+There is **no** `POST /api/scenes/{sceneId}/plans` -- plans are created with
+`PUT /api/plans/{planId}`. An earlier version of this file claimed otherwise.
 
-## Raster Data (MinIO)
+Errors: 422 for validation, 404 with `{"detail": ...}`. **Both** a FastAPI
+`detail` array and `{"error": {"code", "message"}}` are emitted, because the spec
+mandates both. The frontend has one error branch.
 
-- DEM and imagery stored as Cloud-Optimized GeoTIFF (COG) in MinIO.
-- Convert: `gdal_translate -of COG input.tif output_cog.tif`
-- Upload: `mc cp output_cog.tif myminio/sandbox/terrain/`
-- URLs registered in `scene.terrain_url` / `scene.imagery_url`; frontend treats them as opaque provider URLs.
+## Storage shape
 
-During development before real geodata is available, use a placeholder GeoJSON boundary + online Cesium imagery to close the end-to-end loop.
+`scene -> plan -> intervention`, with a cascade delete chain.
 
-## Git Branch Convention
+- **scene** -- geographic anchor. `center`, `bbox`, `terrain_url`,
+  `imagery_url`, `default_camera`, `env_params`, plus `wet_grid_path` /
+  `heatmap_path` for the §4.1 reserved overlay fields.
+- **plan** -- `plan_type` in `{baseline, economic, environmental, comprehensive,
+  custom}`, `source` in `{manual, ai}`. The last two plan types are legal but
+  nothing creates them; noted in `models/plan.py`.
+- **intervention** -- GeoJSON geometry, `params`, `style`, `status`.
 
-- `feature/scene-management` — backend CRUD + geo import
-- `feature/sandbox-3d-visualization` — frontend Cesium + rendering
-- Merge `feature/scene-management` first; use its REST API contract as the integration boundary.
+Storage keeps the spec's `id` column; the API exposes `sceneId` / `planId` as an
+**alias**, translated in `RowModel.from_row`. Do not rename the column.
+
+## Raster data
+
+Rasters are **generated artefacts, not source**. Reproduce with:
+
+```bash
+python scripts/fetch_landcover.py            # ESA WorldCover 10 m, CC BY 4.0
+python scripts/fetch_dem.py --arcsec 1       # Open-Meteo over SRTM, 1 arc-second
+python scripts/make_wetgrid.py --rainfall 450
+python scripts/make_heatmap.py
+```
+
+No MinIO, no `gdal_translate`, no COG pipeline. Elevation reaches Cesium as a
+**mapbox terrain-RGB** raster via `CustomHeightmapTerrainProvider`
+(`src/view/demProvider.ts`). Overlays are `SingleTileImageryProvider` images over
+the bbox rectangle.
+
+Every raster writes a `.json` sidecar with its constants and assumptions, and
+registers itself against the seeded scene.
+
+## Conventions that will bite you
+
+- **Verify data sources against control points.** The AWS
+  `elevation-tiles-prod` bucket returns HTTP 200 with non-terrarium pixels that
+  decode Everest to ~1,000,000 m. `fetch_dem.py` asserts Everest and the open
+  ocean before writing. Do not remove those assertions.
+- **Sample DEMs on their own lattice.** SRTM quantises to 1 arc-second. A
+  "30.7 m" grid aliases against it and replicates every pixel ~3x.
+- **Check for tile-boundary nodata.** The study area straddles 114 deg E, so
+  WorldCover needs two tiles. Nodata silently filled with a default class
+  fabricated 167 ha of "paved" ground.
+- **`STATIC_BASE_URL` must match the `/static` mount**, and `/static` must be in
+  the Vite dev proxy. Get it wrong and overlays fail silently.
+- **A clean `tsc` does not mean the frontend works.** `tsconfig.json` declares a
+  `@/*` alias that `vite.config.ts` must also register; TypeScript resolves it
+  and Vite does not. Verify frontend changes in a real browser render.
+- **Derive constants, never hand-type them.** The bbox came from machine-retrieved
+  OSM anchors recorded in `scene_hsk.json`, not from memory.
+- **Guard every Cesium `Viewer` touch with `isLive()`.** StrictMode destroys the
+  viewer in one effect's cleanup while sibling cleanups still hold a reference.
+
+## Where things are written down
+
+| Question | File |
+|---|---|
+| How do I run this? | [`README.md`](README.md) |
+| Why is it built this way? | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
+| Where did the data come from? | [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) |
+| What actually works? | [`docs/OCT6_STATUS.md`](docs/OCT6_STATUS.md) |
+| What does the spec say? | `docs/技术文档.docx`, `docs/_技术文档_clean.txt` |
+
+## Git
+
+Feature branches: `feature/scene-management`, `feature/sandbox-3d-visualization`.
+The REST contract is the integration boundary; merge the backend first.
+
+This prototype is **not engineering-grade and must not overclaim**. Every
+generated figure is a screening estimate. Keep the UI labels and the sidecar
+metadata honest -- that is a requirement, not politeness.

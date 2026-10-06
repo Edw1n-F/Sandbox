@@ -73,9 +73,11 @@ class Overlay:
     rows: int
     cols: int
     cell_m: float
-    elevation: np.ndarray  # metres, SYNTHETIC
+    elevation: np.ndarray  # metres; real DEM when available, else synthetic
     land_class: np.ndarray  # index into LAND_CLASSES
     grid: dict[str, Any]
+    terrain_source: str  # "open-meteo" | "synthetic" -- reported, never hidden
+    landcover_source: str  # "esa-worldcover" | "synthetic"
 
     def class_mask(self, name: str) -> np.ndarray:
         return self.land_class == LAND_CLASSES.index(name)
@@ -91,8 +93,8 @@ def load_overlay(resolution_m: float = 5.0) -> Overlay:
     grid = build_grid(bounds, resolution_m=resolution_m)
 
     rows, cols = int(grid["rows"]), int(grid["cols"])
-    land = _load_or_synthesise_land_class(rows, cols)
-    elevation = _synthetic_surface(rows, cols, land)
+    land, land_source = _load_or_synthesise_land_class(rows, cols)
+    elevation, terrain_source = _load_or_synthesise_dem(rows, cols, land)
 
     return Overlay(
         bounds=bounds,
@@ -102,6 +104,8 @@ def load_overlay(resolution_m: float = 5.0) -> Overlay:
         elevation=elevation,
         land_class=land,
         grid=grid,
+        terrain_source=terrain_source,
+        landcover_source=land_source,
     )
 
 
@@ -159,7 +163,51 @@ def _synthetic_surface(rows: int, cols: int, land: np.ndarray) -> np.ndarray:
     return surface.astype(np.float64)
 
 
-def _load_or_synthesise_land_class(rows: int, cols: int) -> np.ndarray:
+def _load_or_synthesise_dem(
+    rows: int, cols: int, land: np.ndarray
+) -> tuple[np.ndarray, str]:
+    """Use the fetched DEM when it exists, else the synthetic surface.
+
+    `fetch_dem.py` writes `dem_hsk.npy` over the same bbox as the analysis grid
+    but at a coarser posting (1 arc-second, ~30 m, versus 5 m), so it is
+    bilinearly resampled. Only continuous fields are resampled this way -- class
+    codes never would be, which is exactly the distinction that matters when a
+    10 m land-cover product and a ~30 m elevation product share a 5 m analysis
+    grid.
+
+    The terrain source is returned so every script reports which one it used,
+    rather than the provenance string being hard-coded somewhere and going stale
+    the moment real data arrives. (It already went stale once, which is why.)
+    """
+    dem_file = settings.data_dir / "dem_hsk.npy"
+    if dem_file.exists():
+        try:
+            dem = np.load(dem_file).astype(np.float64)
+            if dem.ndim == 2 and dem.shape[0] > 1 and dem.shape[1] > 1:
+                if not np.isnan(dem).any():
+                    return _bilinear_resample(dem, rows, cols), "open-meteo"
+        except (OSError, ValueError):
+            pass
+    return _synthetic_surface(rows, cols, land), "synthetic"
+
+
+def _bilinear_resample(src: np.ndarray, rows: int, cols: int) -> np.ndarray:
+    """Bilinear resample a north-up field onto a finer grid over the same bbox."""
+    src_rows, src_cols = src.shape
+    fy = np.clip((np.arange(rows) + 0.5) * src_rows / rows - 0.5, 0.0, src_rows - 1.0)
+    fx = np.clip((np.arange(cols) + 0.5) * src_cols / cols - 0.5, 0.0, src_cols - 1.0)
+    y0 = np.floor(fy).astype(int)
+    x0 = np.floor(fx).astype(int)
+    y1 = np.minimum(y0 + 1, src_rows - 1)
+    x1 = np.minimum(x0 + 1, src_cols - 1)
+    wy = (fy - y0)[:, None]
+    wx = (fx - x0)[None, :]
+    top = src[np.ix_(y0, x0)] * (1 - wx) + src[np.ix_(y0, x1)] * wx
+    bottom = src[np.ix_(y1, x0)] * (1 - wx) + src[np.ix_(y1, x1)] * wx
+    return top * (1 - wy) + bottom * wy
+
+
+def _load_or_synthesise_land_class(rows: int, cols: int) -> tuple[np.ndarray, str]:
     """Load a land-class grid if one exists, else synthesise a placeholder.
 
     Lia owns the real land-class grid. Until it exists, a deterministic
@@ -173,7 +221,7 @@ def _load_or_synthesise_land_class(rows: int, cols: int) -> np.ndarray:
         try:
             data = np.load(cached)
             if data.shape == (rows, cols):
-                return data.astype(np.int16)
+                return data.astype(np.int16), "esa-worldcover"
         except (OSError, ValueError):
             pass  # unreadable -> fall through to the surrogate
     land = _synthesise_land_class(rows, cols)
@@ -181,7 +229,7 @@ def _load_or_synthesise_land_class(rows: int, cols: int) -> np.ndarray:
         np.save(cached, land)
     except OSError:
         pass
-    return land
+    return land, "synthetic"
 
 
 def _synthesise_land_class(rows: int, cols: int) -> np.ndarray:

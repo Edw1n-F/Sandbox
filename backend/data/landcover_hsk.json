@@ -1,0 +1,74 @@
+{
+  "artefact": "landcover",
+  "generated": "2026-10-06",
+  "status": "REAL_LANDCOVER",
+  "source": {
+    "name": "ESA WorldCover 10 m v200 (2021)",
+    "urls": [
+      "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N21E111_Map.tif",
+      "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N21E114_Map.tif"
+    ],
+    "tiles": [
+      "N21E111",
+      "N21E114"
+    ],
+    "licence": "CC BY 4.0 (ESA)",
+    "access": "public S3, no key"
+  },
+  "mapping": {
+    "esaToOurs": {
+      "10": "green",
+      "20": "green",
+      "30": "green",
+      "40": "paved",
+      "50": "paved",
+      "60": "bare",
+      "70": "water",
+      "80": "water",
+      "90": "wetland",
+      "95": "wetland",
+      "100": "green"
+    },
+    "oursClasses": [
+      "water",
+      "wetland",
+      "green",
+      "bare",
+      "paved"
+    ],
+    "collapsing11to5": "Deliberate. The wet grid needs to know what sheds water and what holds it, not what the crop is. Scenario comparisons stay valid because every scenario reads the same grid.",
+    "croplandApproximation": "ESA cropland (40) and built-up (50) are both mapped to 'paved'. They differ in hydrology; HSK/HT is post-reclamation so cropland there is mostly formed land awaiting development, but this is a compromise and is recorded rather than hidden."
+  },
+  "grid": {
+    "rows": 664,
+    "cols": 474,
+    "resolutionM": 5.0,
+    "cellAreaM2": 24.990737872452772,
+    "crs": "EPSG:4326 on the wire; local equirectangular for measurement"
+  },
+  "results": {
+    "cellCountByClass": {
+      "water": 1185,
+      "wetland": 0,
+      "green": 96408,
+      "bare": 5092,
+      "paved": 212051
+    },
+    "areaHaByClass": {
+      "water": 2.96,
+      "wetland": 0.0,
+      "green": 240.93,
+      "bare": 12.73,
+      "paved": 529.93
+    },
+    "imperviousShare": 0.6737,
+    "perviousShare": 0.3063,
+    "unmappedCells": 0,
+    "outsideTileCells": 0
+  },
+  "caveats": [
+    "WorldCover is a 2021 single-epoch product; it does not show change since then, which is a real gap for a study area under construction.",
+    "10 m source resampled to the 5 m analysis grid, so it adds no detail below 10 m -- it is not an error to treat the 5 m land class as really 10 m.",
+    "ESA codes are modelled classifications, not ground truth."
+  ]
+}

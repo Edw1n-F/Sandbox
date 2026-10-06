@@ -352,7 +352,10 @@ def get_terrain(scene_id: str) -> TerrainRead:
         raise SceneNotFound(scene_id)
 
     return TerrainRead(
-        terrain_url=doc.get("terrain_url"),
+        # Resolved, existence-checked, exactly like the overlays: a stored
+        # relative DEM path becomes a URL the viewer can actually fetch, and a
+        # path with no file behind it becomes None rather than a broken layer.
+        terrain_url=_resolve_overlay_url(doc, "terrain_url"),
         imagery_url=doc.get("imagery_url"),
         bbox=doc.get("bbox"),
         center=doc.get("center"),

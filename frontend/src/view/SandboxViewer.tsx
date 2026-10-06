@@ -112,21 +112,43 @@ export default function SandboxViewer() {
     const viewer = viewerRef.current
     if (!isLive(viewer) || !terrainMeta) return
 
-    const binding = createTerrainProvider(terrainMeta)
-    viewer.terrainProvider = binding.terrainProvider
+    let cancelled = false
 
-    // Disclose the fallback rather than hiding it; ScenePanel renders this.
-    useSceneStore.setState((s) => ({
-      scene: s.scene
-        ? { ...s.scene, terrainIsReal: binding.terrainIsReal, terrainNote: binding.terrainNote }
-        : s.scene,
-    }))
+    void createTerrainProvider(terrainMeta, bbox).then((binding) => {
+      // The viewer may have been replaced (StrictMode remount) while the DEM
+      // image was in flight; applying it to a dead viewer is the crash guarded
+      // against by isLive().
+      if (cancelled || !isLive(viewer)) return
+      viewer.terrainProvider = binding.terrainProvider
+      // Disclose the fallback rather than hiding it; ScenePanel renders this.
+      useSceneStore.setState((s) => ({
+        scene: s.scene
+          ? {
+              ...s.scene,
+              terrainIsReal: binding.terrainIsReal,
+              terrainNote: binding.terrainNote,
+            }
+          : s.scene,
+      }))
+      // Re-frame once the terrain is real.
+      //
+      // The camera was fitted to the bbox while the surface was still flat, so
+      // a study area with 141 m of relief leaves the camera *inside* a hill and
+      // the globe renders black. Fitting again against the loaded terrain is the
+      // fix, and it has to happen here rather than at init because the terrain
+      // arrives asynchronously.
+      if (binding.terrainIsReal) {
+        flyTo(viewer, true, 0)
+        viewer.scene.requestRender()
+      }
+    })
 
     const base = createBaseImageryLayer(terrainMeta)
     viewer.imageryLayers.add(base)
     baseRef.current = base
 
     return () => {
+      cancelled = true
       // Guarded: under StrictMode this cleanup can run after destroy().
       if (isLive(viewer) && viewer.imageryLayers.contains(base)) {
         viewer.imageryLayers.remove(base, false)

@@ -35,7 +35,6 @@
       ]
     ]
   },
-  "terrain_url": null,
   "imagery_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   "default_camera": {
     "longitude": 113.9935,
@@ -51,7 +50,7 @@
   "wet_grid_path": "rasters/wetgrid_hsk.png",
   "heatmap_path": "rasters/heatmap_hsk.png",
   "created_at": "2026-10-06T11:01:42Z",
-  "updated_at": "2026-10-06T13:16:05Z",
+  "updated_at": "2026-10-06T17:58:01Z",
   "study_area": "hsk-ht-nda",
   "working_grid": {
     "bounds": [
@@ -69,5 +68,7 @@
     "height_m": 3322.087326023801,
     "area_m2": 7865484.875024295,
     "crs_note": "Metres via local equirectangular approximation about the extent centre. For volume reporting, swap HK1980 Grid (EPSG:2326)."
-  }
+  },
+  "terrain_source": "terrain-rgb / open-meteo / srtm-1arcsec",
+  "terrain_url": "dem_terrain_rgb.png"
 }
