@@ -1,0 +1,376 @@
+1、项目结构：
+本阶段聚焦「地理数据 → 数据库 → 场景管理与配置 → 3D 可视化」链路，项目采用前后端分离结构。物理引擎、数据分析、沙盒绘制、AI 应用模块暂不在本阶段目录中展开，仅预留位置。
+目前只关注场景数据，忽略方案/干预数据及其相关的实现。
+1.1 前端（3D 可视化沙盒）
+技术栈：Vite + React + TypeScript + CesiumJS + Zustand + MUI + Tailwind CSS。
+ frontend/
+ ├── src/
+ │ ├── main.tsx # 应用入口
+ │ ├── App.tsx # 路由与全局布局
+ │ ├── state/ # 应用状态层（Zustand）
+ │ │ ├── sceneStore.ts # 场景状态（center/bbox/底图引用）
+ │ │ └── planStore.ts # 方案与干预要素状态
+ │ ├── api/ # 数据访问层（调用后端 REST API）
+ │ │ ├── sceneApi.ts # 场景 CRUD
+ │ │ ├── planApi.ts # 方案/干预要素读取
+ │ │ └── client.ts # axios/fetch 统一封装
+ │ ├── view/ # 可视化渲染层（Cesium）
+ │ │ ├── SandboxViewer.tsx # Cesium Viewer 容器
+ │ │ ├── terrainLoader.ts # 地形/影像加载
+ │ │ └── interventionLayer.ts # 干预要素 GeoJSON 图层
+ │ └── components/ # UI 层（MUI）
+ │ ├── ScenePanel.tsx # 场景参数面板
+ │ ├── LayerToggle.tsx # 图层切换
+ │ └── CameraController.tsx # 视角控制
+ ├── index.html
+ ├── package.json
+ └── vite.config.ts
+1.2 后端（场景管理与配置模块）
+技术栈：Python FastAPI + SQLAlchemy + PostgreSQL/PostGIS + MinIO。
+ backend/
+ ├── app/
+ │ ├── main.py # FastAPI 应用入口
+ │ ├── config.py # 配置（数据库/对象存储连接）
+ │ ├── models/ # ORM 模型（对应数据库表）
+ │ │ ├── scene.py # scene 表
+ │ │ ├── plan.py # plan 表
+ │ │ └── intervention.py # intervention 表（geometry 列）
+ │ ├── schemas/ # Pydantic 请求/响应模型
+ │ │ ├── scene.py
+ │ │ ├── plan.py
+ │ │ └── intervention.py
+ │ ├── routers/ # 路由（REST API）
+ │ │ ├── scenes.py # /api/scenes 场景 CRUD
+ │ │ ├── plans.py # /api/plans 方案与要素
+ │ │ └── terrain.py # 地理底图元数据接口
+ │ ├── services/ # 业务逻辑（数据操作层）
+ │ │ ├── scene_service.py # 场景/方案/要素读写与校验
+ │ │ └── geo_import.py # 地理数据入库（GeoJSON/栅格）
+ │ └── db.py # 数据库会话与连接
+ ├── migrations/ # 数据库迁移（Alembic）
+ ├── requirements.txt
+ └── alembic.ini
+1.3 链路与目录的对应关系
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="4140"/><w:gridCol w:w="4150"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="67C1CEFD" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="52DD0AD8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>链路环节
+<w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="04F5E0E8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>对应目录 / 文件
+<w:tc><w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="112EAE48" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>地理数据入库
+<w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="46E0C8FD" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>backend/app/services/geo_import.py
+<w:tc><w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="552213E8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>数据库（PostGIS）
+<w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1762978E" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>backend/app/models/ + migrations/
+<w:tc><w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="5341B651" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>数据操作层（场景管理）
+<w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1AFC1F17" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>backend/app/routers/ + backend/app/services/
+<w:tc><w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="49AA41B0" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>前端展示（3D 沙盒）
+<w:tcPr><w:tcW w:w="4153" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="23A6DE45" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>frontend/src/view/ + frontend/src/api/
+
+2、功能模块详细设计（模块业务流程实现与对应github分支）
+
+本章详细描述本阶段聚焦的两个模块——场景管理与配置模块（数据操作层）与 3D 可视化沙盒模块（前端展示）——的业务流程，以及二者如何串起「地理数据 → 数据库 → 数据操作层 → 前端展示」的端到端链路。物理引擎、数据分析、沙盒绘制、AI 应用模块不在本阶段展开。
+2.1 模块职责与分工
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="2763"/><w:gridCol w:w="2763"/><w:gridCol w:w="2764"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="71270C12" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="5786C10A" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>模块
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="67A8835B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>职责
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="46C43B62" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>本阶段范围
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="0206F6D8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景管理与配置模块
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="603869F3" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>管理场景参数、方案参数、场景及方案地理数据；作为唯一数据权威源与调度枢纽
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6F4572EF" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景/方案/干预要素的 CRUD 与地理数据读写
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="66CBE366" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>3D 可视化沙盒模块
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="36DFC02F" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>承载三维地形，展示基线/方案的湿格与热图，提供交互控制
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="40DC95C7" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>地形/影像加载 + 干预要素 3D 展示（湿格热图留待物理引擎接入后）
+2.2 场景管理与配置模块（数据操作层）
+2.2.1 职责
+场景参数、方案干预参数、场景及方案地理数据的校验与保存。
+作为唯一数据权威源：所有模块的数据读写都经过它，前端不直连计算模块、也不直连数据库。
+负责把「地理数据入库」这一链路起点标准化，为前端 3D 沙盒提供统一的初始化与渲染数据接口。
+2.2.2 业务流程
+场景与地理数据入库流程
+指定地理数据（GeoJSON 边界 / DEM COG）。
+场景管理校验数据格式与坐标系（统一 EPSG:4326）。
+按类型分流入库：矢量 → 写入 PostGIS（scene.bbox / intervention.geom）；栅格 → 上传 MinIO，登记 URL 到 scene（terrain_url / imagery_url）。
+登记场景元数据（center / default_camera / env_params）。
+返回 sceneId，前端据此发起 3D 沙盒初始化。
+场景查询与更新流程
+前端调用 GET /api/scenes/{sceneId}。
+场景管理从 PostGIS 读取场景 + 底图引用。
+返回 center / bbox / terrainUrl / imageryUrl / defaultCamera。
+前端 Cesium 初始化视图并加载底图。
+2.3 3D 可视化沙盒模块（前端展示）
+2.3.1 职责
+承载三维地形与二维叠加，展示基线/方案的湿格与热图。
+提供交互控制（本阶段聚焦：视图定位、图层切换、干预要素展示）。
+2.3.2 技术实现要点（基于 CesiumJS）
+引擎选型：采用 CesiumJS，利用其全球 3D 地形 + 影像加载能力，适配真实地理坐标（EPSG:4326），与 PostGIS 存储坐标系天然一致。
+渲染-状态分离（遵循系统设计架构原则）：可视化渲染层只负责「画」，应用状态层负责数据（通过 Zustand 管理场景/方案/要素状态），UI 层负责交互。
+2.3.3 业务流程：场景加载与要素展示
+前端进入沙盒。
+调用 GET /api/scenes/{sceneId} 获取场景元数据。
+初始化 Cesium Viewer：设置 camera（defaultCamera）、加载 terrain（terrainUrl）、加载 imagery（imageryUrl）。
+完成「地理数据 → 数据库 → 数据操作层 → 前端展示」链路。
+2.4 端到端链路数据流总览
+整条链路由四个层次串起，数据自上而下流动：
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="2760"/><w:gridCol w:w="2763"/><w:gridCol w:w="2767"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="50A3E720" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="42438317" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>层次
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3308D99B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>环节
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="7590D763" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>技术载体
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3AE6A1B3" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>数据源
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3CD61928" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>地理数据（GeoJSON / DEM COG）
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="7C8FF828" w14:textId="4035F0B0" w:rsidR="007623B6" w:rsidRDefault="003068F0"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>系统指定
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="61919FDE" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>数据库层
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2AAEF366" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>入库与持久化
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="14BC4B2D" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">PostgreSQL + PostGIS（scene/plan/intervention）+ MinIO（栅格）
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="16072B81" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>数据操作层
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2C1CC1F1" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景管理与配置模块
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6648F85D" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:proofErr w:type="spellStart"/><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>FastAPI，唯一数据权威源
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2900B048" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>前端展示层
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1A7795B9" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>3D 可视化沙盒
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="78B78C55" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:proofErr w:type="spellStart"/><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>CesiumJS + Zustand，经 REST API（GeoJSON 直传）获取数据
+链路闭环的关键点：
+单一数据权威源：前端不直连数据库，所有数据经场景管理模块统一读写，保证一致性与可控。
+GeoJSON 全程直传：PostGIS 的 geometry 列 ↔ GeoJSON ↔ Cesium GeoJsonDataSource 三者格式对齐，中间无需坐标换算或格式转换，是链路最顺滑的一环。
+坐标系统一：全链路 EPSG:4326，数据库、接口、前端渲染保持一致。
+场景为入口锚点：前端一切渲染均以 scene 的地理字段（center / bbox / terrainUrl / imageryUrl）为起点，形成清晰的依赖方向。
+2.5 对应 GitHub 分支约定
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="2762"/><w:gridCol w:w="2765"/><w:gridCol w:w="2763"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="1C9CF700" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6DF14E25" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>模块
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="5D4FD907" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>建议分支
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="5B45B77C" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>说明
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4CBC8481" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景管理与配置
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="773429F8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>feature/scene-management
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="273AF885" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>后端场景/方案/要素 CRUD + 地理数据入库
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2F97CCA8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>3D 可视化沙盒
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6D931455" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>feature/sandbox-3d-visualization
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3E7FEFC6" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>前端 Cesium 加载 + 要素渲染
+两条分支可并行开发，以「场景管理提供的 REST API 契约」为联调节点；建议先合并 feature/scene-management，再合并 feature/sandbox-3d-visualization 跑通端到端链路。
+3、模块接口文档
+
+本章聚焦场景管理与配置模块对外暴露的 REST API，以及 3D 可视化沙盒依赖的数据获取接口。物理引擎（simulate 的计算部分）、分析、AI 相关接口只保留占位，不在本阶段展开实现细节。
+3.1 接口总览
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="1634"/><w:gridCol w:w="1745"/><w:gridCol w:w="2942"/><w:gridCol w:w="1969"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="67EBC8D5" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2720B60B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>分类
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2CF48F13" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>方法
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3D21A5E4" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>路径
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4EE5FB70" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>说明
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="5B8488B7" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="067DBF8F" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>POST
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="212A73B8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="74A6181B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>新建场景（登记地理区域）
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="15D41CAA" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="055C6B25" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>GET
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4587258F" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6CB8C4D9" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>列出用户场景
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3E495DF3" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1FA5F810" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>GET
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3D2A4DE9" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1AFBC428" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>获取场景详情（含地理锚点 + 底图引用）
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="025FAF82" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2BDCB112" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>PUT
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4C81C4C6" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2966CA7B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>更新场景参数 / 地理区域
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="30F4172B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1F29A1AB" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>DELETE
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1B2BD6D2" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="7BDCE484" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>删除场景
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="44D8D76B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>方案
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4DCCFE3C" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>GET
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="4C421FE2" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}/plans
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1FCE0402" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>列出方案（基线 / A / B）
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6EE98DDD" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>方案
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="10F452D8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>POST
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="081AF02E" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}/plans
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="0C7CC1AC" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>创建 / 保存方案
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="157B2E14" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>方案
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="31A362E6" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>PUT
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="6415DCC8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/plans/{planId}
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="35C3CC95" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>二次编辑方案
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="279FA509" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>要素
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="328B1234" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>GET
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1C4616C1" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/plans/{planId}/interventions
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="47E3B6FD" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>获取方案下所有干预要素（GeoJSON）
+<w:tc><w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="60CAFC5E" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:lastRenderedPageBreak/><w:t>底图
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="66407C49" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>GET
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="52ECEA10" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>/api/scenes/{sceneId}/terrain
+<w:tcPr><w:tcW w:w="2076" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="65DC5714" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">获取地理底图元数据（terrain/imagery URL + bbox）
+3.2 场景管理接口（数据操作层）
+3.2.1 新建场景
+POST /api/scenes
+请求体：
+ {
+ "name": "某流域沙盒",
+ "center": { "type": "Point", "coordinates": [120.15, 30.28] },
+ "bbox": {
+ "type": "Polygon",
+ "coordinates": [[[120.10, 30.22], [120.20, 30.22], [120.20, 30.34], [120.10, 30.34], [120.10, 30.22]]]
+ },
+ "terrainUrl": "s3://sandbox/terrain/dem_cog.tif",
+ "imageryUrl": "https://tiles.example.com/imagery/{z}/{x}/{y}.png",
+ "defaultCamera": { "height": 5000, "heading": 0, "pitch": -45 },
+ "envParams": { "temperature": 25, "precipitation": 120 }
+ }
+响应 201：
+ { "sceneId": "uuid", "name": "某流域沙盒", "createdAt": "..." }
+3.2.2 获取场景详情（3D 沙盒初始化入口）
+GET /api/scenes/{sceneId}
+这是前端 3D 沙盒加载的第一个调用：拿到 center / bbox / terrainUrl / imageryUrl / defaultCamera，据此初始化 Cesium 视图并加载地形与影像。
+响应 200：
+ {
+ "sceneId": "uuid",
+ "name": "某流域沙盒",
+ "center": { "type": "Point", "coordinates": [120.15, 30.28] },
+ "bbox": { "type": "Polygon", "coordinates": [[[120.10, 30.22], [120.20, 30.34]]] },
+ "terrainUrl": "s3://sandbox/terrain/dem_cog.tif",
+ "imageryUrl": "https://tiles.example.com/imagery/{z}/{x}/{y}.png",
+ "defaultCamera": { "height": 5000, "heading": 0, "pitch": -45 },
+ "envParams": { "temperature": 25, "precipitation": 120 }
+ }
+3.2.3 更新场景
+PUT /api/scenes/{sceneId}：请求体同「新建场景」的字段子集，用于更新地理区域或环境参数。响应 200 返回更新后的完整场景对象。
+3.2.4 删除场景
+DELETE /api/scenes/{sceneId}：级联删除其下方案与干预要素（见数据库设计的 ON DELETE CASCADE）。响应 204。
+3.3 方案与干预要素接口
+3.3.1 列出方案
+GET /api/scenes/{sceneId}/plans
+响应 200：
+ {
+ "plans": [
+ { "planId": "uuid", "planType": "baseline", "label": "基线" },
+ { "planId": "uuid", "planType": "comprehensive", "label": "方案A" }
+ ]
+ }
+3.3.2 获取方案下的干预要素（前端渲染数据源）
+GET /api/plans/{planId}/interventions
+这是 3D 沙盒绘制干预要素的核心数据接口：返回标准 GeoJSON FeatureCollection，前端直接交给 Cesium 的 GeoJsonDataSource 渲染，无需二次转换。
+响应 200：
+ {
+ "type": "FeatureCollection",
+ "features": [
+ {
+ "type": "Feature",
+ "properties": {
+ "interventionType": "绿地",
+ "style": { "color": "#2e7d32", "opacity": 0.6, "extrusionHeight": 20 }
+ },
+ "geometry": { "type": "Polygon", "coordinates": [[[...]]] }
+ }
+ ]
+ }
+3.3.3 创建 / 保存方案
+POST /api/scenes/{sceneId}/plans：接收方案元数据（planType / label / params），可选携带初始干预要素 GeoJSON，服务端校验后写入 plan 与 intervention 表。
+ {
+ "planType": "custom",
+ "label": "方案B",
+ "params": {},
+ "interventions": [
+ {
+ "geometry": { "type": "Polygon", "coordinates": [[[...]]] },
+ "interventionType": "透水铺装",
+ "params": { "permeability": 0.6 },
+ "style": { "color": "#1976d2", "opacity": 0.7 }
+ }
+ ]
+ }
+响应 201 返回 planId。
+3.3.4 二次编辑方案
+PUT /api/plans/{planId}：更新方案元数据或干预要素。响应 200。
+3.4 地理底图接口
+GET /api/scenes/{sceneId}/terrain
+将场景登记的 terrain / imagery 引用与 bbox 一并返回给前端，作为 Cesium terrain/imagery provider 的初始化参数。
+响应 200：
+ {
+ "terrainUrl": "s3://sandbox/terrain/dem_cog.tif",
+ "imageryUrl": "https://tiles.example.com/imagery/{z}/{x}/{y}.png",
+ "bbox": { "type": "Polygon", "coordinates": [[[120.10, 30.22], [120.20, 30.34]]] }
+ }
+3.5 统一响应约定
+成功：2xx，数据体直接返回业务对象或 GeoJSON。
+参数校验失败：422，返回 FastAPI 默认格式的 detail 数组。
+资源不存在：404，返回 { "detail": "scene not found" }。
+统一错误结构：{ "error": { "code": "SCENE_NOT_FOUND", "message": "..." } }（可与 FastAPI 默认格式并存，约定对外一律用此结构）。
+4、数据库设计
+本章只覆盖与「地理数据 → 数据库 → 场景管理与配置 → 3D 可视化」链路直接相关的表结构。物理引擎、数据分析、沙盒绘制、AI 应用相关的表（模拟结果栅格、分析报告等）不在本章展开，仅保留其关联字段占位。
+4.1 数据库与存储选型
+<w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders><w:top w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:left w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:bottom w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:right w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideH w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/><w:insideV w:val="single" w:sz="6" w:space="0" w:color="CBCDD1"/></w:tblBorders><w:tblCellMar><w:top w:w="15" w:type="dxa"/><w:left w:w="15" w:type="dxa"/><w:bottom w:w="15" w:type="dxa"/><w:right w:w="15" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="04A0" w:firstRow="1" w:lastRow="0" w:firstColumn="1" w:lastColumn="0" w:noHBand="0" w:noVBand="1"/></w:tblPr><w:tblGrid><w:gridCol w:w="2763"/><w:gridCol w:w="2764"/><w:gridCol w:w="2763"/></w:tblGrid><w:tr w:rsidR="007623B6" w14:paraId="198D90EA" w14:textId="77777777"><w:trPr><w:tblHeader/></w:trPr><w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1DAFCD74" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>数据类型
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="7C69AA09" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>存储方式
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="7CAD25BC" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/><w:bCs/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/><w:b/></w:rPr><w:t>理由
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="66FD1EF9" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>场景 / 方案 / 干预要素
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="179A189E" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">PostgreSQL + PostGIS
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="0DAF16EE" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>几何对象需空间索引、空间查询与拓扑操作
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="15A5B398" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>干预要素几何
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="10E792B5" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:proofErr w:type="spellStart"/><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>GeoJSON 存 PostGIS geometry 列
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1EF3DDFB" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">与前端 GeoJSON 无缝互转
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3266F21B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>地理底图数据（DEM / 影像）
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="3262C7C8" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t xml:space="preserve">对象存储 S3 / MinIO + COG
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="1297128F" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>大栅格按需切片读取，Cesium 按需加载
+<w:tc><w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="17DA148E" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>方案级参数卡
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2453497B" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:t>JSONB
+<w:tcPr><w:tcW w:w="2768" w:type="dxa"/><w:vAlign w:val="center"/></w:tcPr><w:p w14:paraId="2A36A882" w14:textId="77777777" w:rsidR="007623B6" w:rsidRDefault="00000000"><w:pPr><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:hint="eastAsia"/></w:rPr><w:t>灵活，不同干预类型参数异构
+说明：wet grid / heatmap 等模拟结果栅格同样走 MinIO + COG，但属于物理引擎产出，本章仅在建表时以关联字段形式预留，不展开其写入流程。
+4.2 表结构设计（核心链路）
+4.2.1 scene（场景）
+场景是整条链路的数据锚点：一个场景绑定一块地理区域（bbox / 中心点 / 地理底图），并挂载若干方案。前端 3D 沙盒的初始视角与底图加载均以 scene 的地理字段为入口。
+ CREATE TABLE scene (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ name TEXT NOT NULL,
+ -- 地理区域：核心地理锚点，驱动 3D 沙盒初始定位与底图裁剪
+ center GEOMETRY(Point, 4326) NOT NULL,
+ bbox GEOMETRY(Polygon, 4326),
+ -- 地理底图引用（DEM / 影像），存对象存储地址，前端按需拉取
+ terrain_url TEXT, -- Cesium Terrain / DEM COG 地址
+ imagery_url TEXT, -- 影像底图地址
+ default_camera JSONB, -- {longitude, latitude, height, heading, pitch}
+ env_params JSONB NOT NULL DEFAULT '{}', -- 环境参数（温度 / 降水等）
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+ );
+ CREATE INDEX idx_scene_center ON scene USING GIST (center);
+ CREATE INDEX idx_scene_bbox ON scene USING GIST (bbox);
+4.2.2 plan（方案）
+方案分基线（baseline）与各类干预方案。方案改变下垫面，进而影响后续模拟，是「场景 → 可视化」链路中承上启下的对象。
+ CREATE TABLE plan (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ scene_id UUID NOT NULL REFERENCES scene(id) ON DELETE CASCADE,
+ plan_type TEXT NOT NULL DEFAULT 'custom'
+ CHECK (plan_type IN ('baseline','economic','environmental','comprehensive','custom')),
+ label TEXT, -- "基线" / "方案A" / "方案B"
+ source TEXT NOT NULL DEFAULT 'manual'
+ CHECK (source IN ('manual','ai')),
+ nl_instruction TEXT, -- 若为 AI 生成，记录原始自然语言指令
+ params JSONB NOT NULL DEFAULT '{}', -- 方案级参数卡
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+ );
+ CREATE INDEX idx_plan_scene ON plan (scene_id);
+4.2.3 intervention（干预要素）
+统一要素模型：用户绘制与 AI 方案落地共用同一套「归一化 → 校验 → 3D 渲染」管线。几何用 GeoJSON 存入 PostGIS geometry 列，是「数据库 → 前端 3D 展示」最核心的一张表。
+ CREATE TABLE intervention (
+ id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ plan_id UUID NOT NULL REFERENCES plan(id) ON DELETE CASCADE,
+ geometry_type TEXT NOT NULL
+ CHECK (geometry_type IN ('Point','LineString','Polygon')),
+ geom GEOMETRY NOT NULL, -- 标准 GeoJSON 几何，SRID 4326
+ intervention_type TEXT NOT NULL, -- "透水铺装" | "绿地" | "蓄水池" | "道路" | ...
+ source TEXT NOT NULL DEFAULT 'manual'
+ CHECK (source IN ('manual','ai')),
+ params JSONB NOT NULL DEFAULT '{}', -- {area, permeability, storageVolume, elevation, ...}
+ style JSONB NOT NULL DEFAULT '{}', -- {color, opacity, extrusionHeight}
+ status TEXT NOT NULL DEFAULT 'draft'
+ CHECK (status IN ('draft','validated')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+ );
+ CREATE INDEX idx_intervention_plan ON intervention (plan_id);
+ CREATE INDEX idx_intervention_geom ON intervention USING GIST (geom);
+4.3 地理数据的入库方式（链路起点）
+由于本阶段地理数据来源尚未最终确定，这里给出两种可落地的入库通道，二者都以「写入 PostGIS + 元数据登记到 scene」为终点，前端 3D 沙盒统一从 scene 读取入口。
+通道 A：矢量数据（GeoJSON / Shapefile）→ PostGIS
+流程：GeoJSON / Shapefile → 经 ogr2ogr 或前端上传 → 写入 PostGIS（intervention.geom / scene.bbox）→ ST_Transform 归一化到 EPSG:4326 → 登记到 scene → 场景管理 API 下发 → Cesium 渲染。
+命令行示例（GeoJSON 导入为场景边界）：
+ ogr2ogr -f "PostgreSQL" PG:"host=localhost dbname=sandbox user=postgres" \
+ -nln scene_geom -nlt POLYGON -s_srs EPSG:4326 -t_srs EPSG:4326 \
+ region.geojson
+通道 B：栅格数据（DEM / 影像）→ MinIO + 元数据登记
+流程：DEM / 影像（GeoTIFF）→ gdal_translate 转为 COG → 上传 MinIO（登记 terrain_url / imagery_url）→ 在 scene 表登记 URL + bbox → 场景管理 API 下发 → Cesium terrain/imagery provider 加载。
+转 COG 并上传示例：
+ gdal_translate -of COG input_dem.tif output_dem_cog.tif
+ mc cp output_dem_cog.tif myminio/sandbox/terrain/
+占位约定：在数据来源敲定前，代码中以 terrain_url / imagery_url 字段为唯一入口，前端不关心底图文件具体来源，实现时可先用一张示例 GeoJSON 边界 + 在线 Cesium 影像底图占位跑通链路。
+4.4 链路相关的关键说明
+空间索引：scene、intervention 的几何列都建 GIST 索引，保证「按区域查询方案/要素」的空间过滤性能。
+几何坐标系：统一使用 EPSG:4326（经纬度），与 GeoJSON、Cesium 默认坐标系一致，避免前端换算。
+删除级联：scene → plan → intervention 采用 ON DELETE CASCADE，删除场景时联动清理其方案与要素，保证数据一致性。
+JSONB 承载异构参数：方案参数卡与干预要素参数用 JSONB，适配不同干预类型（透水铺装 / 绿地 / 蓄水池等）的差异化字段，无需为每种类型单独建表。
+

@@ -3,3 +3,18 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-dotenv==1.0.1
+
+# Raster / overlay generation (scripts/make_wetgrid.py, scripts/make_heatmap.py).
+# Pure numpy + pillow: the Lands Dept 5 m DTM is an ArcInfo ASCII grid (plain
+# text), so no GDAL / rasterio / Pillow-geo stack is required.  See
+# docs/OCT6_STATUS.md (ADR-012, ADR-035).
+numpy>=1.26
+pillow>=10.0
+
+# Test-only: powers fastapi.testclient in tests/test_contract.py (ADR-036).
+httpx>=0.27
+
+# Deliberately NOT installed today (see docs/OCT6_STATUS.md, D2):
+#   sqlalchemy, geoalchemy2, psycopg, alembic
+# They are only needed once the PostGIS + MinIO target store lands, which cannot
+# be provisioned on this machine.  STORE_MODE=file covers the same API contract.

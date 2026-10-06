@@ -1,0 +1,14 @@
+{
+  "id": "77593516-77ab-4e93-9451-cf1b5b4cbf93",
+  "scene_id": "51e03c37-5360-43b0-a094-fbaca38cd70b",
+  "plan_type": "baseline",
+  "label": "基线 Baseline (existing land use)",
+  "source": "manual",
+  "nl_instruction": null,
+  "params": {
+    "note": "Today's land use. No planned projects applied."
+  },
+  "interventions": [],
+  "created_at": "2026-10-06T11:01:42Z",
+  "updated_at": "2026-10-06T11:01:42Z"
+}

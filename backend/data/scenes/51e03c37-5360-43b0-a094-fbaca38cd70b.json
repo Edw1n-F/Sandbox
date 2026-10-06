@@ -1,0 +1,73 @@
+{
+  "id": "51e03c37-5360-43b0-a094-fbaca38cd70b",
+  "name": "Hung Shui Kiu / Ha Tsuen New Development Area",
+  "center": {
+    "type": "Point",
+    "coordinates": [
+      113.9935,
+      22.44
+    ]
+  },
+  "bbox": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.982,
+          22.425
+        ],
+        [
+          114.005,
+          22.425
+        ],
+        [
+          114.005,
+          22.455
+        ],
+        [
+          113.982,
+          22.455
+        ],
+        [
+          113.982,
+          22.425
+        ]
+      ]
+    ]
+  },
+  "terrain_url": null,
+  "imagery_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  "default_camera": {
+    "longitude": 113.9935,
+    "latitude": 22.44,
+    "height": 4200.0,
+    "heading": 0.0,
+    "pitch": -48.0
+  },
+  "env_params": {
+    "temperature": 28.5,
+    "precipitation": 450.0
+  },
+  "wet_grid_path": null,
+  "heatmap_path": null,
+  "created_at": "2026-10-06T11:01:42Z",
+  "updated_at": "2026-10-06T11:01:42Z",
+  "study_area": "hsk-ht-nda",
+  "working_grid": {
+    "bounds": [
+      113.982,
+      22.425,
+      114.005,
+      22.455
+    ],
+    "resolution_m": 5,
+    "rows": 664,
+    "cols": 474,
+    "cell_width_m": 4.9950071502695215,
+    "cell_height_m": 5.003143563288857,
+    "width_m": 2367.633389227753,
+    "height_m": 3322.087326023801,
+    "area_m2": 7865484.875024295,
+    "crs_note": "Metres via local equirectangular approximation about the extent centre. For volume reporting, swap HK1980 Grid (EPSG:2326)."
+  }
+}

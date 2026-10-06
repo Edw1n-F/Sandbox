@@ -1,0 +1,99 @@
+{
+  "$comment": "Locked study area for the Oct 6 base prototype. READ docs/OCT6_STATUS.md before changing any number here -- every downstream artefact (DTM clip, land-class grid, wet grid, heatmap, camera) is derived from this file.",
+  "id": "hsk-ht-nda",
+  "name": "Hung Shui Kiu / Ha Tsuen New Development Area",
+  "nameZh": "洪水橋 / 厦村新發展區",
+  "crs": "EPSG:4326",
+  "center": {
+    "type": "Point",
+    "coordinates": [113.9935, 22.44]
+  },
+  "bbox": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [113.982, 22.425],
+        [114.005, 22.425],
+        [114.005, 22.455],
+        [113.982, 22.455],
+        [113.982, 22.425]
+      ]
+    ]
+  },
+  "defaultCamera": {
+    "longitude": 113.9935,
+    "latitude": 22.44,
+    "height": 4200,
+    "heading": 0,
+    "pitch": -48
+  },
+  "envParams": {
+    "temperature": 28.5,
+    "precipitation": 450
+  },
+  "provenance": {
+    "status": "PROVISIONAL_OPERATIONAL_EXTENT",
+    "warning": "This is NOT the gazetted NDA boundary. It is a rectangular operational extent derived from machine-retrieved public place anchors, chosen so the sandbox has a stable, citable rectangle on Oct 6. It must be replaced by the sheet extent of OZP S/HSK/3 (or an equivalent CSDI dataset) before the 18 Oct submission.",
+    "method": "Union of OpenStreetMap place anchors for the NDA's two constituent areas, padded for context and snapped outward to a 4-decimal grid. Coordinates were NOT typed from memory.",
+    "retrieved": "2026-10-06",
+    "source": "OpenStreetMap via Nominatim (ODbL 1.0), https://nominatim.openstreetmap.org/search",
+    "anchors": [
+      {
+        "label": "Hung Shui Kiu Station works (NDA core, MTR Tuen Ma Line)",
+        "osmType": "way",
+        "osmId": 1374749699,
+        "osmClass": "landuse/construction",
+        "extent": {
+          "latMin": 22.4300408,
+          "latMax": 22.4336082,
+          "lonMin": 113.9869523,
+          "lonMax": 113.9895488
+        }
+      },
+      {
+        "label": "Hung Shui Kiu Station (node)",
+        "osmType": "node",
+        "osmId": 6606515524,
+        "osmClass": "railway/station",
+        "point": [113.9974787, 22.4336604]
+      },
+      {
+        "label": "Ha Tsuen (NDA component area)",
+        "osmType": "node",
+        "osmId": 7684821757,
+        "osmClass": "place/suburb",
+        "point": [113.9923811, 22.4474544]
+      }
+    ],
+    "grid": {
+      "resolution_m": 5,
+      "note": "Working grid for scripts/make_wetgrid.py and scripts/make_heatmap.py. A 5 m grid over this extent is roughly 667 x 740 cells -- numpy handles that in well under a second (ADR-009).",
+      "rows": 740,
+      "cols": 667
+    },
+    "knownGaps": [
+      "No gazetted NDA polygon was retrievable on Oct 6: the OSM Overpass mirror timed out repeatedly and Nominatim returns points, not the NDA boundary. Overpass is the route to close this -- query relation/way for the HSK/HT NDA landuse and replace the rectangle.",
+      "The document's second anchor (San Tin / Tai Sang Wai / Mai Po, Deep Bay) is NOT used. See ADR-002: geography is HSK/HT for the Oct 6 prototype.",
+      "Extent area is approximately 780 ha, against a documented ~707 ha 'wider HSK' and ~441 ha development area. The rectangle is intentionally larger than the development area so the baseline includes its rural context."
+    ]
+  },
+  "dataSources": {
+    "terrain": {
+      "mode": "SYNTHETIC_FALLBACK",
+      "note": "No real DTM is shipped. The Lands Dept 5 m DTM (Whole_HK_DTM_5m.zip, ~290 MB) was NOT downloaded: it needs explicit permission and it is not bare-earth (it carries elevated roads and depicts vegetation height). The wet grid therefore runs on a synthetic surface, and that limitation is stated in the UI. See docs/OCT6_STATUS.md D1.",
+      "configKey": "DEM_SOURCE"
+    },
+    "imagery": {
+      "mode": "ONLINE_TILE_TEMPLATE",
+      "note": "No Ion token. OpenStreetMap tiles via UrlTemplateImageryProvider / OpenStreetMapImageryProvider so the demo runs with zero credentials (ADR-033)."
+    },
+    "landClass": {
+      "mode": "PLACEHOLDER",
+      "note": "Awaiting Lia's independent land-class grid. Until it lands, make_heatmap.py classifies from a coarse synthetic/OSM-derived surrogate and labels itself as such."
+    }
+  },
+  "attribution": [
+    "Contains information from OpenStreetMap contributors, ODbL 1.0.",
+    "Outline Zoning Plan S/HSK/3 (Town Planning Board) is the authoritative land-use source for this area and has not yet been ingested as geometry."
+  ]
+}
