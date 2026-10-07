@@ -40,7 +40,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | camelCase wire contract with `sceneId`/`planId` aliases | Working | contract test |
 | Single error envelope (`detail` **and** `error`) | Working | contract test |
 | 3D viewer: real terrain, imagery, boundary, camera | Working | headless-browser render, zero console errors |
-| **Real elevation** (1 arc-second, Open-Meteo/SRTM) | Working | control-point assertions on every fetch |
+| **Real elevation** (~90 m, Open-Meteo global model) | Working | control-point assertions on every fetch; resolution measured, not assumed |
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
@@ -131,10 +131,22 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Verify:
+Then check the whole environment in one shot:
 
 ```bash
-python -c "import fastapi, numpy, rasterio; print('deps ok')"
+python scripts/preflight.py
+```
+
+This verifies the interpreter, the packages, `STATIC_BASE_URL`, and the data
+files — and prints the `VITE_SCENE_ID` you need in step 6. It exits non-zero if
+the project cannot run, so it is also the first thing to run when something
+misbehaves. It specifically catches the case where a stale `backend/.venv`
+(3.10, no numpy) is shadowing the interpreter you *think* you are using, which
+otherwise surfaces as a confusing `ModuleNotFoundError` from inside a script.
+
+```bash
+python -c "import fastapi, numpy, rasterio; print('deps ok')"   # or just:
+python scripts/preflight.py
 ```
 
 ### Step 3 — fetch the open data (optional but recommended)
@@ -148,10 +160,10 @@ cd backend
 # Real land cover: ESA WorldCover 10 m v200, CC BY 4.0. ~7 s.
 python scripts/fetch_landcover.py
 
-# Real elevation: Open-Meteo elevation API (SRTM, 1 arc-second). ~3 min,
+# Real elevation: Open-Meteo elevation API. ~3 min,
 # because the free API throttles on request frequency and the fetcher paces
 # itself. Progress is cached, so an interrupted run resumes for free.
-python scripts/fetch_dem.py --arcsec 1
+python scripts/fetch_dem.py
 ```
 
 Both are public, key-less, and print their own provenance. Neither writes
@@ -248,8 +260,9 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 
 ```bash
 cd backend
+python scripts/preflight.py      # environment; exits non-zero if not runnable
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    #  7/7  — the silent-constant guards
+python tests/test_constants.py    #  9/9  — silent-constant + DEM guards
 
 cd ../frontend
 npx tsc --noEmit                 # must be clean
@@ -391,10 +404,17 @@ So `fetch_dem.py` asserts **Everest ≈ 8,000–9,500 m and the open ocean ≈ 0
 before it will write a single file. A bad response fails loudly. The same script
 records the rejected bucket in its own output metadata so nobody re-derives it.
 
-The second lesson: the first successful fetch sampled on a "30 m" grid against a
-1-arc-second source, which aliased and **replicated every source pixel three
-times** — the hillshade looked like corduroy. Sampling on the source's own
-arc-second lattice fixed it. Details in
+The second lesson is quieter and cost more to catch. The DEM was requested on a
+**1 arc-second** lattice, which is the textbook answer for SRTM. The API does
+not serve SRTM at 1 arc-second — it serves a ~90 m global model. The response
+was a 78 × 110 array holding only **28 × 37 distinct samples**: three-fold
+oversampling, where the *data was correct* and the *metadata was wrong*.
+
+Nothing errored. The hillshade looked plausible. It only became visible by
+counting distinct values. The oversampling has since been removed
+losslessly, and every resolution claim in this repo now says **~90 m** —
+because that is what was measured. Re-sampling finer would have duplicated the
+same values again, not resolved them. Details in
 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
 
 ### 6. Honesty is a feature, not a disclaimer
@@ -415,7 +435,7 @@ No PNG is committed as a source of truth. Each is reproducible:
 
 ```bash
 python scripts/fetch_landcover.py                  # → landclass_hsk.npy
-python scripts/fetch_dem.py --arcsec 1             # → dem_hsk.npy
+python scripts/fetch_dem.py                       # → dem_hsk.npy
 python scripts/make_wetgrid.py --rainfall 450      # → wetgrid_hsk.png
 python scripts/make_heatmap.py                     # → heatmap_hsk.png
 ```
@@ -428,7 +448,7 @@ python scripts/make_heatmap.py                     # → heatmap_hsk.png
 
 | Layer | Source | Licence | Resolution | Status |
 |---|---|---|---|---|
-| Elevation | [Open-Meteo elevation API](https://open-meteo.com/) over SRTM | open | 1 arc-second (~30 m) | Real |
+| Elevation | [Open-Meteo elevation API](https://open-meteo.com/) | open | **~90 m** (measured) | Real |
 | Land cover | [ESA WorldCover 10 m v200](https://esa-worldcover.org/) (2021) | CC BY 4.0 | 10 m | Real |
 | Base imagery | OpenStreetMap standard tiles | ODbL | — | Real |
 | Study-area extent | OSM place anchors (Nominatim) | ODbL | — | **Provisional** — see below |
@@ -506,6 +526,16 @@ that *fail silently*. One of them was caught in practice: written as
 reporting **5.4 × 10¹⁸ m³** of runoff — while rendering a perfectly
 plausible-looking image. The correct form is `−254`, now pinned against the
 TR-55 worked example.
+
+Two more guards the same instinct: the committed `dem_terrain_rgb.png` must
+decode back to `dem_hsk.npy` within terrain-RGB's own 0.1 m quantum (the Python
+encoder and the browser decoder are two implementations of one formula in two
+languages, and if they drift the terrain renders subtly wrong with nothing
+erroring), and the DEM's height range must be plausible for a coastal Hong Kong
+floodplain — a DEM that decodes to 800 km is a broken source, not a broken night.
+
+**`scripts/preflight.py`** guards the environment itself, which is where the
+most common failure actually lives.
 
 A note on verification: **a clean `tsc` did not mean the frontend worked.** Three
 runtime bugs passed the type checker, including a `tsconfig` path alias that

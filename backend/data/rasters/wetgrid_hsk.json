@@ -46,11 +46,11 @@
   "results": {
     "runoffVolumeM3": 3171780.2,
     "unstoredVolumeM3": 3015062.8,
-    "wetCells": 79160,
-    "wetAreaHa": 197.83,
+    "wetCells": 77255,
+    "wetAreaHa": 193.07,
     "totalAreaHa": 786.55,
-    "wetAreaFraction": 0.2515,
-    "meanDepthInWetAreaM": 1.5241
+    "wetAreaFraction": 0.2455,
+    "meanDepthInWetAreaM": 1.5617
   },
   "render": {
     "minVisibleDepthM": 0.005,

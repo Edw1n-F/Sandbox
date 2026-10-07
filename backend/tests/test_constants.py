@@ -106,6 +106,77 @@ def test_runoff_is_monotonic_in_rainfall() -> None:
     assert float(runoff_depth(0.0, cn).sum()) == 0.0, "zero rain gives zero runoff"
 
 
+def test_terrain_rgb_round_trips_to_the_source_dem() -> None:
+    """The PNG the browser decodes must reproduce the DEM numpy wrote.
+
+    `fetch_dem.py` encodes elevation into mapbox terrain-RGB and
+    `frontend/src/view/demProvider.ts` decodes it in the browser. Those are two
+    implementations of one formula in two languages. If they ever drift, the
+    terrain renders at the wrong height and **nothing errors** -- the globe just
+    looks subtly wrong, which is the failure mode this whole test file exists to
+    catch.
+
+    So this asserts the invariant on the committed artefacts rather than on a
+    synthetic array: whatever `dem_terrain_rgb.png` holds must decode back to
+    `dem_hsk.npy` within terrain-RGB's 0.1 m quantisation.
+    """
+    import numpy as np
+    from PIL import Image
+
+    from fetch_dem import encode_terrain_rgb
+
+    dem_path = BACKEND_DIR / "data" / "dem_hsk.npy"
+    png_path = BACKEND_DIR / "data" / "dem_terrain_rgb.png"
+    if not dem_path.exists() or not png_path.exists():
+        print("      (skipped: run scripts/fetch_dem.py first)")
+        return
+
+    dem = np.load(dem_path).astype(np.float64)
+    decoded = (
+        np.array(Image.open(png_path).convert("RGB")).astype(np.int64)
+    )
+    height = (decoded[..., 0] * 65536 + decoded[..., 1] * 256 + decoded[..., 2])
+    height = height * 0.1 - 32768
+
+    assert height.shape == dem.shape, (
+        f"terrain-RGB is {height.shape}, DEM is {dem.shape} -- the browser "
+        f"would stretch the raster to the wrong extent"
+    )
+    worst = float(np.abs(height - dem).max())
+    assert worst <= 0.1, (
+        f"worst round-trip error {worst:.4f} m exceeds terrain-RGB's own "
+        f"0.1 m quantum -- the encoder and the browser decoder disagree"
+    )
+
+    # And the encoder itself is stable: re-encoding the decoded values must be
+    # a no-op, i.e. the transform is idempotent at its own precision.
+    assert np.array_equal(encode_terrain_rgb(height), decoded), (
+        "encode(decode(x)) != x -- terrain-RGB is not idempotent"
+    )
+
+
+def test_dem_height_range_is_physically_plausible() -> None:
+    """A DEM that decodes to 800 km is a broken source, not a broken night.
+
+    This is the browser-side half of the control-point check `fetch_dem.py`
+    performs before writing. It guards the committed artefact, so a bad fetch
+    that slipped past the fetcher's own assertions is still caught.
+    """
+    import numpy as np
+
+    dem_path = BACKEND_DIR / "data" / "dem_hsk.npy"
+    if not dem_path.exists():
+        print("      (skipped: run scripts/fetch_dem.py first)")
+        return
+    dem = np.load(dem_path).astype(np.float64)
+    assert np.isfinite(dem).all(), "DEM contains non-finite values"
+    # Hung Shui Kiu is coastal floodplain with hills to the north.
+    assert -50.0 <= dem.min() <= 60.0, f"DEM min {dem.min()} m is implausible for HSK/HT"
+    assert 50.0 <= dem.max() <= 1000.0, f"DEM max {dem.max()} m is implausible for HSK/HT"
+    relief = float(dem.max() - dem.min())
+    assert 20.0 < relief < 900.0, f"relief {relief:.0f} m is implausible for HSK/HT"
+
+
 def _run() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]
     failed = 0

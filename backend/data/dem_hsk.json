@@ -6,13 +6,15 @@
     "name": "Open-Meteo elevation API",
     "url": "https://api.open-meteo.com/v1/elevation",
     "keyRequired": false,
-    "upstreamModels": "SRTM 30 m and coarser open elevation models",
+    "upstreamModels": "A downsampled global elevation model, ~90 m posting (derived from SRTM and coarser sources). The ~90 m figure is measured on the returned grid, not advertised: the API reports no resolution, and asking for a finer lattice only duplicates values. See grid.resolutionLonM/LatM.",
     "note": "Verified against Everest and open-ocean control points on every run. The AWS elevation-tiles-prod bucket was tested and rejected: it returns HTTP 200 with non-terrarium pixels that decode to nonsense (Everest ~1e6 m)."
   },
   "grid": {
-    "rows": 110,
-    "cols": 78,
-    "resolutionM": 30.0,
+    "rows": 37,
+    "cols": 28,
+    "resolutionLonM": 84.5,
+    "resolutionLatM": 89.7,
+    "resolutionNote": "Measured from the deduplicated grid. The source is a ~90 m global model; requesting a finer lattice duplicates values rather than resolving them.",
     "bounds": [
       113.982,
       22.425,
@@ -25,11 +27,11 @@
   "elevation": {
     "minM": 2.0,
     "maxM": 141.0,
-    "meanM": 16.75139808654785,
+    "meanM": 17.044401168823242,
     "reliefM": 139.0
   },
   "caveats": [
-    "Sampled, not a survey product: 30 m postings over a 5 m analysis grid.",
+    "Sampled, not a survey product: ~90 m postings resampled onto the 5 m analysis grid. The 5 m grid is the analysis convention, not the data resolution, and the ~90 m figure is the measured one.",
     "Orthometric (mPD), not ellipsoidal. No vertical datum shift applied.",
     "No bare-earth correction. If vegetation/structures bias this upward, a deficit estimate would be biased too.",
     "Sinks are not filled and there is no flow routing; the wet grid fills by water-surface level, not by routing water downhill."

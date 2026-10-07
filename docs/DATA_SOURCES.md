@@ -15,7 +15,7 @@ document is the human-readable narrative.
 
 | Layer | Source | Licence | Resolution | Key? | Status |
 |---|---|---|---|---|---|
-| Elevation | Open-Meteo elevation API (SRTM upstream) | open data | 1 arc-second (~30 × 28 m) | No | **In use** |
+| Elevation | Open-Meteo elevation API | open data | **~90 m** (measured) | No | **In use** |
 | Land cover | ESA WorldCover 10 m v200 (2021) | CC BY 4.0 | 10 m | No | **In use** |
 | Base imagery | OpenStreetMap standard tiles | ODbL | — | No | **In use** |
 | Study-area extent | OSM place anchors via Nominatim | ODbL | — | No | **In use, provisional** |
@@ -29,7 +29,8 @@ public GeoTIFF. No accounts, no keys, no large files.
 ## 1. Elevation — Open-Meteo elevation API
 
 - **Endpoint:** `https://api.open-meteo.com/v1/elevation`
-- **Upstream models:** SRTM 30 m and coarser open elevation models
+- **Upstream models:** a downsampled global elevation model, **~90 m** posting
+  (measured on this extract — see "Resolution" below)
 - **Auth:** none
 - **Fetcher:** `backend/scripts/fetch_dem.py`
 - **Outputs:** `dem_hsk.npy` (float32 metres), `dem_terrain_rgb.png`, `dem_hsk.json`
@@ -75,19 +76,32 @@ Had this not been checked it would have produced a smooth, plausible,
 completely wrong landscape — the worst possible failure, because nothing would
 have looked broken.
 
-### Grid alignment — a real bug worth recording
+### Resolution — measured, not assumed
 
-The first successful fetch asked for a **78 × 110** grid over the extent,
-chosen because 2.4 km ÷ 78 ≈ 30.7 m "looks like" SRTM's nominal 30 m.
+**The effective resolution is ~90 m, not the 1 arc-second (~30 m) that was
+originally assumed here.**
 
-The result came back **integer-valued with only 84 distinct values**, and rows
-replicated in blocks of three. The source quantises to **1 arc-second**
-(≈30.9 m N–S, ≈28.5 m E–W here), so a 0.98-arc-second step aliased against it
-and replicated every source pixel ~3×. The hillshade looked like corduroy.
+The DEM was requested on a 1 arc-second lattice, which is the textbook answer
+for SRTM. The API does not serve SRTM at 1 arc-second: it serves a downsampled
+global model. The result was a **78 × 110** array containing only **28 × 37
+distinct samples** — every source row and column repeated about three times.
 
-The fix is to sample on the source's own lattice — integer arc-seconds — so each
-request lands on a distinct source pixel. `sample_grid()` now does that and says
-why in its docstring.
+Two things followed from measuring instead of assuming:
+
+1. **The oversampling was removed.** Deduplicating repeated rows and columns is
+   lossless by construction — a cell is only dropped when it is byte-equal to its
+   predecessor — and it preserves all 84 distinct elevations exactly. The shipped
+   grid is 28 × 37, i.e. ~85 m E–W × ~90 m N–S.
+2. **Every resolution claim in this repository was corrected.** The earlier text
+   said "1 arc-second (~30 m)" in four places. There is no 30 m data here, and
+   re-sampling on a finer lattice would only duplicate the same values again.
+
+The general lesson: **an API's advertised resolution is not the resolution you
+get.** Count the distinct samples.
+
+> Note the contrast with the AWS bucket, which failed loudly under the same kind
+> of check. Here the data was *correct* but the metadata around it was wrong —
+> a quieter failure, and one that only a measurement would catch.
 
 ### Rate limiting
 
@@ -247,7 +261,7 @@ Related: elevation here is **orthometric (mPD)**, not ellipsoidal, and there is
 ```bash
 cd backend
 python scripts/fetch_landcover.py          # ~7 s
-python scripts/fetch_dem.py --arcsec 1     # ~3 min, self-paced, resumable
+python scripts/fetch_dem.py               # ~3 min, self-paced, resumable
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 ```

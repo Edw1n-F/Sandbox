@@ -138,79 +138,78 @@ def verify_source() -> None:
         print(f"[dem]   control {name:<15} {got:9.1f} m  OK")
 
 
-def sample_grid(bounds: tuple[float, float, float, float], arcsec: float = 1.0):
-    """Sample elevation on the source model's own lattice.
+def sample_grid(bounds: tuple[float, float, float, float]):
+    """Sample elevation, then decimate back to the source's true posting.
 
-    **Sample on whole arc-seconds, not on a "nice" metre grid.** The first
-    attempt asked for 78 x 110 cells over the extent -- about 30.7 m, chosen to
-    look like SRTM's nominal resolution. The result came back integer-valued with
-    only 84 distinct values and rows replicated in blocks of three: the source
-    quantises to 1 arc-second (30.9 m in latitude, 28.5 m in longitude here), so
-    a 0.98-arc-second step aliased against it and replicated every source pixel
-    three times. The hillshade looked like corduroy.
+    ## Why there is no resolution flag
 
-    Sampling on the integer arc-second lattice removes the aliasing, because each
-    request then lands on a distinct source pixel. It is also simply the honest
-    resolution to claim: 1 arc-second *is* SRTM, and anything finer would be
-    interpolating, not measuring.
+    An earlier version took ``--arcsec`` and sampled on that lattice. It looked
+    right and was wrong: the API serves a **~90 m** global model, so a 1
+    arc-second request over a 2.4 km extent returned a 78 x 110 array holding
+    only 28 x 37 distinct samples. The values were correct; the *posting* was a
+    fiction, and every document that repeated it was overstating the data by 3x.
+
+    Asking for a finer lattice cannot manufacture resolution. It can only
+    duplicate the values already there. So the grid is now sampled once and then
+    **deduplicated**, which is lossless by construction -- a cell is dropped
+    only when it is byte-equal to its predecessor -- and the manifest reports the
+    resolution that was measured rather than the one that was requested.
+
+    ## Why deduplicate rather than stride
+
+    A stride of 3 assumed the replication factor was exactly 3 everywhere. It
+    is not: one column in the study area was unique, and a naive stride silently
+    dropped it. Deduplication cannot drop a value that is not a duplicate.
     """
     lon_min, lat_min, lon_max, lat_max = bounds
-
-    def lattice(lo: float, hi: float) -> list[float]:
-        """Ascending whole-arc-second samples covering [lo, hi).
-
-        Snapped *outward* so the study area is fully covered rather than clipped
-        to a whole arc-second boundary, which would silently lose up to 30 m of
-        the extent at each edge.
-        """
-        start = math.floor(lo * 3600.0)
-        stop = math.ceil(hi * 3600.0)
-        step = arcsec
-        values = []
-        v = start
-        while v < stop:
-            values.append(round(v / 3600.0, 8))
-            v += step
-        return values
-
-    lons = lattice(lon_min, lon_max)
-    # Descending latitudes give a north-up raster (row 0 = northernmost).
-    lats = sorted(lattice(lat_min, lat_max), reverse=True)
-
-    cols, rows = len(lons), len(lats)
     mid_lat = math.radians((lat_min + lat_max) / 2.0)
-    res_lat_m = arcsec * 110_574.0 / 3600.0
-    res_lon_m = arcsec * 111_320.0 * math.cos(mid_lat) / 3600.0
-    print(f"[dem] lattice {cols} x {rows} at {arcsec:g} arc-sec "
-          f"({res_lon_m:.1f} m E-W x {res_lat_m:.1f} m N-S)")
+    res_lat_m = 110_574.0 / 3600.0
+    res_lon_m = 111_320.0 * math.cos(mid_lat) / 3600.0
+
+    cols = max(int(round((lon_max - lon_min) * 111_320.0 * math.cos(mid_lat) / res_lon_m)), 2)
+    rows = max(int(round((lat_max - lat_min) * 110_574.0 / res_lat_m)), 2)
+    print(f"[dem] sampling {cols} x {rows} at 1 arc-sec, then deduplicating")
+
+    lons = np.linspace(lon_min, lon_max, cols, endpoint=False)
+    lats = np.linspace(lat_max, lat_min, rows, endpoint=False)
 
     flat_lat: list[float] = []
     flat_lon: list[float] = []
     for lat in lats:
-        flat_lat.extend([lat] * cols)
-        flat_lon.extend(lons)
+        flat_lat.extend([float(lat)] * cols)
+        flat_lon.extend(lons.tolist())
 
     values: list[float] = []
     for start in range(0, len(flat_lat), BATCH):
-        chunk_lat = flat_lat[start : start + BATCH]
-        chunk_lon = flat_lon[start : start + BATCH]
-        values.extend(_fetch(chunk_lat, chunk_lon))
-        # Be a good citizen: this is a free public API, and it throttles on
-        # request *frequency* (100 coords per request is fine; 100 requests per
-        # minute is not). 2 s between batches keeps a full grid fetch around
-        # three minutes, which is a small price for not being the reason a
-        # shared resource stops serving other people.
+        values.extend(_fetch(flat_lat[start : start + BATCH], flat_lon[start : start + BATCH]))
+        # This is a free public API and it throttles on request *frequency*:
+        # 100 coords per request is fine, 100 requests per minute is not. 2 s
+        # keeps a full grid near three minutes, a small price for not being the
+        # reason a shared resource stops serving other people.
         time.sleep(2.0)
         print(f"[dem]   sampled {len(values):>6}/{len(flat_lat)}", end="\r")
-
     print()
-    grid = np.array(values, dtype=np.float32).reshape(rows, cols)
-    meta = {
-        "arcsec": arcsec,
-        "resLonM": res_lon_m,
-        "resLatM": res_lat_m,
-    }
-    return grid, meta
+
+    sampled = np.array(values, dtype=np.float32).reshape(rows, cols)
+    before = sampled.shape
+
+    col_keep = [0] + [j for j in range(1, cols)
+                      if not np.array_equal(sampled[:, j], sampled[:, j - 1])]
+    deduped = sampled[:, col_keep]
+    row_keep = [0] + [i for i in range(1, deduped.shape[0])
+                      if not np.array_equal(deduped[i], deduped[i - 1])]
+    grid = deduped[row_keep, :]
+
+    # Deduplication only drops cells equal to their predecessor, so the set of
+    # distinct elevations must be preserved exactly. Cheap, and it would catch a
+    # bad slice.
+    assert set(np.unique(sampled).tolist()) == set(np.unique(grid).tolist()), (
+        "decimation changed the set of elevations -- that is lossy"
+    )
+    print(f"[dem] {before[1]}x{before[0]} -> {grid.shape[1]}x{grid.shape[0]} "
+          f"({cols / max(grid.shape[1], 1):.1f}x oversampling removed)")
+
+    return grid
 
 
 def encode_terrain_rgb(elevation: np.ndarray) -> np.ndarray:
@@ -225,12 +224,6 @@ def encode_terrain_rgb(elevation: np.ndarray) -> np.ndarray:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--arcsec",
-        type=float,
-        default=1.0,
-        help="sample spacing in arc-seconds (1 = native SRTM resolution)",
-    )
     args = parser.parse_args()
 
     area = load_study_area(settings.data_dir / "scene_hsk.json")
@@ -239,7 +232,7 @@ def main() -> int:
     print(f"[dem] verifying source against known ground truth...")
     verify_source()
 
-    elevation, lattice_meta = sample_grid(bounds, arcsec=args.arcsec)
+    elevation = sample_grid(bounds)
     rows, cols = elevation.shape
     if np.isnan(elevation).any():
         # Fill gaps with the mean of the valid cells. Deliberately not
@@ -252,7 +245,7 @@ def main() -> int:
         fill = float(np.nanmean(elevation))
         elevation = np.where(np.isnan(elevation), fill, elevation)
 
-    print(f"[dem] grid {cols} x {rows} @ {args.arcsec:g} arc-sec")
+    print(f"[dem] grid {cols} x {rows} after deduplication")
     print(f"[dem] elevation  min={elevation.min():.1f}  max={elevation.max():.1f}  "
           f"mean={elevation.mean():.1f} m")
 
@@ -280,7 +273,13 @@ def main() -> int:
             "name": "Open-Meteo elevation API",
             "url": API,
             "keyRequired": False,
-            "upstreamModels": "SRTM 30 m and coarser open elevation models",
+            "upstreamModels": (
+                "A downsampled global elevation model, ~90 m posting "
+                "(derived from SRTM and coarser sources). The ~90 m figure "
+                "is measured on the returned grid, not advertised: the API "
+                "reports no resolution, and asking for a finer lattice only "
+                "duplicates values. See grid.resolutionLonM/LatM."
+            ),
             "note": (
                 "Verified against Everest and open-ocean control points on every "
                 "run. The AWS elevation-tiles-prod bucket was tested and rejected: "
@@ -291,9 +290,15 @@ def main() -> int:
         "grid": {
             "rows": rows,
             "cols": cols,
-            "arcSeconds": args.arcsec,
-            "resolutionLonM": lattice_meta["resLonM"],
-            "resolutionLatM": lattice_meta["resLatM"],
+            "resolutionLonM": round((bounds[2] - bounds[0]) * 111_320.0
+                                   * math.cos(math.radians((bounds[1] + bounds[3]) / 2))
+                                   / cols, 1),
+            "resolutionLatM": round((bounds[3] - bounds[1]) * 110_574.0 / rows, 1),
+            "resolutionNote": (
+                "Measured from the deduplicated grid. The source is a ~90 m "
+                "global model; requesting a finer lattice duplicates values "
+                "rather than resolving them."
+            ),
             "bounds": list(bounds),
             "orientation": "north-up, row 0 = northernmost",
             "verticalDatum": "mPD (Open-Meteo returns orthometric heights)",
@@ -305,9 +310,9 @@ def main() -> int:
             "reliefM": float(elevation.max() - elevation.min()),
         },
         "caveats": [
-            "Sampled, not a survey product: 1 arc-second postings "
-            "(~30.9 m N-S x ~28.5 m E-W) resampled onto the 5 m analysis grid. "
-            "The 5 m grid is the analysis convention, not the data resolution.",
+            "Sampled, not a survey product: ~90 m postings resampled onto the "
+            "5 m analysis grid. The 5 m grid is the analysis convention, not "
+            "the data resolution, and the ~90 m figure is the measured one.",
             "Orthometric (mPD), not ellipsoidal. No vertical datum shift applied.",
             "No bare-earth correction. If vegetation/structures bias this upward, "
             "a deficit estimate would be biased too.",

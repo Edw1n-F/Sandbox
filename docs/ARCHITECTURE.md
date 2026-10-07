@@ -17,7 +17,7 @@ the day.** Almost every decision below follows from that.
 
 ```
 ┌─ open data (fetch_dem.py, fetch_landcover.py) ──────────────┐
-│  Open-Meteo/SRTM 1-arcsec elevation   ESA WorldCover 10 m  │
+│  Open-Meteo elevation ~90 m         ESA WorldCover 10 m    │
 │  verified against control points     CC BY 4.0, COG window │
 └──────────────────────────┬─────────────────────────────────┘
                            │ writes
@@ -139,6 +139,13 @@ A second instance of the same principle: the first land-cover read filled 21 % o
 the study area with a default class because it read only one of two tiles.
 Nodata quietly becoming a real class is the same failure — confident, wrong, and
 invisible in a picture.
+
+A third: **resolution was measured rather than assumed.** The DEM was requested
+on a 1 arc-second lattice, which returned 78 × 110 cells containing only
+28 × 37 distinct values — three-fold oversampling, because the API serves a ~90 m
+global model. The array was deduplicated back to its true posting, and every
+document now says ~90 m. Sampling finer would have duplicated the data again,
+not resolved it.
 
 ---
 
@@ -274,13 +281,28 @@ consumer, so the contract is asserted: every endpoint, the cascade delete, the
 `sceneId` alias, bbox ring closure, and that the error envelope carries both
 required shapes.
 
-**`tests/test_constants.py` (7 tests)** — guards the two constants the source
+**`tests/test_constants.py` (9 tests)** — guards the two constants the source
 documents say *fail silently*: the SCS-CN form and the mCD/mPD datum offset.
 Neither raises an error when wrong; both produce a plausible number. One of them
 was caught in practice — `S = 25400/CN − 2540` returns negative retention above
 CN ≈ 91, which made `Q`'s denominator negative and produced a first run
 reporting **5.4 × 10¹⁸ m³** of runoff while rendering a plausible image. Also
 covers the ADR-015 double-counting partition and ADR-017 monotonicity.
+
+It also guards the terrain pipeline: the committed `dem_terrain_rgb.png` must
+decode back to `dem_hsk.npy` within terrain-RGB's 0.1 m quantum — because the
+Python encoder and the browser decoder are two implementations of one formula in
+two languages, and if they ever drift the terrain renders at the wrong height
+with nothing erroring — and the DEM's height range must be plausible for a
+coastal Hong Kong floodplain.
+
+**`scripts/preflight.py`** — environment readiness, exiting non-zero when the
+project cannot run. It exists because the most common failure here is an
+*environment* failure that presents as a code failure: a stale 3.10 `.venv`
+without numpy raises `ModuleNotFoundError` from inside a raster script, which
+reads as "the script is broken" rather than "you are on the wrong interpreter".
+It also catches the reverse trap — `STATIC_BASE_URL` disagreeing with the
+`/static` mount — and prints the `VITE_SCENE_ID` the frontend needs.
 
 **Frontend** — `npx tsc --noEmit`, plus a headless-Chromium render asserting zero
 console errors (Decision 10). The render is the test that would have caught all

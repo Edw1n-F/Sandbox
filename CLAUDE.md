@@ -37,14 +37,15 @@ OpenStreetMap explicitly, so the app runs with zero credentials. Leave
 ```bash
 # Backend -- always activate the venv first; there are two Pythons on this host
 cd backend && source .venv/bin/activate
+python scripts/preflight.py                  # environment check; exits 1 if not runnable
 python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy
-python scripts/fetch_dem.py --arcsec 1       # Open-Meteo/SRTM -> dem_hsk.npy
+python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
 python scripts/seed_scene.py                 # prints the sceneId
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python -m uvicorn app.main:app --reload      # :8000
 python tests/test_contract.py                # 11/11
-python tests/test_constants.py               #  7/7
+python tests/test_constants.py               #  9/9
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
@@ -136,7 +137,7 @@ Rasters are **generated artefacts, not source**. Reproduce with:
 
 ```bash
 python scripts/fetch_landcover.py            # ESA WorldCover 10 m, CC BY 4.0
-python scripts/fetch_dem.py --arcsec 1       # Open-Meteo over SRTM, 1 arc-second
+python scripts/fetch_dem.py                 # Open-Meteo, ~90 m
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 ```
@@ -151,12 +152,18 @@ registers itself against the seeded scene.
 
 ## Conventions that will bite you
 
+- **Run `scripts/preflight.py` before debugging anything.** Most failures here
+  are environmental, not code: a stale 3.10 `.venv` without numpy looks exactly
+  like a broken script.
 - **Verify data sources against control points.** The AWS
   `elevation-tiles-prod` bucket returns HTTP 200 with non-terrarium pixels that
   decode Everest to ~1,000,000 m. `fetch_dem.py` asserts Everest and the open
   ocean before writing. Do not remove those assertions.
-- **Sample DEMs on their own lattice.** SRTM quantises to 1 arc-second. A
-  "30.7 m" grid aliases against it and replicates every pixel ~3x.
+- **Measure a DEM's real resolution; do not infer it from the request.** The
+  Open-Meteo API serves a ~90 m global model however finely you sample it.
+  Asking for a 1 arc-second lattice over a 2.4 km extent returned a 78 x 110
+  array containing only 28 x 37 distinct samples. Finer sampling duplicates,
+  it does not resolve. `dem_hsk.json` records the measured posting.
 - **Check for tile-boundary nodata.** The study area straddles 114 deg E, so
   WorldCover needs two tiles. Nodata silently filled with a default class
   fabricated 167 ha of "paved" ground.
