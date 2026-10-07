@@ -86,6 +86,12 @@ paid or token-gated API. Each is documented with the reason in
 
 ## Running it locally
 
+> **This guide is tested, not aspirational.** Every step below was run against a
+> clean `git archive` export of the repository — a fresh clone with no `.env`, no
+> `node_modules` and no caches. `preflight.py` reported *Ready*, 20/20 tests
+> passed, and both overlays regenerated from the committed data. If a step here
+> breaks, that is a bug in the repo rather than a surprise for you.
+
 ### Prerequisites
 
 | Requirement | Version tested | Notes |
@@ -144,11 +150,6 @@ misbehaves. It specifically catches the case where a stale `backend/.venv`
 (3.10, no numpy) is shadowing the interpreter you *think* you are using, which
 otherwise surfaces as a confusing `ModuleNotFoundError` from inside a script.
 
-```bash
-python -c "import fastapi, numpy, rasterio; print('deps ok')"   # or just:
-python scripts/preflight.py
-```
-
 ### Step 3 — fetch the open data (optional but recommended)
 
 The repository already ships a derived DEM and land-cover grid, so you can skip
@@ -169,15 +170,24 @@ python scripts/fetch_dem.py
 Both are public, key-less, and print their own provenance. Neither writes
 anything if the response fails its sanity checks.
 
-### Step 4 — seed a scene
+### Step 4 — note the scene id
+
+A fresh clone already contains a seeded scene, so **you can skip this step** and
+just read the id:
 
 ```bash
-python scripts/seed_scene.py
+python scripts/preflight.py | tail -2      # prints VITE_SCENE_ID
 ```
 
-This prints a **scene id** — you need it in step 6. It comes from
-`backend/data/scene_hsk.json`, the locked study area, so the extent is
-machine-derived and reproducible rather than hand-typed.
+Or re-run the seeder, which is **idempotent** — it updates the existing baseline
+scene in place rather than creating a second one:
+
+```bash
+python scripts/seed_scene.py                # add --reset to delete and re-seed
+```
+
+The id comes from `backend/data/scene_hsk.json`, the locked study area, so the
+extent is machine-derived and reproducible rather than hand-typed.
 
 ### Step 5 — generate the overlays
 
@@ -512,7 +522,7 @@ frontend store only; re-running the script is a manual step. The panel says so.
 ```bash
 cd backend
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    #  7/7  — silent-constant guards
+python tests/test_constants.py    #  9/9  — silent-constant + DEM guards
 cd ../frontend && npx tsc --noEmit
 ```
 
@@ -588,9 +598,10 @@ T1/
 │   │   ├── services/             business logic
 │   │   └── routers/              HTTP only
 │   ├── scripts/
+│   │   ├── preflight.py          is this machine able to run it? exits 1 if not
 │   │   ├── seed_scene.py         create the scene from the locked study area
 │   │   ├── fetch_landcover.py    ESA WorldCover  → landclass_hsk.npy
-│   │   ├── fetch_dem.py          Open-Meteo/SRTM → dem_hsk.npy (+ terrain-RGB)
+│   │   ├── fetch_dem.py          Open-Meteo → dem_hsk.npy (+ terrain-RGB)
 │   │   ├── _overlay_common.py    shared grid, land classes, CN, resampling
 │   │   ├── make_wetgrid.py       CN runoff → storage → level-pool fill
 │   │   └── make_heatmap.py       land class → index → RGBA
@@ -614,10 +625,27 @@ T1/
     └── package.json
 ```
 
-`backend/data/` **is** committed: `scene_hsk.json` (the locked study area) plus
-the generated rasters. The DEM and land-cover `.npy` grids and the
-`dem_cache/` are build artefacts of the fetch scripts and are candidates for
-`.gitignore` if the repo grows.
+### What is committed, and what is not
+
+`backend/data/` is committed, so a fresh clone runs without fetching anything.
+Twelve files, all of them meaningful:
+
+| File | What it is |
+|---|---|
+| `scene_hsk.json` | the locked study area, with its provenance |
+| `scenes/<id>.json`, `plans/<id>.json` | the seeded scene and baseline plan |
+| `dem_hsk.npy`, `dem_terrain_rgb.png`, `dem_hsk.json` | real elevation + its manifest |
+| `landclass_hsk.npy`, `landcover_hsk.json` | real land cover + its manifest |
+| `rasters/wetgrid_hsk.*`, `rasters/heatmap_hsk.*` | the two overlays + manifests |
+
+Not committed, and regenerated on demand:
+
+| Path | Why |
+|---|---|
+| `backend/data/dem_cache/` | Transient HTTP cache — one JSON file per API batch, keyed on coordinates so an interrupted `fetch_dem.py` resumes for free. Gitignored. Safe to delete. |
+| `backend/.env`, `frontend/.env.local` | Machine-local. Copy from the `.example` templates. |
+| `backend/.venv/`, `frontend/node_modules/` | Standard build artefacts. |
+| `docs/*.docx`, `docs/_*_extracted.txt` | Kept for provenance; the `.docx` is the specification of record. |
 
 ---
 
