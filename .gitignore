@@ -26,3 +26,9 @@ Thumbs.db
 
 # Word temp files
 ~$*
+
+# Transient HTTP cache for scripts/fetch_dem.py.
+# Every batch of the elevation grid is cached so an interrupted run resumes for
+# free. It records HOW the data was fetched, not the data, and it grows by one
+# small file per request. Safe to delete at any time; the fetcher rebuilds it.
+backend/data/dem_cache/
