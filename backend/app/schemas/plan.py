@@ -86,3 +86,48 @@ class PlanListRead(WireModel):
         if any(not p.plan_id for p in v):
             raise ValueError("every plan requires a planId")
         return v
+
+
+class AIPlanRequest(WireModel):
+    """POST /api/scenes/{sceneId}/ai-plan body.
+
+    `技术文档` reserves this slot: "AI 相关接口只保留占位" -- the AI endpoints
+    were to be placeholders in this phase. This is the placeholder filled in.
+
+    `provider` defaults to "auto": the LLM when ANTHROPIC_API_KEY is set, and
+    the deterministic heuristic otherwise. Asking for "llm" without a key is an
+    error rather than a silent downgrade, because a demo that quietly stops
+    being AI is worse than one that says so.
+    """
+
+    instruction: str = Field(min_length=1, max_length=2000)
+    provider: str = Field(default="auto", pattern="^(auto|llm|heuristic)$")
+    max_features: int = Field(default=6, ge=1, le=20)
+    model_config = {
+        "alias_generator": __import__(
+            "pydantic.alias_generators", fromlist=["to_camel"]
+        ).to_camel,
+        "populate_by_name": True,
+    }
+
+
+class AIPlanResponse(WireModel):
+    """What the AI module produced, and how.
+
+    `provider` is echoed because "which model actually generated this" is the
+    first question anyone will ask, and the answer must not require reading the
+    store.
+    """
+
+    plan_id: str | None = None
+    features: int = 0
+    provider: str
+    types: list[str] = Field(default_factory=list)
+    grounding_notes: list[str] = Field(default_factory=list)
+    message: str | None = None
+    model_config = {
+        "alias_generator": __import__(
+            "pydantic.alias_generators", fromlist=["to_camel"]
+        ).to_camel,
+        "populate_by_name": True,
+    }

@@ -42,11 +42,13 @@ python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.n
 python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
 python scripts/seed_scene.py                 # prints the sceneId
 python scripts/seed_interventions.py --reset # derive intervention sites from the analysis
+python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python -m uvicorn app.main:app --reload      # :8000
 python tests/test_contract.py                # 11/11
 python tests/test_constants.py               # 13/13
+python tests/test_ai_plan.py                # 10/10
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
@@ -181,6 +183,12 @@ registers itself against the seeded scene.
   0.30 m while the wet area averages ~1.5 m, so anything analysing depths must
   read `wetgrid_hsk.npy`, not `wetgrid_hsk.png`. Same for the DEM (`.npy`) and
   land cover (`.npy`).
+- **The AI module never invents geometry.** The model chooses among candidate
+  sites derived from the DEM/land cover/wet grid; coordinates are attached
+  afterwards. If grounding is unavailable it refuses. Do not "improve" this by
+  letting the model emit coordinates.
+- **Ask for `provider=llm` without a key and it must 422**, not silently fall
+  back. A demo that quietly stops being AI is worse than one that says so.
 - **Derive constants, never hand-type them.** The bbox came from machine-retrieved
   OSM anchors recorded in `scene_hsk.json`, not from memory.
 - **Guard every Cesium `Viewer` touch with `isLive()`.** StrictMode destroys the

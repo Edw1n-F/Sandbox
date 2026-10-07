@@ -19,6 +19,17 @@ export interface PlanState {
 
   load: (sceneId: string) => Promise<void>
   selectPlan: (planId: string) => Promise<void>
+  /**
+   * Re-fetch the plan list *without* changing the selection.
+   *
+   * Needed after anything that creates a plan outside this store -- currently
+   * the AI module. Calling `load` instead would be wrong twice over: it
+   * re-selects the baseline (undoing the caller's choice) and it discards the
+   * interventions already fetched for the active plan. The symptom of getting
+   * this wrong was a panel reading "No plan - 3 features", which is a store and
+   * a list disagreeing about the same thing.
+   */
+  refreshPlans: (sceneId: string) => Promise<void>
   clearError: () => void
 }
 
@@ -48,6 +59,14 @@ export const usePlanStore = create<PlanState>((set, get) => ({
       }
     } catch (error) {
       set({ error: errorMessage(error), loading: false })
+    }
+  },
+
+  refreshPlans: async (sceneId) => {
+    try {
+      set({ plans: await listPlans(sceneId) })
+    } catch (error) {
+      set({ error: errorMessage(error) })
     }
   },
 

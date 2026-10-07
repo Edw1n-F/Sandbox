@@ -241,6 +241,30 @@ ordering, or that a URL serves the bytes you expect.
 
 ---
 
+## Decision 11 — The model selects sites; it never emits coordinates
+
+**Decision.** The AI module shows the model a menu of candidate sites, each with
+an opaque id, and asks it to choose. Geometry is attached afterwards from the
+real analysis.
+
+**Why.** Ask an LLM for "a reservoir in this development area" and it returns
+confident, plausible, invented coordinates. In a flood-planning tool that is
+worse than no answer, because it is indistinguishable from a site survey. Every
+generated feature records the raster it came from, so the output is auditable —
+but that only works if the geometry is real to begin with.
+
+**How it holds up.** It is a *selection* problem rather than a *generation*
+problem, which is what language models are reliable at, and it makes hallucinated
+geometry structurally impossible rather than filtered. Two tests defend it: one
+asserts the catalogue contains no coordinates at all (so the guarantee cannot
+quietly erode if a field is added later), and one asserts an invented site id is
+dropped rather than guessed at. A third asserts the id's pool wins over the
+model's own type field, so a park cannot be relabelled a reservoir.
+
+**Where the spec already anticipated it.** `plan.nl_instruction`, `source='ai'`,
+ADR-030's draft rule, and §3.3.2's "用户绘制与 AI 方案落地共用同一套管线". This
+fills the slot the spec reserved rather than inventing a parallel design.
+
 ## Deliberately not used
 
 | Not used | Why |
@@ -307,6 +331,12 @@ Python encoder and the browser decoder are two implementations of one formula in
 two languages, and if they ever drift the terrain renders at the wrong height
 with nothing erroring — and the DEM's height range must be plausible for a
 coastal Hong Kong floodplain.
+
+**`tests/test_ai_plan.py` (10 tests)** — drives the LLM path through an injected
+transport that replays a recorded Messages API response, so the request shape,
+the tool-use parsing and the grounding constraint are all exercised with no key
+and no network. A test that only runs when a credential happens to be present is
+not a test.
 
 **`scripts/preflight.py`** — environment readiness, exiting non-zero when the
 project cannot run. It exists because the most common failure here is an

@@ -5,13 +5,19 @@
  * "triggers state changes, no rendering logic" -- it never renders the map.
  */
 import Alert from '@mui/material/Alert'
+import Button from '@mui/material/Button'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
+import Paper from '@mui/material/Paper'
 import MenuItem from '@mui/material/MenuItem'
 import Select, { type SelectChangeEvent } from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
+import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 
+import { useState } from 'react'
+
+import { createAiPlan, type AiPlanResult } from '@/api/planApi'
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
 import SliderField from './SliderField'
@@ -25,6 +31,45 @@ export default function ScenePanel() {
   const features = usePlanStore((s) => s.interventions.features.length)
   const plan = plans.find((p) => p.planId === activePlanId)
   const selectPlan = usePlanStore((s) => s.selectPlan)
+  const refreshPlans = usePlanStore((s) => s.refreshPlans)
+  const sceneId = useSceneStore((s) => s.sceneId)
+  const [instruction, setInstruction] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiResult, setAiResult] = useState<AiPlanResult | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
+
+  /**
+   * Ask the AI module for a plan, then select it.
+   *
+   * Selecting the new plan is the whole point: it routes the generated features
+   * through the existing store and render path, so the 3D scene updates with no
+   * special-casing for AI output. That is §3.3.2's "one pipeline" requirement
+   * made visible in the UI.
+   */
+  const runInstruction = async () => {
+    const text = instruction.trim()
+    if (!text || aiBusy || !sceneId) return
+    setAiBusy(true)
+    setAiError(null)
+    setAiResult(null)
+    try {
+      const result = await createAiPlan(sceneId, text)
+      setAiResult(result)
+      if (result.planId) {
+        // Refresh the list first, then select: the panel derives the plan's
+        // label and type from the list, so selecting before the list knows
+        // about the plan renders "No plan" beside a populated intervention
+        // count.
+        await refreshPlans(sceneId)
+        await selectPlan(result.planId)
+        setInstruction('')
+      }
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setAiBusy(false)
+    }
+  }
   const loading = usePlanStore((s) => s.loading)
 
   return (
@@ -84,6 +129,52 @@ export default function ScenePanel() {
       <Typography variant="caption" color="text.secondary">
         {plan?.label ?? 'No plan'} · {features} feature{features === 1 ? '' : 's'}
       </Typography>
+
+      <Paper variant="outlined" sx={{ p: 1.5 }}>
+        <Typography variant="subtitle2" gutterBottom>
+          Propose interventions
+        </Typography>
+        <TextField
+          fullWidth
+          size="small"
+          multiline
+          minRows={2}
+          placeholder="e.g. add two water reservoirs in the deepest basins and green space on the largest open blocks"
+          value={instruction}
+          disabled={!sceneId || aiBusy}
+          onChange={(e) => setInstruction(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void runInstruction()
+          }}
+        />
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+          <Button
+            size="small"
+            variant="contained"
+            disabled={!sceneId || aiBusy || !instruction.trim()}
+            onClick={() => void runInstruction()}
+          >
+            {aiBusy ? 'Generating…' : 'Generate'}
+          </Button>
+          <Typography variant="caption" color="text.secondary">
+            {aiResult
+              ? `${aiResult.provider} · ${aiResult.features} feature${
+                  aiResult.features === 1 ? '' : 's'
+                }${aiResult.types.length ? ` · ${aiResult.types.join(', ')}` : ''}`
+              : 'Machine-proposed, status=draft'}
+          </Typography>
+        </Stack>
+        {aiResult && aiResult.features === 0 && aiResult.message && (
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
+            {aiResult.message}
+          </Typography>
+        )}
+        {aiError && (
+          <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
+            {aiError}
+          </Typography>
+        )}
+      </Paper>
 
       <SliderField
         label="Rainfall"

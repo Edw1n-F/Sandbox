@@ -1,0 +1,57 @@
+{
+  "id": "f8e30b43-cc28-453f-8634-084d8358ed21",
+  "plan_id": "48b7cb7d-59ec-4bc4-952b-ad7e2fca7c46",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.9878256,
+          22.4351818
+        ],
+        [
+          114.0041373,
+          22.4351818
+        ],
+        [
+          114.0041373,
+          22.455
+        ],
+        [
+          113.9878256,
+          22.455
+        ],
+        [
+          113.9878256,
+          22.4351818
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "water_reservoir",
+  "source": "ai",
+  "params": {
+    "basis": "deepest connected basin in the computed wet grid",
+    "rationale": "largest available water_reservoir site by deepest connected basin in the computed wet grid",
+    "instruction": "add two water reservoirs and a green space on the worst affected blocks",
+    "provider": "heuristic",
+    "siteAreaHa": 367.8,
+    "siteCentroid": [
+      113.995981,
+      22.445091
+    ],
+    "maxDepthM": 6.1,
+    "wetCells": 62179,
+    "wetAreaHa": 155.4,
+    "status": "draft_pending_human_review"
+  },
+  "style": {
+    "color": "#1f6feb",
+    "opacity": 0.55,
+    "extrusionHeight": 14.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-07T12:20:55Z",
+  "updated_at": "2026-10-07T12:20:55Z"
+}

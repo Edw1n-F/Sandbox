@@ -23,6 +23,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 - [Running it locally](#running-it-locally)
 - [Architecture](#architecture)
 - [Design decisions and why](#design-decisions-and-why)
+- [Generative AI](#generative-ai)
 - [Data and overlays](#data-and-overlays)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -35,7 +36,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 
 | Capability | Status | Verified by |
 |---|---|---|
-| REST API — 9 endpoints per spec §3 | Working | 11 contract tests |
+| REST API — 10 endpoints (9 per spec §3, plus the reserved AI slot) | Working | 11 contract tests |
 | Scene → plan → intervention cascade delete | Working | contract test |
 | camelCase wire contract with `sceneId`/`planId` aliases | Working | contract test |
 | Single error envelope (`detail` **and** `error`) | Working | contract test |
@@ -45,6 +46,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
+| **Generative AI** — natural language → grounded 3D interventions | Working; LLM path needs a key, deterministic fallback does not | 10 tests, incl. the LLM path via a recorded transport |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
 
 **Not working / not built:** PostGIS + MinIO store, a physics engine, flow
@@ -359,6 +361,7 @@ database; the backend never knows what Cesium is.
 | `GET` | `/api/scenes/{sceneId}/plans` | Plans under a scene |
 | `PUT` | `/api/plans/{planId}` | Create or update a plan |
 | `GET` | `/api/plans/{planId}/interventions` | Interventions as a GeoJSON `FeatureCollection` |
+| `POST` | `/api/scenes/{sceneId}/ai-plan` | **Natural language → a draft plan** (the spec's reserved AI slot) |
 
 ---
 
@@ -468,6 +471,87 @@ python scripts/fetch_dem.py                       # → dem_hsk.npy
 python scripts/make_wetgrid.py --rainfall 450      # → wetgrid_hsk.png
 python scripts/make_heatmap.py                     # → heatmap_hsk.png
 ```
+
+---
+
+## Generative AI
+
+`POST /api/scenes/{sceneId}/ai-plan` turns a sentence into 3D interventions that
+appear in the scene. The panel has a box for it: type, press Generate, the plan
+is created, selected, and rendered.
+
+```
+"add two water reservoirs and a green space on the largest open blocks"
+   -> plan created, 3 draft features, rendered in 3D
+```
+
+### The design decision that matters
+
+**The model chooses from a menu. It never emits a coordinate.**
+
+Asked to "add a reservoir", an LLM will confidently return plausible-looking
+coordinates anywhere on the map. In a planning tool that is worse than useless,
+because it looks like a site investigation. So the model is given the candidate
+sites — derived from the DEM, the ESA WorldCover land cover and the computed wet
+grid — and asked to *select among them* by opaque id. The geometry is attached
+afterwards from the real analysis.
+
+That turns an open-ended generation problem into a selection problem, which is
+what language models are actually reliable at, and it makes hallucinated
+geometry **structurally impossible** rather than filtered out. A test asserts the
+catalogue handed to the model contains no coordinates at all, so the guarantee
+cannot quietly erode.
+
+### Grounding, not invention
+
+Every proposed site carries `params.basis` naming the raster it came from, and
+`params.rationale` from the model. The vocabulary is the spec's own
+(§4.1): `绿地` green space, `透水铺装` permeable paving, `蓄水池` water reservoir,
+`道路` road.
+
+If the analysis has not been run, the module **refuses** and says which script to
+run. It will not produce geometry with nothing to site it on.
+
+### Two providers
+
+| Provider | What it is | Credentials |
+|---|---|---|
+| `claude` | Anthropic Messages API, tool-use for structured selection | `ANTHROPIC_API_KEY` |
+| `heuristic` | Deterministic intent parser — **not AI**, the baseline and the fallback | none |
+
+`auto` uses the LLM when a key is present and falls back otherwise, and the
+response always names the provider that ran. Asking for `llm` without a key is a
+**422**, not a silent downgrade — a demo that quietly stops being AI is worse than
+one that says so.
+
+The heuristic provider is not a stub. It is the non-AI baseline: an LLM output is
+only worth having if there is something to compare it against.
+
+### Status and honesty
+
+Every feature is `source="ai"` and `status="draft"`, per ADR-030 — the engine
+refuses to compute on draft geometry, which is the correct posture for
+machine-proposed sites. Generated features travel the **same**
+validate → store → render path as hand-drawn ones, which §3.3.2 requires
+("用户绘制与 AI 方案落地共用同一套管线"), so nothing downstream special-cases AI
+output.
+
+The LLM path is exercised on every test run through an injected transport that
+replays a recorded response, so it is not untested code waiting for a key.
+
+### Try it
+
+```bash
+cd backend
+python scripts/ai_plan.py "add two water reservoirs and a green space" --dry-run
+python scripts/ai_plan.py "add two water reservoirs and a green space"
+```
+
+**What it does not do:** it places *interventions* — reservoirs, green space,
+permeable paving, drainage. It does **not** generate buildings or modify building
+geometry; nothing in `技术文档` asks for that, and there is no massing model
+behind it. "Adjust the building angles" would need a real 3D city model, which
+this project does not have.
 
 ---
 

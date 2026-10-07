@@ -1,0 +1,56 @@
+{
+  "id": "0d276116-ba21-47fd-8f89-1a7ca3c2bf06",
+  "plan_id": "37eef617-21c6-45cb-a3b6-9c5c9374cc19",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.982,
+          22.428983
+        ],
+        [
+          113.9855925,
+          22.428983
+        ],
+        [
+          113.9855925,
+          22.4461316
+        ],
+        [
+          113.982,
+          22.4461316
+        ],
+        [
+          113.982,
+          22.428983
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "green_space",
+  "source": "ai",
+  "params": {
+    "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
+    "rationale": "largest available green_space site by largest contiguous vegetated block (ESA WorldCover class 'green')",
+    "instruction": "add two water reservoirs and a green space",
+    "provider": "heuristic",
+    "siteAreaHa": 70.1,
+    "siteCentroid": [
+      113.983796,
+      22.437557
+    ],
+    "greenCells": 14954,
+    "greenAreaHa": 37.4,
+    "status": "draft_pending_human_review"
+  },
+  "style": {
+    "color": "#2ea043",
+    "opacity": 0.45,
+    "extrusionHeight": 6.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-07T12:22:05Z",
+  "updated_at": "2026-10-07T12:22:05Z"
+}

@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     interventions_dirname: str = "interventions"
     rasters_dirname: str = "rasters"
 
+    # GenAI provider. Empty by default: the heuristic provider needs no
+    # credentials and the demo must not die for want of a key. Set
+    # ANTHROPIC_API_KEY to switch the AI path on; the backend never ships one.
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-sonnet-5"
+
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
