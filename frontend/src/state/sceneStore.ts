@@ -29,8 +29,12 @@ export interface SceneState {
 export const DEFAULT_LAYERS: LayerVisibility = {
   imagery: true,
   boundary: true,
+  // Overlays start off: they are extra context, and the study area is legible
+  // without them. Interventions start on, because a scene whose plan has
+  // features but shows none of them reads as a broken demo.
   wetGrid: false,
   heatmap: false,
+  interventions: true,
 }
 
 export const useSceneStore = create<SceneState>((set) => ({

@@ -281,13 +281,25 @@ consumer, so the contract is asserted: every endpoint, the cascade delete, the
 `sceneId` alias, bbox ring closure, and that the error envelope carries both
 required shapes.
 
-**`tests/test_constants.py` (9 tests)** — guards the two constants the source
+**`tests/test_constants.py` (13 tests)** — guards the two constants the source
 documents say *fail silently*: the SCS-CN form and the mCD/mPD datum offset.
 Neither raises an error when wrong; both produce a plausible number. One of them
 was caught in practice — `S = 25400/CN − 2540` returns negative retention above
 CN ≈ 91, which made `Q`'s denominator negative and produced a first run
 reporting **5.4 × 10¹⁸ m³** of runoff while rendering a plausible image. Also
 covers the ADR-015 double-counting partition and ADR-017 monotonicity.
+
+Three of them guard the raster and feature pipeline against a specific class of
+mistake — a *render* being mistaken for *data*, and a derived feature whose
+stated size disagrees with its own geometry:
+
+- the depth field must reach well beyond the PNG's saturation cap, because the
+  render clips at 0.30 m while the wet area averages ~1.5 m;
+- wherever the PNG is unsaturated it must agree with the depth field, or the two
+  came from different runs;
+- a seeded intervention's polygon must cover the area its `params` claims
+  (this caught a feature that said 155.4 ha and was 0.003 ha of geometry);
+- seeded interventions must carry a `params.basis` and be `status="draft"`.
 
 It also guards the terrain pipeline: the committed `dem_terrain_rgb.png` must
 decode back to `dem_hsk.npy` within terrain-RGB's 0.1 m quantum — because the

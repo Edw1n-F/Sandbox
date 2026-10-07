@@ -41,11 +41,12 @@ python scripts/preflight.py                  # environment check; exits 1 if not
 python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy
 python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
 python scripts/seed_scene.py                 # prints the sceneId
+python scripts/seed_interventions.py --reset # derive intervention sites from the analysis
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python -m uvicorn app.main:app --reload      # :8000
 python tests/test_contract.py                # 11/11
-python tests/test_constants.py               #  9/9
+python tests/test_constants.py               # 13/13
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
@@ -172,6 +173,14 @@ registers itself against the seeded scene.
 - **A clean `tsc` does not mean the frontend works.** `tsconfig.json` declares a
   `@/*` alias that `vite.config.ts` must also register; TypeScript resolves it
   and Vite does not. Verify frontend changes in a real browser render.
+- **A derived feature's geometry must match its stated size.** The first
+  intervention seeder drew a polygon for a connected component's *centroid
+  cell* while reporting the whole component's area, so a "155 ha" feature was
+  0.003 ha and invisible. `test_constants.py` now asserts the two agree.
+- **A raster PNG is a render, not data.** The wet grid's alpha saturates at
+  0.30 m while the wet area averages ~1.5 m, so anything analysing depths must
+  read `wetgrid_hsk.npy`, not `wetgrid_hsk.png`. Same for the DEM (`.npy`) and
+  land cover (`.npy`).
 - **Derive constants, never hand-type them.** The bbox came from machine-retrieved
   OSM anchors recorded in `scene_hsk.json`, not from memory.
 - **Guard every Cesium `Viewer` touch with `isLive()`.** StrictMode destroys the

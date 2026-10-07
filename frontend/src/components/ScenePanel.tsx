@@ -7,6 +7,8 @@
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
+import MenuItem from '@mui/material/MenuItem'
+import Select, { type SelectChangeEvent } from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 
@@ -22,6 +24,8 @@ export default function ScenePanel() {
   const activePlanId = usePlanStore((s) => s.activePlanId)
   const features = usePlanStore((s) => s.interventions.features.length)
   const plan = plans.find((p) => p.planId === activePlanId)
+  const selectPlan = usePlanStore((s) => s.selectPlan)
+  const loading = usePlanStore((s) => s.loading)
 
   return (
     <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -52,6 +56,31 @@ export default function ScenePanel() {
         <Typography variant="subtitle2">Plan</Typography>
         <Chip size="small" label={plan?.planType ?? '—'} />
       </Stack>
+
+      {/* Plan selection, not just a label.
+          A scenario tool where you cannot pick a scenario is not a scenario
+          tool: the store picks the baseline by default, and the baseline is
+          empty by definition, so without this the interventions layer would
+          always show "none in plan" and there would be no way to reach the
+          other plans at all. */}
+      {plans.length > 1 ? (
+        <Select
+          size="small"
+          value={activePlanId ?? ''}
+          disabled={loading}
+          onChange={(event: SelectChangeEvent) =>
+            void selectPlan(event.target.value)
+          }
+          displayEmpty
+        >
+          {plans.map((p) => (
+            <MenuItem key={p.planId} value={p.planId}>
+              {p.label ?? p.planType}
+            </MenuItem>
+          ))}
+        </Select>
+      ) : null}
+
       <Typography variant="caption" color="text.secondary">
         {plan?.label ?? 'No plan'} · {features} feature{features === 1 ? '' : 's'}
       </Typography>

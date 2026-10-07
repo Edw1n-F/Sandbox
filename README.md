@@ -44,6 +44,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
+| **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
 
 **Not working / not built:** PostGIS + MinIO store, a physics engine, flow
@@ -88,7 +89,7 @@ paid or token-gated API. Each is documented with the reason in
 
 > **This guide is tested, not aspirational.** Every step below was run against a
 > clean `git archive` export of the repository — a fresh clone with no `.env`, no
-> `node_modules` and no caches. `preflight.py` reported *Ready*, 20/20 tests
+> `node_modules` and no caches. `preflight.py` reported *Ready*, 24/24 tests
 > passed, and both overlays regenerated from the committed data. If a step here
 > breaks, that is a bug in the repo rather than a surprise for you.
 
@@ -200,6 +201,24 @@ Writes `backend/data/rasters/*.png` plus a `.json` sidecar per raster listing
 every constant, assumption and source. Both scripts attach their output to the
 seeded scene automatically, so the viewer's overlay switches become live.
 
+### Step 5b — derive interventions (recommended)
+
+The spec's model is **scene → plan → intervention**, and the interventions level
+shipped empty. This script fills it — and derives every site from the analysis
+rather than placing arbitrary polygons:
+
+```bash
+python scripts/seed_interventions.py --reset
+```
+
+- **Flood storage** in the deepest connected basins of the wet grid
+- **Retention / heat mitigation** on the largest contiguous vegetated blocks
+- **Drainage alignment** traced steepest-descent from the deepest basin
+
+Each feature records the raster it came from in `params.basis`, and all are
+`status="draft"` — the engine refuses to compute on draft geometry (ADR-030).
+Re-running with `--reset` replaces only plans this script created.
+
 ### Step 6 — frontend
 
 ```bash
@@ -272,7 +291,7 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 cd backend
 python scripts/preflight.py      # environment; exits non-zero if not runnable
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    #  9/9  — silent-constant + DEM guards
+python tests/test_constants.py    # 13/13 — constants, DEM, raster/feature invariants
 
 cd ../frontend
 npx tsc --noEmit                 # must be clean
@@ -522,7 +541,7 @@ frontend store only; re-running the script is a manual step. The panel says so.
 ```bash
 cd backend
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    #  9/9  — silent-constant + DEM guards
+python tests/test_constants.py    # 13/13 — constants, DEM, raster/feature invariants
 cd ../frontend && npx tsc --noEmit
 ```
 
@@ -544,7 +563,7 @@ languages, and if they drift the terrain renders subtly wrong with nothing
 erroring), and the DEM's height range must be plausible for a coastal Hong Kong
 floodplain — a DEM that decodes to 800 km is a broken source, not a broken night.
 
-**`scripts/preflight.py`** guards the environment itself, which is where the
+**`scripts/preflight.py` guards the environment itself, which is where the
 most common failure actually lives.
 
 A note on verification: **a clean `tsc` did not mean the frontend worked.** Three
@@ -599,7 +618,9 @@ T1/
 │   │   └── routers/              HTTP only
 │   ├── scripts/
 │   │   ├── preflight.py          is this machine able to run it? exits 1 if not
+│   │   ├── preflight.py          can this machine run it? exits 1 if not
 │   │   ├── seed_scene.py         create the scene from the locked study area
+│   │   ├── seed_interventions.py derive intervention sites from the analysis
 │   │   ├── fetch_landcover.py    ESA WorldCover  → landclass_hsk.npy
 │   │   ├── fetch_dem.py          Open-Meteo → dem_hsk.npy (+ terrain-RGB)
 │   │   ├── _overlay_common.py    shared grid, land classes, CN, resampling

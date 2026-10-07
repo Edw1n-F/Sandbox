@@ -14,6 +14,7 @@ import Switch from '@mui/material/Switch'
 import Typography from '@mui/material/Typography'
 
 import type { LayerVisibility } from '@/api/types'
+import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
 import { useOverlayStatus } from '@/view/SandboxViewer'
 
@@ -22,12 +23,20 @@ export default function LayerToggle() {
   const toggleLayer = useSceneStore((s) => s.toggleLayer)
   const terrain = useSceneStore((s) => s.terrain)
   const status = useOverlayStatus()
+  const interventionCount = usePlanStore((s) => s.interventions.features.length)
+  const interventionLabel =
+    interventionCount > 0
+      ? `Interventions (${interventionCount})`
+      : 'Interventions (none in plan)'
 
   const rows: Array<[keyof LayerVisibility, string, boolean]> = [
     ['imagery', 'Base imagery', true],
     ['boundary', 'Study-area boundary', true],
     ['wetGrid', 'Wet grid (raster)', Boolean(terrain?.wetGridUrl)],
     ['heatmap', 'Heat exposure (raster)', Boolean(terrain?.heatmapUrl)],
+    // Interventions are geometry rather than a raster, but they belong in the
+    // same list: it is the user's single "what am I looking at" control.
+    ['interventions', interventionLabel, interventionCount > 0],
   ]
 
   const failed = status.wetGrid === 'failed' || status.heatmap === 'failed'

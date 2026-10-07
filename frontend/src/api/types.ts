@@ -113,4 +113,10 @@ export interface LayerVisibility {
   boundary: boolean
   wetGrid: boolean
   heatmap: boolean
+  /**
+   * Discrete features (projects, interventions) render as geometry rather than
+   * as a raster overlay, because extrusion and picking only work on entities
+   * (ADR-032). Separate switch for that reason, not for presentation.
+   */
+  interventions: boolean
 }

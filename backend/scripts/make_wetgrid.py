@@ -172,6 +172,18 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(to_rgba(result["depth_field"]), mode="RGBA").save(out)
 
+    # Also write the depth field as float32 metres.
+    #
+    # The PNG is a *render*, and its alpha channel saturates at
+    # MAX_VIS_DEPTH_M (0.30 m) so the image stays readable. That makes it lossy
+    # for analysis: in the 450 mm run the mean depth in the wet area is ~1.5 m,
+    # so nearly every cell clips and the true depth is unrecoverable from the
+    # image. Anything that needs to re-read the numbers -- siting interventions,
+    # comparing scenarios, computing statistics -- must use this file instead.
+    if args.out is None:
+        np.save(settings.rasters_dir / "wetgrid_hsk.npy",
+                result["depth_field"].astype(np.float32))
+
     meta = {
         "artefact": "wetgrid",
         "generated": "2026-10-06",

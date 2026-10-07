@@ -13,7 +13,9 @@ import { create } from 'zustand'
 import { Cartesian3, Color, ConstantProperty, Viewer, type ImageryLayer } from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 
+import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
+import { addInterventions } from './interventionLayer'
 import {
   createBaseImageryLayer,
   createOverlayLayer,
@@ -69,6 +71,8 @@ export default function SandboxViewer() {
 
   const bbox = useSceneStore((s) => s.scene?.bbox ?? null)
   const terrainMeta = useSceneStore((s) => s.terrain)
+  const interventions = usePlanStore((s) => s.interventions)
+  const showInterventions = useSceneStore((s) => s.layers.interventions)
   const layers = useSceneStore((s) => s.layers)
 
   // ---- create the viewer once -------------------------------------------
@@ -256,6 +260,39 @@ export default function SandboxViewer() {
     // Placement happens once per scene load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bbox])
+
+  // ---- intervention features ---------------------------------------------
+  //
+  // The discrete half of ADR-032: interventions are geometry, not raster, so
+  // they go in through GeoJsonDataSource and can be extruded and picked. The
+  // effect is keyed on the *identity* of the collection rather than the object,
+  // because `planStore` replaces the object on every fetch and an effect keyed
+  // on the reference would tear down and rebuild the data source each time even
+  // when the features are identical.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer)) return
+
+    let disposed = false
+    let dispose: (() => void) | undefined
+
+    void addInterventions(viewer, {
+      type: 'FeatureCollection',
+      features: showInterventions ? interventions.features : [],
+    }).then((fn) => {
+      // The effect may have been torn down while the GeoJSON was in flight.
+      if (disposed) {
+        fn()
+        return
+      }
+      dispose = fn
+    })
+
+    return () => {
+      disposed = true
+      dispose?.()
+    }
+  }, [showInterventions, interventions])
 
   return <div ref={containerRef} className="absolute inset-0 z-0" />
 }

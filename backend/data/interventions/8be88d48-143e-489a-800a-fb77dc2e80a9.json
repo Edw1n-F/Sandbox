@@ -1,0 +1,102 @@
+{
+  "id": "8be88d48-143e-489a-800a-fb77dc2e80a9",
+  "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+  "geometry_type": "LineString",
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [
+      [
+        113.99518,
+        22.445656
+      ],
+      [
+        113.995132,
+        22.445702
+      ],
+      [
+        113.995083,
+        22.445747
+      ],
+      [
+        113.995035,
+        22.445792
+      ],
+      [
+        113.994986,
+        22.445837
+      ],
+      [
+        113.994938,
+        22.445883
+      ],
+      [
+        113.994889,
+        22.445928
+      ],
+      [
+        113.994841,
+        22.445973
+      ],
+      [
+        113.994792,
+        22.446018
+      ],
+      [
+        113.994744,
+        22.446064
+      ],
+      [
+        113.994744,
+        22.446109
+      ],
+      [
+        113.994744,
+        22.446154
+      ],
+      [
+        113.994744,
+        22.446199
+      ],
+      [
+        113.994744,
+        22.446245
+      ],
+      [
+        113.994744,
+        22.44629
+      ],
+      [
+        113.994744,
+        22.446335
+      ],
+      [
+        113.994744,
+        22.44638
+      ],
+      [
+        113.994744,
+        22.446426
+      ],
+      [
+        113.994695,
+        22.446471
+      ]
+    ]
+  },
+  "intervention_type": "drainage_alignment",
+  "source": "manual",
+  "params": {
+    "basis": "steepest-descent trace from the deepest basin centroid",
+    "evidenceRaster": "dem_hsk.npy",
+    "vertices": 19,
+    "totalDropM": 1.0,
+    "caveat": "Traced on a ~90 m DEM. A 90 m posting cannot resolve a drainage alignment, so this is a sketch of the fall line, not a design alignment."
+  },
+  "style": {
+    "color": "#e3b341",
+    "opacity": 0.95
+  },
+  "status": "draft",
+  "created_at": "2026-10-07T09:05:22Z",
+  "updated_at": "2026-10-07T09:05:22Z"
+}

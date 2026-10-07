@@ -1,0 +1,52 @@
+{
+  "id": "304a5bd8-6909-4814-af09-ab347911e490",
+  "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.9984088,
+          22.424956
+        ],
+        [
+          114.0050111,
+          22.424956
+        ],
+        [
+          114.0050111,
+          22.4352723
+        ],
+        [
+          113.9984088,
+          22.4352723
+        ],
+        [
+          113.9984088,
+          22.424956
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "urban_green",
+  "source": "manual",
+  "params": {
+    "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
+    "evidenceRaster": "landcover_hsk.npy",
+    "geometry": "bounding box of the contiguous vegetated block",
+    "areaHa": 77.5,
+    "greenCellsInBlock": 13346,
+    "greenAreaHa": 33.4,
+    "boxToGreenRatio": 2.32,
+    "provisional": true
+  },
+  "style": {
+    "color": "#2ea043",
+    "opacity": 0.45,
+    "extrusionHeight": 6.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-07T09:05:22Z",
+  "updated_at": "2026-10-07T09:05:22Z"
+}

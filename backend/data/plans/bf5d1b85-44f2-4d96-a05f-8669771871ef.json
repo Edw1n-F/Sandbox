@@ -1,0 +1,441 @@
+{
+  "id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+  "scene_id": "51e03c37-5360-43b0-a094-fbaca38cd70b",
+  "plan_type": "comprehensive",
+  "label": "Screening interventions (derived)",
+  "source": "manual",
+  "nl_instruction": "seeded-by:scripts/seed_interventions.py",
+  "params": {
+    "derivation": {
+      "terrainSource": "open-meteo",
+      "landcoverSource": "esa-worldcover",
+      "depthSource": "wetgrid_hsk.npy (450.0 mm)",
+      "basinsFound": 8,
+      "greenPatchesFound": 60,
+      "gridRows": 664,
+      "gridCols": 474
+    },
+    "status": "SCREENING_SITING_NOT_A_DESIGN"
+  },
+  "interventions": [
+    {
+      "id": "8df42db4-6c96-40af-999b-dd6babedcc17",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              113.9878256,
+              22.4351818
+            ],
+            [
+              114.0041373,
+              22.4351818
+            ],
+            [
+              114.0041373,
+              22.455
+            ],
+            [
+              113.9878256,
+              22.455
+            ],
+            [
+              113.9878256,
+              22.4351818
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "flood_storage",
+      "source": "manual",
+      "params": {
+        "basis": "deepest connected basin in the computed wet grid",
+        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+        "geometry": "bounding box of the connected basin",
+        "areaHa": 367.8,
+        "wetCellsInBasin": 62179,
+        "wetAreaHa": 155.4,
+        "boxToWetRatio": 2.37,
+        "maxDepthInBasinM": 6.1,
+        "provisional": true
+      },
+      "style": {
+        "color": "#1f6feb",
+        "opacity": 0.55,
+        "extrusionHeight": 12.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "2e3997ee-94a8-4931-817e-3bd1f89fad69",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              114.0030693,
+              22.4367655
+            ],
+            [
+              114.0050111,
+              22.4367655
+            ],
+            [
+              114.0050111,
+              22.4427833
+            ],
+            [
+              114.0030693,
+              22.4427833
+            ],
+            [
+              114.0030693,
+              22.4367655
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "flood_storage",
+      "source": "manual",
+      "params": {
+        "basis": "deepest connected basin in the computed wet grid",
+        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+        "geometry": "bounding box of the connected basin",
+        "areaHa": 13.3,
+        "wetCellsInBasin": 3645,
+        "wetAreaHa": 9.1,
+        "boxToWetRatio": 1.46,
+        "maxDepthInBasinM": 3.22,
+        "provisional": true
+      },
+      "style": {
+        "color": "#1f6feb",
+        "opacity": 0.55,
+        "extrusionHeight": 12.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "d10cac14-4aff-422a-9c7e-17d1302ed1cf",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              114.003846,
+              22.4351818
+            ],
+            [
+              114.0050111,
+              22.4351818
+            ],
+            [
+              114.0050111,
+              22.4366297
+            ],
+            [
+              114.003846,
+              22.4366297
+            ],
+            [
+              114.003846,
+              22.4351818
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "flood_storage",
+      "source": "manual",
+      "params": {
+        "basis": "deepest connected basin in the computed wet grid",
+        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+        "geometry": "bounding box of the connected basin",
+        "areaHa": 1.9,
+        "wetCellsInBasin": 589,
+        "wetAreaHa": 1.5,
+        "boxToWetRatio": 1.3,
+        "maxDepthInBasinM": 1.23,
+        "provisional": true
+      },
+      "style": {
+        "color": "#1f6feb",
+        "opacity": 0.55,
+        "extrusionHeight": 12.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "c7a14cd7-7811-4933-a3fe-7a3efb2bbeee",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              113.982,
+              22.428983
+            ],
+            [
+              113.9855925,
+              22.428983
+            ],
+            [
+              113.9855925,
+              22.4461316
+            ],
+            [
+              113.982,
+              22.4461316
+            ],
+            [
+              113.982,
+              22.428983
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "urban_green",
+      "source": "manual",
+      "params": {
+        "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
+        "evidenceRaster": "landcover_hsk.npy",
+        "geometry": "bounding box of the contiguous vegetated block",
+        "areaHa": 70.1,
+        "greenCellsInBlock": 14954,
+        "greenAreaHa": 37.4,
+        "boxToGreenRatio": 1.88,
+        "provisional": true
+      },
+      "style": {
+        "color": "#2ea043",
+        "opacity": 0.45,
+        "extrusionHeight": 6.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "304a5bd8-6909-4814-af09-ab347911e490",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              113.9984088,
+              22.424956
+            ],
+            [
+              114.0050111,
+              22.424956
+            ],
+            [
+              114.0050111,
+              22.4352723
+            ],
+            [
+              113.9984088,
+              22.4352723
+            ],
+            [
+              113.9984088,
+              22.424956
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "urban_green",
+      "source": "manual",
+      "params": {
+        "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
+        "evidenceRaster": "landcover_hsk.npy",
+        "geometry": "bounding box of the contiguous vegetated block",
+        "areaHa": 77.5,
+        "greenCellsInBlock": 13346,
+        "greenAreaHa": 33.4,
+        "boxToGreenRatio": 2.32,
+        "provisional": true
+      },
+      "style": {
+        "color": "#2ea043",
+        "opacity": 0.45,
+        "extrusionHeight": 6.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "85dcd5c1-4807-4c2b-9b60-f9afc8d3a790",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              113.9839419,
+              22.4288472
+            ],
+            [
+              113.9922433,
+              22.4288472
+            ],
+            [
+              113.9922433,
+              22.4380324
+            ],
+            [
+              113.9839419,
+              22.4380324
+            ],
+            [
+              113.9839419,
+              22.4288472
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "urban_green",
+      "source": "manual",
+      "params": {
+        "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
+        "evidenceRaster": "landcover_hsk.npy",
+        "geometry": "bounding box of the contiguous vegetated block",
+        "areaHa": 86.8,
+        "greenCellsInBlock": 12515,
+        "greenAreaHa": 31.3,
+        "boxToGreenRatio": 2.77,
+        "provisional": true
+      },
+      "style": {
+        "color": "#2ea043",
+        "opacity": 0.45,
+        "extrusionHeight": 6.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    },
+    {
+      "id": "8be88d48-143e-489a-800a-fb77dc2e80a9",
+      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "geometry_type": "LineString",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            113.99518,
+            22.445656
+          ],
+          [
+            113.995132,
+            22.445702
+          ],
+          [
+            113.995083,
+            22.445747
+          ],
+          [
+            113.995035,
+            22.445792
+          ],
+          [
+            113.994986,
+            22.445837
+          ],
+          [
+            113.994938,
+            22.445883
+          ],
+          [
+            113.994889,
+            22.445928
+          ],
+          [
+            113.994841,
+            22.445973
+          ],
+          [
+            113.994792,
+            22.446018
+          ],
+          [
+            113.994744,
+            22.446064
+          ],
+          [
+            113.994744,
+            22.446109
+          ],
+          [
+            113.994744,
+            22.446154
+          ],
+          [
+            113.994744,
+            22.446199
+          ],
+          [
+            113.994744,
+            22.446245
+          ],
+          [
+            113.994744,
+            22.44629
+          ],
+          [
+            113.994744,
+            22.446335
+          ],
+          [
+            113.994744,
+            22.44638
+          ],
+          [
+            113.994744,
+            22.446426
+          ],
+          [
+            113.994695,
+            22.446471
+          ]
+        ]
+      },
+      "intervention_type": "drainage_alignment",
+      "source": "manual",
+      "params": {
+        "basis": "steepest-descent trace from the deepest basin centroid",
+        "evidenceRaster": "dem_hsk.npy",
+        "vertices": 19,
+        "totalDropM": 1.0,
+        "caveat": "Traced on a ~90 m DEM. A 90 m posting cannot resolve a drainage alignment, so this is a sketch of the fall line, not a design alignment."
+      },
+      "style": {
+        "color": "#e3b341",
+        "opacity": 0.95
+      },
+      "status": "draft",
+      "created_at": "2026-10-07T09:05:22Z",
+      "updated_at": "2026-10-07T09:05:22Z"
+    }
+  ],
+  "created_at": "2026-10-07T09:05:22Z",
+  "updated_at": "2026-10-07T09:05:22Z"
+}
