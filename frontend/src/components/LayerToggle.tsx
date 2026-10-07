@@ -16,12 +16,15 @@ import Typography from '@mui/material/Typography'
 import type { LayerVisibility } from '@/api/types'
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
+import { onlinePropStatus, usePropsRevision } from '@/view/SandboxViewer'
 import { useOverlayStatus } from '@/view/SandboxViewer'
 
 export default function LayerToggle() {
   const layers = useSceneStore((s) => s.layers)
   const toggleLayer = useSceneStore((s) => s.toggleLayer)
   const terrain = useSceneStore((s) => s.terrain)
+  usePropsRevision()
+  const propsStatus = onlinePropStatus()
   const status = useOverlayStatus()
   const interventionCount = usePlanStore((s) => s.interventions.features.length)
   const interventionLabel =
@@ -37,6 +40,10 @@ export default function LayerToggle() {
     // Interventions are geometry rather than a raster, but they belong in the
     // same list: it is the user's single "what am I looking at" control.
     ['interventions', interventionLabel, interventionCount > 0],
+    // The 3D massing model. Disabled only when the script has not been run.
+    ['cityModel', '3D city model (massing)', Boolean(terrain?.cityModelUrl)],
+    // Online assets always resolve, so this row is never disabled.
+    ['props', `Online 3D assets (${propsStatus.loaded})`, true],
   ]
 
   const failed = status.wetGrid === 'failed' || status.heatmap === 'failed'

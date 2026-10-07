@@ -37,6 +37,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.config import settings  # noqa: E402
+from hydrology import condition as condition_dem  # noqa: E402
 from _overlay_common import (  # noqa: E402
     attach_to_scene,
     COUNTED_AS,
@@ -96,9 +97,31 @@ def _fill_to_volume(
     return depth, level
 
 
-def compute(rainfall_mm: float, resolution_m: float) -> dict:
+def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True) -> dict:
     ov = load_overlay(resolution_m)
     cell_area = ov.cell_area_m2()
+
+    # --- terrain conditioning ---------------------------------------------
+    # Priority-Flood before anything else touches the surface.
+    #
+    # A DEM straight from a 90 m global model has closed pits -- 11.5% of cells
+    # in this extract -- and every one of them is a cell the level-pool solver
+    # would happily flood to an arbitrary depth, because a pit has no downhill
+    # neighbour to spill into. Filling first means the water level that comes
+    # out corresponds to a real basin rather than an artefact.
+    #
+    # See scripts/hydrology.py for why this is implemented here rather than
+    # pulled from richdem (which needs GDAL headers to build and cannot).
+    raw_elevation = ov.elevation
+    accumulation = None
+    cells_raised = 0
+    if sink_fill:
+        result = condition_dem(raw_elevation)
+        ov.elevation = result["filled"]
+        accumulation = result["accumulation"]
+        cells_raised = int(result["cells_raised"])
+    else:
+        accumulation = np.zeros_like(raw_elevation)
 
     # ---- 1. generation -----------------------------------------------------
     cn = np.zeros_like(ov.elevation)
@@ -131,6 +154,9 @@ def compute(rainfall_mm: float, resolution_m: float) -> dict:
 
     return {
         "overlay": ov,
+        "raw_elevation": raw_elevation,
+        "accumulation": accumulation,
+        "cells_raised": cells_raised,
         "rainfall_mm": rainfall_mm,
         "runoff_m": runoff_m,
         "unstored_m": unstored_m,
@@ -163,9 +189,14 @@ def main() -> int:
     parser.add_argument(
         "--out", default=None, help="output PNG (default data/rasters/wetgrid_hsk.png)"
     )
+    parser.add_argument(
+        "--no-sink-fill", action="store_true",
+        help="skip Priority-Flood conditioning (shows how much it matters)",
+    )
     args = parser.parse_args()
 
-    result = compute(args.rainfall, args.resolution)
+    result = compute(args.rainfall, args.resolution,
+                     sink_fill=not args.no_sink_fill)
     ov = result["overlay"]
 
     out = Path(args.out) if args.out else settings.rasters_dir / "wetgrid_hsk.png"
@@ -183,6 +214,12 @@ def main() -> int:
     if args.out is None:
         np.save(settings.rasters_dir / "wetgrid_hsk.npy",
                 result["depth_field"].astype(np.float32))
+        # Flow accumulation is the standard hydrology product and is useful on
+        # its own -- it says where water concentrates, independently of any
+        # volume assumption. Kept as data because, like the depth field, the
+        # PNG cannot represent it.
+        np.save(settings.rasters_dir / "flow_accum_hsk.npy",
+                result["accumulation"].astype(np.float32))
 
     meta = {
         "artefact": "wetgrid",
@@ -193,12 +230,27 @@ def main() -> int:
             else "SCREENING_VIEW_SYNTHETIC_TERRAIN"
         ),
         "terrainSource": ov.terrain_source,
+        "conditioning": {
+            "method": "Priority-Flood (Barnes et al. 2014)",
+            "enabled": not args.no_sink_fill,
+            "cellsRaised": result["cells_raised"],
+            "cellsTotal": int(ov.rows * ov.cols),
+            "raisedFraction": round(result["cells_raised"] / (ov.rows * ov.cols), 4),
+            "maxFlowAccumulationCells": round(float(result["accumulation"].max()), 1),
+            "note": (
+                "Implemented in scripts/hydrology.py. richdem and hydrotools are "
+                "the standard open-source tools for this; both were installed and "
+                "neither is usable on this host because richdem needs GDAL headers "
+                "to build."
+            ),
+        },
         "landCoverSource": ov.landcover_source,
         "warning": (
-            "Real 1 arc-second elevation (Open-Meteo / SRTM) and real ESA "
-            "WorldCover land cover, but this is still a screening view: sinks are "
-            "not conditioned, there is no flow routing, and it is not a flood "
-            "prediction."
+            "Real elevation and real ESA WorldCover land cover. The surface is "
+            "Priority-Flood conditioned and D8 flow accumulation is computed and "
+            "reported, but the runoff VOLUME is still allocated by solving for a "
+            "water level rather than routed downhill cell by cell. It is a "
+            "screening view, not a flood prediction."
             if ov.terrain_source == "open-meteo"
             else "Terrain is SYNTHETIC (see _overlay_common). Run "
                  "scripts/fetch_dem.py to replace it with real elevation."
@@ -268,8 +320,12 @@ def main() -> int:
     print(f"[wetgrid] wet area    {r['wet_area_ha']:>12,.1f} ha "
           f"({meta['results']['wetAreaFraction'] * 100:.1f}% of extent)")
     print(f"[wetgrid] mean depth {meta['results']['meanDepthInWetAreaM']:>12.3f} m")
+    if result["cells_raised"]:
+        print(f"[wetgrid] Priority-Flood raised {result['cells_raised']} cells "
+              f"({100*result['cells_raised']/(ov.rows*ov.cols):.1f}%) out of depressions")
+    print(f"[wetgrid] max flow accumulation: {result['accumulation'].max():.0f} cells")
     print(f"[wetgrid] terrain: {ov.terrain_source}   land cover: {ov.landcover_source}")
-    print("[wetgrid] screening view - not a flood prediction, no flow routing")
+    print("[wetgrid] screening view - terrain is Priority-Flood conditioned and D8\n          flow accumulation is reported, but runoff VOLUME is still placed by\n          water level, not routed downhill. Not a flood prediction.")
     return 0
 
 

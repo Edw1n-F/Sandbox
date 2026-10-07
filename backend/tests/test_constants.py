@@ -365,5 +365,99 @@ def _run() -> int:
     return 1 if failed else 0
 
 
+# --------------------------------------------------------------------------- #
+# Terrain conditioning
+# --------------------------------------------------------------------------- #
+
+def test_priority_flood_fills_a_pit_to_its_spill_level() -> None:
+    """A closed pit must be raised to the lowest escape route, not left as-is.
+
+    The defining behaviour of Priority-Flood (Barnes et al. 2014). The grid is a
+    ring of 9 m walls around a 1 m basin containing a 0 m pit: the pit's only
+    escape is over the wall, so it must fill to 9 m (+ epsilon). A DEM left
+    unconditioned makes the level-pool solver flood that cell to an arbitrary
+    depth, because a pit has no downhill neighbour to spill into.
+    """
+    import sys as _sys
+
+    for extra in (BACKEND_DIR / "scripts",):
+        if str(extra) not in _sys.path:
+            _sys.path.insert(0, str(extra))
+    from hydrology import priority_flood
+
+    dem = np.array([
+        [9., 9., 9., 9., 9.],
+        [9., 1., 1., 1., 9.],
+        [9., 1., 0., 1., 9.],
+        [9., 1., 1., 1., 9.],
+        [9., 9., 9., 9., 9.],
+    ])
+    filled = priority_flood(dem)
+    assert filled[2, 2] >= 9.0, f"pit filled only to {filled[2, 2]}, expected >= 9.0"
+    assert filled[2, 2] < 9.01, f"pit over-filled to {filled[2, 2]}"
+    # No cell inside the ring may sit below the wall any more.
+    assert float(filled[1:4, 1:4].min()) >= 9.0, "a depression survived filling"
+    # Outside the wall nothing changed.
+    assert np.array_equal(filled[0], dem[0]), "the wall itself was altered"
+
+
+def test_d8_accumulation_converges_to_the_outlet() -> None:
+    """Every cell of a cone drains outward, so accumulation grows to the low edge."""
+    import sys as _sys
+
+    for extra in (BACKEND_DIR / "scripts",):
+        if str(extra) not in _sys.path:
+            _sys.path.insert(0, str(extra))
+    from hydrology import condition
+
+    cone = np.array([
+        [1., 1., 1., 1., 1.],
+        [1., 3., 5., 4., 1.],
+        [1., 5., 9., 4., 1.],
+        [1., 4., 5., 2., 1.],
+        [1., 1., 1., 1., 1.],
+    ])
+    result = condition(cone)
+    acc = result["accumulation"]
+    assert acc.shape == cone.shape
+    assert acc.max() > 1.0, "nothing accumulated"
+    # The peak drains away from itself, so it cannot be a local maximum.
+    assert acc[2, 2] < acc[2, 4], f"peak accumulated {acc[2, 2]}, edge {acc[2, 4]}"
+    # Total accumulation is conserved: every cell's water ends up counted once
+    # per contributing cell, and the maximum can never exceed the cell count.
+    assert acc.max() <= cone.size, "accumulation exceeds the number of cells"
+
+
+def test_our_dem_actually_has_depressions_to_condition() -> None:
+    """Record what conditioning is worth on the real DEM.
+
+    Not a tautology: if a future DEM source produced an already-conditioned
+    surface this would report 0% and the number in the README would need
+    revisiting. As shipped it is ~10%, which is why the wet grid conditions
+    before solving for a water level.
+    """
+    import sys as _sys
+
+    for extra in (BACKEND_DIR / "scripts",):
+        if str(extra) not in _sys.path:
+            _sys.path.insert(0, str(extra))
+    from hydrology import condition
+
+    dem_path = BACKEND_DIR / "data" / "dem_hsk.npy"
+    if not dem_path.exists():
+        print("      (skipped: run scripts/fetch_dem.py first)")
+        return
+    dem = np.load(dem_path).astype(np.float64)
+    raised = int(condition(dem)["cells_raised"])
+    assert raised > 0, "the shipped DEM has no depressions at all"
+    fraction = raised / dem.size
+    assert fraction < 0.5, (
+        f"{fraction:.0%} of cells needed raising -- that suggests the DEM is "
+        f"noise rather than terrain, not that conditioning is working hard"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(_run())
+
+

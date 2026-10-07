@@ -24,6 +24,8 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 - [Architecture](#architecture)
 - [Design decisions and why](#design-decisions-and-why)
 - [Generative AI](#generative-ai)
+- [3D city model, and editing it](#3d-city-model-and-editing-it)
+- [Online 3D assets](#online-3d-assets)
 - [Data and overlays](#data-and-overlays)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -47,6 +49,9 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
 | **Generative AI** — natural language → grounded 3D interventions | Working; LLM path needs a key, deterministic fallback does not | 10 tests, incl. the LLM path via a recorded transport |
+| **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded/reproducible; browser-verified edit |
+| **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
+| **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
 
 **Not working / not built:** PostGIS + MinIO store, a physics engine, flow
@@ -552,6 +557,65 @@ permeable paving, drainage. It does **not** generate buildings or modify buildin
 geometry; nothing in `技术文档` asks for that, and there is no massing model
 behind it. "Adjust the building angles" would need a real 3D city model, which
 this project does not have.
+
+## 3D city model, and editing it
+
+The sandbox has a 2,639-building massing model that you can change directly.
+
+**Where the geometry comes from — and what was tried first.** OSM building
+footprints were the first choice and are **unreachable from this host**. Overpass
+returned `504` from the main endpoint and `000` from four mirrors, with an empty
+result from the one instance that answered; Microsoft's GlobalML Building
+Footprints now returns `409 Public access is not permitted on this storage
+account`; a Geofabrik Hong Kong extract is ~90 MB and its PBF parser will not
+build here either. All of that is recorded in `citymodel_meta.json` so nobody
+re-derives it.
+
+So the massing is **procedural, derived from real land cover**: the ESA
+WorldCover 10 m `paved` class says where the ground *is* built up, and blocks go
+only there. The land-use input is real; the footprints are not surveyed, heights
+are an assumed distribution (11–131 m, mean 35 m, four classes), and every
+feature records `height_source: ASSUMED_DISTRIBUTION_NOT_SURVEYED`. The panel
+carries a **provisional** chip for exactly this reason.
+
+**Why geometry and not a glTF massing model.** A mesh would be one draw call but
+would be *opaque* — you cannot change a building's height inside it. Cesium
+entities are per-feature property bags, so a height edit is a property
+assignment: no rebuild, no re-upload, no regeneration. Changing the model is
+the point.
+
+**Editing, three ways:**
+
+| Gesture | What it does |
+|---|---|
+| **+25% / −20% height** | Scales every building. The scenario question — "what if the district were taller?" |
+| **Click a building** | Selects it (highlighted), then type a height in metres |
+| **Reset** | Back to the generated heights |
+
+Verified in a browser: mean height 35.3 m → 44.1 m on +25%, which is exactly
+×1.25. The generator is seeded, so the same command twice produces an identical
+file.
+
+## Online 3D assets
+
+Three glTF models load **straight from the Khronos glTF sample set on GitHub
+raw** — no token, no proxy, no binary in the repo. That source was chosen
+because it serves `Access-Control-Allow-Origin: *`, which is what lets a browser
+fetch it directly; every URL was confirmed to return `200` with a CORS header
+before being written down.
+
+Only the **small** models are used. The set contains some excellent 3–9 MB
+assets, and shipping a 9 MB lantern to decorate a flood sandbox is a worse
+engineering choice than a 1.6 KB box:
+
+| Asset | Size | Used for |
+|---|---|---|
+| `Box.glb` | 1.6 KB | survey marker, north basin |
+| `BoxTextured.glb` | 6 KB | survey marker, west block |
+| `SimpleSparseAccessor.gltf` | 1.7 KB | survey marker, south channel |
+
+The layer reports how many loaded, so a dead URL is visible rather than silent.
+
 
 ---
 

@@ -35,6 +35,8 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   wetGrid: false,
   heatmap: false,
   interventions: true,
+  cityModel: true,
+  props: true,
 }
 
 export const useSceneStore = create<SceneState>((set) => ({

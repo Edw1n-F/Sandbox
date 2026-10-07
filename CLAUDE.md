@@ -42,12 +42,13 @@ python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.n
 python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
 python scripts/seed_scene.py                 # prints the sceneId
 python scripts/seed_interventions.py --reset # derive intervention sites from the analysis
+python scripts/make_citymodel.py        # 3D massing envelopes (provisional)
 python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python -m uvicorn app.main:app --reload      # :8000
 python tests/test_contract.py                # 11/11
-python tests/test_constants.py               # 13/13
+python tests/test_constants.py               # 16/16
 python tests/test_ai_plan.py                # 10/10
 
 # Frontend
@@ -179,6 +180,13 @@ registers itself against the seeded scene.
   intervention seeder drew a polygon for a connected component's *centroid
   cell* while reporting the whole component's area, so a "155 ha" feature was
   0.003 ha and invisible. `test_constants.py` now asserts the two agree.
+- **The city model is massing, not buildings.** Footprints are procedural from
+  the ESA WorldCover paved class because OSM is unreachable here; heights are an
+  assumed distribution. Never describe it as surveyed, and keep the provisional
+  chip.
+- **richdem/hydrotools will not install here** (richdem needs GDAL headers;
+  hydrotools gates everything behind it). The algorithms live in
+  `scripts/hydrology.py`. Do not try to add them as dependencies.
 - **A raster PNG is a render, not data.** The wet grid's alpha saturates at
   0.30 m while the wet area averages ~1.5 m, so anything analysing depths must
   read `wetgrid_hsk.npy`, not `wetgrid_hsk.png`. Same for the DEM (`.npy`) and

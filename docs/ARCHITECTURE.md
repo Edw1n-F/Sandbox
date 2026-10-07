@@ -265,6 +265,43 @@ model's own type field, so a park cannot be relabelled a reservoir.
 ADR-030's draft rule, and §3.3.2's "用户绘制与 AI 方案落地共用同一套管线". This
 fills the slot the spec reserved rather than inventing a parallel design.
 
+## Decision 12 — Geometry, not a mesh, for the city model
+
+**Decision.** The 2,639-building massing model is Cesium entities (per-feature
+`Property` bags), extruded, not a glTF mesh.
+
+**Why.** A mesh is one draw call and would be faster. It is also *opaque*: you
+cannot change a building's height inside a glTF without regenerating and
+re-uploading it. The user's central action is changing the model, so the
+representation is chosen for editability, and the performance trade is accepted
+knowingly. A height edit becomes a `ConstantProperty` assignment.
+
+**What the footprints are.** Procedural, from the ESA WorldCover `paved` class.
+OSM was tried and is unreachable here (Overpass 504/000 across five mirrors,
+Microsoft GlobalML now 409, Geofabrik extract too large and its parser will not
+build). Land use is real; footprints are not surveyed and heights are an assumed
+distribution. `citymodel_meta.json` says so and the panel shows a *provisional*
+chip, because a skyline that looks measured is the failure mode here.
+
+## Decision 13 — Verify the reference implementation, then reimplement if it will not install
+
+**Decision.** `richdem` and `hydrotools` are the standard open-source tools for
+terrain conditioning. Both were installed; neither is usable. The algorithms are
+implemented directly in numpy, citing the papers.
+
+**Why.** `richdem` needs GDAL headers to build and no wheel exists for this
+interpreter; `hydrotools` imports but gates every hydrology class behind it, so
+`FlowAccumulator`, `FlowDirection` and `TopologicalStreamOrder` are all absent.
+A dependency that cannot be installed is a dependency that fails on someone
+else's machine too, so a dependency that cannot be installed is a dependency
+that fails on someone else's machine too.
+
+**What it bought.** Priority-Flood depression filling (Barnes et al. 2014) and
+D8 flow accumulation, both tested against known-answer cases. It is not a
+reimplementation for its own sake: the shipped DEM has **10.3% of its cells in
+closed depressions**, and without filling them the level-pool solver floods pits
+to arbitrary depth. That was the largest single weakness in the wet grid.
+
 ## Deliberately not used
 
 | Not used | Why |

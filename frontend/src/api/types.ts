@@ -59,6 +59,14 @@ export interface TerrainMeta {
   terrainSource?: string | null
   wetGridUrl?: string | null
   heatmapUrl?: string | null
+  /**
+   * 3D massing envelopes, plus their provenance. `status` is deliberately blunt
+   * -- these are procedural massing derived from land cover, not surveyed
+   * buildings -- and the panel shows it rather than letting a skyline imply
+   * otherwise.
+   */
+  cityModelUrl?: string | null
+  cityModelMeta?: CityModelMeta | null
 }
 
 export type PlanType =
@@ -119,6 +127,13 @@ export interface LayerVisibility {
    * (ADR-032). Separate switch for that reason, not for presentation.
    */
   interventions: boolean
+  /**
+   * The 3D massing model. On by default, because an intervention floating over
+   * empty grass gives the user nothing to judge it against.
+   */
+  cityModel: boolean
+  /** Online glTF assets fetched from the Khronos sample set. */
+  props: boolean
 }
 
 /**
@@ -131,3 +146,17 @@ export interface LayerVisibility {
  * which produced a feature except the `source` flag.
  */
 export type InterventionSource = 'manual' | 'ai'
+
+
+/** Provenance for the 3D massing model, as served alongside the rasters. */
+export interface CityModelMeta {
+  status: string
+  features: number
+  heightM: { min: number; max: number; mean: number }
+  byClass: Record<string, number>
+  footprintSource: string
+  heightSource: string
+  whyNotOsm: string
+  editable: boolean
+  note: string
+}

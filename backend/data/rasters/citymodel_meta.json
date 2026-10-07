@@ -1,0 +1,20 @@
+{
+  "status": "PROVISIONAL_MASSING_NOT_SURVEYED",
+  "features": 2639,
+  "heightM": {
+    "min": 10.9,
+    "max": 131.1,
+    "mean": 35.3
+  },
+  "byClass": {
+    "new_town_block": 1018,
+    "village_house": 1140,
+    "landmark_tower": 66,
+    "newer_tower": 415
+  },
+  "footprintSource": "derived from ESA WorldCover 10 m paved class",
+  "heightSource": "ASSUMED_DISTRIBUTION_NOT_SURVEYED",
+  "whyNotOsm": "Tried and unreachable from this host: Overpass returned 504 from the main endpoint and 000 from four mirrors, with an empty result from the one instance that answered; Microsoft GlobalML Building Footprints now returns 409 'Public access is not permitted on this storage account'; a Geofabrik HK extract is ~90 MB and its PBF parser will not build here either.",
+  "editable": true,
+  "note": "Massing envelopes for visual context, and something for the AI module to change. Not surveyed buildings. When real footprints become available this file is the thing that gets replaced, and it is deliberately a plain GeoJSON FeatureCollection so that is a data swap rather than a rewrite."
+}

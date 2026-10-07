@@ -15,6 +15,8 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
+import { addCityModel, type CityModelHandle, type MassingCollection } from './cityModel'
+import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { addInterventions } from './interventionLayer'
 import {
   createBaseImageryLayer,
@@ -22,6 +24,51 @@ import {
   createTerrainProvider,
   polygonToRectangle,
 } from './terrainLoader'
+
+/** The live city-model handle, so the panel can edit geometry without prop drilling. */
+let cityModelHandle: CityModelHandle | null = null
+let propsHandle: OnlinePropHandle | null = null
+
+/**
+ * Selection notification. Holds a revision counter rather than the selection
+ * itself: the panel calls `cityModelStats()` when it re-renders, so there is
+ * exactly one source of truth for what is selected.
+ */
+const useCityModel = create<{ rev: number }>(() => ({ rev: 0 }))
+const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
+
+/** Called by the panel's editing controls. Returns the number of buildings changed. */
+export function editCityModelHeights(multiplier: number): number {
+  return cityModelHandle ? cityModelHandle.setAllHeights(multiplier) : 0
+}
+export function setCityModelBuildingHeight(id: string, metres: number): boolean {
+  if (!cityModelHandle || !cityModelHandle.entities.has(id)) return false
+  cityModelHandle.setBuildingHeight(id, metres)
+  return true
+}
+/** Subscribe to selection changes. Returns a revision the panel can ignore. */
+export function useCityModelRevision(): number {
+  return useCityModel((s) => s.rev)
+}
+
+export function usePropsRevision(): number {
+  return useProps((s) => s.rev)
+}
+
+export function onlinePropStatus(): { loaded: number; failed: number } {
+  return { loaded: propsHandle?.loaded().length ?? 0, failed: propsHandle?.failed().length ?? 0 }
+}
+
+export function cityModelStats(): { count: number; mean: number; selected: string | null } {
+  return {
+    count: cityModelHandle?.entities.size ?? 0,
+    mean: cityModelHandle?.meanHeight() ?? 0,
+    selected: cityModelHandle?.selected() ?? null,
+  }
+}
+export function selectCityBuilding(id: string | null): void {
+  cityModelHandle?.select(id)
+}
 
 /**
  * A viewer is only usable while it exists and has not been destroyed.
@@ -73,6 +120,8 @@ export default function SandboxViewer() {
   const terrainMeta = useSceneStore((s) => s.terrain)
   const interventions = usePlanStore((s) => s.interventions)
   const showInterventions = useSceneStore((s) => s.layers.interventions)
+  const showCityModel = useSceneStore((s) => s.layers.cityModel ?? true)
+  const showProps = useSceneStore((s) => s.layers.props ?? true)
   const layers = useSceneStore((s) => s.layers)
 
   // ---- create the viewer once -------------------------------------------
@@ -260,6 +309,94 @@ export default function SandboxViewer() {
     // Placement happens once per scene load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bbox])
+
+  // ---- 3D city model ------------------------------------------------------
+  //
+  // Loaded once per scene and then edited in place. The handle is module-level
+  // so the panel's height controls can drive it without threading a ref through
+  // three components -- the alternative was a context, which for one mutable
+  // object is ceremony.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.cityModelUrl
+    if (!isLive(viewer) || !url) {
+      cityModelHandle = null
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch(url)
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
+        const collection = (await response.json()) as MassingCollection
+        if (cancelled || !isLive(viewer)) return
+        const handle = await addCityModel(viewer, collection, () => {
+          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
+        })
+        if (cancelled) {
+          handle?.dispose()
+          return
+        }
+        cityModelHandle = handle
+        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
+        if (!showCityModel) {
+          // Rendered but hidden: keep the handle so the toggle is instant.
+          for (const e of handle?.entities.values() ?? []) e.show = false
+        }
+        viewer.scene.requestRender()
+      } catch (err) {
+        // A missing city model must not take the map down; the terrain and
+        // overlays still matter.
+        console.warn('[sandbox] city model unavailable:', err)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      cityModelHandle?.dispose()
+      cityModelHandle = null
+    }
+  }, [terrainMeta])
+
+  // ---- online 3D assets ---------------------------------------------------
+  //
+  // Loaded once, from GitHub raw, with no token and no proxy. Failure is
+  // recorded rather than thrown so a dead asset URL cannot empty the scene, and
+  // the loaded count is reported so a silent failure is still visible.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer)) return
+
+    let cancelled = false
+    void addOnlineProps(viewer).then((handle) => {
+      if (cancelled) {
+        handle?.dispose()
+        return
+      }
+      propsHandle = handle
+      useProps.setState({ rev: useProps.getState().rev + 1 })
+    })
+
+    return () => {
+      cancelled = true
+      propsHandle?.dispose()
+      propsHandle = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer) || !propsHandle) return
+    for (const model of propsHandle.models.values()) model.show = showProps
+    viewer.scene.requestRender()
+  }, [showProps])
+
+  useEffect(() => {
+    if (!isLive(viewerRef.current) || !cityModelHandle) return
+    for (const e of cityModelHandle.entities.values()) e.show = showCityModel
+    viewerRef.current.scene.requestRender()
+  }, [showCityModel])
 
   // ---- intervention features ---------------------------------------------
   //

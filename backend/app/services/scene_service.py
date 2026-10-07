@@ -18,6 +18,7 @@ harmless -- rather than a parent scene pointing at nothing.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app import db
@@ -363,7 +364,26 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_source=doc.get("terrain_source"),
         wet_grid_url=_resolve_overlay_url(doc, "wet_grid_path"),
         heatmap_url=_resolve_overlay_url(doc, "heatmap_path"),
+        city_model_url=_resolve_overlay_url(doc, "city_model_path"),
+        city_model_meta=_city_model_meta(),
     )
+
+
+def _city_model_meta() -> dict[str, Any] | None:
+    """Provenance for the 3D massing model, or None when it has not been built.
+
+    The status string is deliberately blunt. These are massing envelopes derived
+    from land cover, with an assumed height distribution -- not surveyed
+    buildings -- and the viewer shows this rather than presenting a skyline as
+    if it were measured.
+    """
+    path = settings.rasters_dir / "citymodel_meta.json"
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
 
 
 def attach_overlay(scene_id: str, key: str, relative_path: str) -> None:
