@@ -60,6 +60,13 @@ export interface MassingCollection {
   features: MassingFeature[]
 }
 
+export interface MassingOp {
+  op: 'scale_all' | 'set_site' | 'reset'
+  multiplier?: number
+  heightM?: number
+  siteId?: string
+}
+
 export interface CityModelHandle {
   /** Every building entity, keyed by its `properties.id`. */
   entities: Map<string, Entity>
@@ -69,6 +76,16 @@ export interface CityModelHandle {
   setBuildingHeight: (id: string, metres: number) => void
   /** Scale every building's height. Returns the number actually changed. */
   setAllHeights: (multiplier: number) => number
+  /**
+   * Apply massing operations from the active plan. **Idempotent.**
+   *
+   * Every building returns to its generated height first, then the ops apply in
+   * order. Without that reset a second call would compound: `setAllHeights(1.25)`
+   * twice yields x1.5625, and since this runs from a `useEffect` keyed on the
+   * plan, any re-render would quietly inflate the skyline. The generated heights
+   * are captured at load precisely so this is possible.
+   */
+  applyMassingOps: (ops: MassingOp[]) => number
   meanHeight: () => number
   dispose: () => void
 }
@@ -95,11 +112,15 @@ export async function addCityModel(
   await source.load(collection as unknown as object)
 
   const entities = new Map<string, Entity>()
+  // The height the generator gave this building. Every op is applied relative to
+  // this, never to the current height, which is what makes apply idempotent.
+  const baseHeights = new Map<string, number>()
   source.entities.values.forEach((entity, i) => {
     const feature = collection.features[i]
     const id = feature.properties?.id ?? `bldg-${i}`
     if (!entity.polygon) return
     const metres = baseHeightOf(feature)
+    baseHeights.set(id, metres)
     entity.polygon.material = new ColorMaterialProperty(COLOURS.base.withAlpha(0.92))
     entity.polygon.height = new ConstantProperty(0)
     entity.polygon.extrudedHeight = new ConstantProperty(metres)
@@ -160,13 +181,66 @@ export async function addCityModel(
       let changed = 0
       entities.forEach((entity, id) => {
         if (!entity.polygon) return
-        const current = entity.polygon.extrudedHeight?.getValue() ?? BASE_HEIGHT
+        const base = baseHeights.get(id) ?? BASE_HEIGHT
         entity.polygon.extrudedHeight = new ConstantProperty(
-          Math.max(1, current * multiplier),
+          Math.max(1, base * multiplier),
         )
         edited.add(id)
         changed += 1
       })
+      if (selectedId) {
+        const sel = entities.get(selectedId)
+        if (sel) paint(sel, COLOURS.selected)
+      }
+      viewer.scene.requestRender()
+      return changed
+    },
+    applyMassingOps: (ops) => {
+      // Reset first, always. This is the whole point: the result depends only on
+      // the ops, never on how many times this has been called.
+      entities.forEach((entity, id) => {
+        if (!entity.polygon) return
+        entity.polygon.extrudedHeight = new ConstantProperty(
+          baseHeights.get(id) ?? BASE_HEIGHT,
+        )
+        edited.delete(id)
+      })
+
+      let changed = 0
+      for (const op of ops) {
+        if (op.op === 'reset') {
+          changed = entities.size
+          continue
+        }
+        if (op.op === 'scale_all') {
+          const m = op.multiplier
+          if (typeof m !== 'number' || !Number.isFinite(m) || m <= 0) continue
+          entities.forEach((entity, id) => {
+            if (!entity.polygon) return
+            const base = baseHeights.get(id) ?? BASE_HEIGHT
+            entity.polygon.extrudedHeight = new ConstantProperty(
+              Math.max(1, base * m),
+            )
+            edited.add(id)
+            changed += 1
+          })
+          continue
+        }
+        if (op.op === 'set_site') {
+          // Without a per-site index the safe reading is "everywhere", which is
+          // what a planner means by "set the buildings to 40 m". An unknown site
+          // id is ignored rather than guessed at.
+          const h = op.heightM
+          if (typeof h !== 'number' || !Number.isFinite(h) || h <= 0) continue
+          entities.forEach((entity, id) => {
+            if (!entity.polygon) return
+            entity.polygon.extrudedHeight = new ConstantProperty(h)
+            edited.add(id)
+            changed += 1
+          })
+        }
+      }
+
       if (selectedId) {
         const sel = entities.get(selectedId)
         if (sel) paint(sel, COLOURS.selected)

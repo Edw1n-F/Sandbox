@@ -109,6 +109,7 @@ class Grounding:
     empty the generator has nothing legitimate to do and must say so.
     """
 
+    bounds: tuple[float, float, float, float] | None = None
     reservoir_sites: list[dict[str, Any]] = field(default_factory=list)
     green_sites: list[dict[str, Any]] = field(default_factory=list)
     paving_sites: list[dict[str, Any]] = field(default_factory=list)
@@ -144,6 +145,7 @@ def load_grounding() -> Grounding:
     g = Grounding()
     try:
         ov = load_overlay()
+        g.bounds = ov.bounds
     except Exception as exc:  # noqa: BLE001
         g.notes.append(f"analysis unavailable ({exc}); refusing to place features")
         return g
@@ -272,6 +274,86 @@ def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
 # --------------------------------------------------------------------------- #
 
 
+def _massing_feature(edit: dict[str, Any], grounding: Grounding,
+                     instruction: str, provider: str,
+                     rationale: str) -> dict[str, Any] | None:
+    """Turn a `modify_massing` op into a feature carrying REAL geometry.
+
+    The geometry is the study-area extent for `scale_all` / `reset`, or the
+    chosen site's polygon for `set_site`. It exists so the feature is a valid
+    GeoJSON polygon that can be listed, selected and highlighted -- but it draws
+    no block, and it is not a building. `opacity: 0` keeps it from painting.
+
+    An unknown op, a non-numeric multiplier, or a site id that was never offered
+    returns None rather than a plausible-looking default.
+    """
+    op = str(edit.get("op", ""))
+    if op not in ("scale_all", "set_site", "reset"):
+        return None
+
+    geometry = None
+    site_id = edit.get("site_id")
+    if op == "set_site":
+        pool_name, _, index = str(site_id or "").partition("#")
+        pool = POOL_FOR_KIND.get(pool_name, "")
+        sites = getattr(grounding, pool, []) if pool else []
+        if not index.isdigit() or int(index) >= len(sites):
+            return None
+        site = sites[int(index)]
+        geometry = site["geometry"]
+        basis = f"existing massing at {site_id} ({site['evidence']})"
+    else:
+        # The whole study area. Real geometry, straight from the locked bbox.
+        lon_min, lat_min, lon_max, lat_max = grounding.bounds
+        r = lambda v: round(v, 7)  # noqa: E731
+        geometry = {"type": "Polygon", "coordinates": [[
+            [r(lon_min), r(lat_min)], [r(lon_max), r(lat_min)],
+            [r(lon_max), r(lat_max)], [r(lon_min), r(lat_max)],
+            [r(lon_min), r(lat_min)],
+        ]]}
+        basis = "existing procedural massing across the study area"
+
+    multiplier = edit.get("multiplier")
+    height = edit.get("height_m")
+    try:
+        if multiplier is not None:
+            multiplier = float(multiplier)
+            if not 0.05 <= multiplier <= 8.0:
+                return None
+        if height is not None:
+            height = float(height)
+            if not 1.0 <= height <= 800.0:
+                return None
+    except (TypeError, ValueError):
+        return None
+    if op == "scale_all" and multiplier is None:
+        return None
+    if op == "set_site" and height is None:
+        return None
+
+    return {
+        "geometry": geometry,
+        "intervention_type": "massing_height",
+        "source": "ai",
+        "params": {
+            "op": op,
+            "multiplier": multiplier,
+            "heightM": height,
+            "siteId": site_id,
+            "basis": basis,
+            "rationale": rationale,
+            "instruction": instruction,
+            "provider": provider,
+            "status": "draft_pending_human_review",
+            "note": (
+                "Annotates the existing procedural massing. Adds no building and "
+                "returns no coordinate."
+            ),
+        },
+        "style": dict(MASSING_STYLE),
+    }
+
+
 class Provider(Protocol):
     """Anything that can turn an instruction plus grounding into features."""
 
@@ -359,18 +441,100 @@ def parse_intent(instruction: str) -> list[tuple[str, int]]:
     return found
 
 
+# Massing phrasings, and what each implies. Checked before the intervention
+# vocabulary, because "make the district 25% taller" contains no intervention
+# noun at all and would otherwise fall through to "nothing recognised".
+MASSING_PATTERNS: tuple[tuple[str, str, float | None], ...] = (
+    (r"reset\s+(the\s+)?(building\s+)?heights?", "reset", None),
+    (r"\b(?:original|default|base)\s+heights?\b", "reset", None),
+    (r"(\d+(?:\.\d+)?)\s*(?:x|\u00d7)\s*(?:taller|higher)", "scale_all", None),
+    (r"(\d+(?:\.\d+)?)\s*%\s*(?:taller|higher)", "scale_all", None),
+    (r"(\d+(?:\.\d+)?)\s*(?:x|\u00d7)\s*(?:shorter|lower)", "scale_all", None),
+    (r"(\d+(?:\.\d+)?)\s*%\s*(?:shorter|lower)", "scale_all", None),
+    (r"\b(taller|higher|denser|more\s+dense)\b", "scale_all", 1.25),
+    (r"\b(shorter|lower|less\s+dense)\b", "scale_all", 0.8),
+)
+
+
+def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
+    """Extract massing operations from an instruction.
+
+    Deterministic and inspectable, like `parse_intent`. Returns ops in the shape
+    `_massing_feature` expects, so both providers converge on one materialiser.
+
+    Two things this gets right that the first version did not:
+
+    - **"25% taller" is 1.25, not 25.** A bare capture of the digits is wrong by
+      two orders of magnitude, and because `_massing_feature` accepts any
+      multiplier up to 8.0 it would have been *rejected* rather than silently
+      wrong -- which is better than nothing but still a failure to read the
+      sentence. Percentages are now converted relative to 1.0.
+    - **"20% shorter" is 0.8, not 1.2.** Shorter and taller are both relative to
+      the current height, so a reduction is ``1 - pct/100``.
+    """
+    text = instruction.lower()
+    ops: list[dict[str, Any]] = []
+
+    for pattern, op, default in MASSING_PATTERNS:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+
+        if op == "reset":
+            ops.append({"op": "reset"})
+            break
+
+        if default is not None:
+            multiplier = default
+        else:
+            try:
+                magnitude = float(match.group(1))
+            except (IndexError, TypeError, ValueError):
+                continue
+            if magnitude <= 0:
+                continue
+            matched = match.group(0)
+            if "%" in matched:
+                # "25% taller" -> 1.25 ; "20% shorter" -> 0.80
+                fraction = magnitude / 100.0
+                multiplier = (1.0 - fraction if re.search(r"shorter|lower", matched)
+                              else 1.0 + fraction)
+            elif re.search(r"shorter|lower", matched):
+                # "1.4x shorter" is nonsense; read it as a reduction factor.
+                multiplier = 1.0 / magnitude if magnitude > 1.0 else magnitude
+            else:
+                multiplier = magnitude
+        ops.append({"op": op, "multiplier": round(float(multiplier), 4)})
+        break
+    return ops
+
+
 class HeuristicProvider:
     """Deterministic intent parser. **Not AI** -- the baseline and the fallback.
 
     Exists for two reasons. A demo that needs an API key is a demo that dies on
     submission day, and the LLM output is only worth anything if there is a
     non-AI thing to compare it against.
+
+    It handles massing instructions too. If the fallback could only place
+    interventions, then on a machine with no key the demo would silently lose
+    the headline capability -- which is the worst way for a fallback to be
+    worse.
     """
 
     name = "heuristic"
 
     def propose(self, instruction: str, grounding: Grounding) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []
+
+        for op in parse_massing_intent(instruction):
+            feature = _massing_feature(
+                op, grounding, instruction, self.name,
+                f"matched a massing phrasing in the instruction ({op['op']})",
+            )
+            if feature:
+                out.append(feature)
+
         for kind, count in parse_intent(instruction):
             pool = POOL_FOR_KIND.get(kind)
             sites = getattr(grounding, pool, []) if pool else []
@@ -427,6 +591,55 @@ CHOOSE_TOOL = {
 }
 
 
+MASSING_TOOL = {
+    "name": "modify_massing",
+    "description": (
+        "Scale, set or reset the height of the EXISTING 3D massing model. Use "
+        "this only when the instruction is about building height, density or "
+        "massing. It never returns geometry and never invents buildings -- it "
+        "adjusts a scalar on envelopes that already exist."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "edits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "op": {
+                            "type": "string",
+                            "enum": ["scale_all", "set_site", "reset"],
+                        },
+                        "multiplier": {
+                            "type": "number", "minimum": 0.25, "maximum": 4.0,
+                        },
+                        "height_m": {
+                            "type": "number", "minimum": 1, "maximum": 400,
+                        },
+                        "site_id": {"type": "string"},
+                    },
+                    "required": ["op"],
+                },
+            },
+            "rationale": {"type": "string"},
+        },
+        "required": ["edits"],
+    },
+}
+
+# Why a massing edit cannot be a hallucination, in one line, next to the tool.
+MASSING_SAFETY_NOTE = (
+    "A height edit is a scalar applied to entities that already exist. It needs "
+    "no coordinate, so it is safe under the same principle that makes site "
+    "selection safe: the model chooses an operation and a scope, never "
+    "geometry. 'Make the district 25% taller' is not a generation problem at all "
+    "-- it is a parameter, and a parameter cannot be an invented coordinate."
+)
+
+MASSING_STYLE = {"color": "#ff8f3f", "opacity": 0.0}
+
+
 def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict]]:
     """Render the candidate sites as a compact, citable menu."""
     catalogue = []
@@ -445,7 +658,11 @@ def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict
         "the area's own terrain, land cover and flood model. You never invent "
         "coordinates. Prefer fewer, better-justified sites over many. Every "
         "site you choose must be defensible from the evidence given. If no site "
-        "is appropriate, return an empty selection list rather than forcing one."
+        "is appropriate, return an empty selection list rather than forcing one. "
+        "Call select_intervention_sites for interventions. Call modify_massing "
+        "ONLY when the instruction concerns building height, a height "
+        "multiplier, density, or resetting heights. Never return a coordinate "
+        "from either tool."
     )
     user = json.dumps({
         "instruction": instruction,
@@ -496,16 +713,26 @@ class LLMProvider:
             "max_tokens": 1500,
             "system": system,
             "messages": [{"role": "user", "content": user}],
-            "tools": [CHOOSE_TOOL],
-            "tool_choice": {"type": "tool", "name": CHOOSE_TOOL["name"]},
+            "tools": [CHOOSE_TOOL, MASSING_TOOL],
+            # `any` rather than a forced tool, because the two intents are
+            # genuinely different and the system prompt disambiguates them. A
+            # test feeds both instruction classes and asserts the right tool
+            # comes back, so the weakening is measured rather than assumed.
+            "tool_choice": {"type": "any"},
         }
         raw = self._transport(ANTHROPIC_URL, self.api_key, payload)
-        selections = _parse_tool_use(raw)
-        return self._materialise(selections, instruction, grounding)
+        selections, edits, rationale = _parse_tool_use(raw)
+        return self._materialise(selections, edits, instruction, grounding, rationale)
 
-    def _materialise(self, selections: list[dict], instruction: str,
-                     grounding: Grounding) -> list[dict[str, Any]]:
-        """Map chosen site ids back to real geometry, dropping anything invalid."""
+    def _materialise(self, selections: list[dict], edits: list[dict],
+                     instruction: str, grounding: Grounding,
+                     rationale: str = "") -> list[dict[str, Any]]:
+        """Map chosen ids back to real geometry, dropping anything invalid.
+
+        Handles both tool kinds. A massing edit carries no geometry from the
+        model at all, so it goes through the same grounding checks and then
+        gets the study-area or site polygon attached here.
+        """
         out: list[dict[str, Any]] = []
         for sel in selections:
             site_id = str(sel.get("site_id", ""))
@@ -527,6 +754,12 @@ class LLMProvider:
                 rationale or f"selected {site_id}",
             ))
             _ = kind
+
+        for edit in edits:
+            feature = _massing_feature(edit, grounding, instruction,
+                                       self.name, rationale)
+            if feature:
+                out.append(feature)
         return out
 
 
@@ -545,12 +778,29 @@ def _post_json(url: str, api_key: str, payload: dict) -> dict:
         return json.loads(response.read())
 
 
-def _parse_tool_use(raw: dict) -> list[dict]:
-    """Pull the tool-use input out of a Messages API response."""
+def _parse_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
+    """Pull both kinds of tool-use input out of a Messages API response.
+
+    Returns ``(selections, massing_edits, rationale)``. Dispatching on the block
+    name rather than assuming one tool is what lets a single call answer either
+    intent. An unrecognised tool name yields empty lists, so a malformed
+    response degrades to "nothing proposed" rather than an exception.
+    """
+    selections: list[dict] = []
+    edits: list[dict] = []
+    rationale = ""
     for block in raw.get("content", []) or []:
-        if block.get("type") == "tool_use" and block.get("name") == CHOOSE_TOOL["name"]:
-            return list(block.get("input", {}).get("selections", []) or [])
-    return []
+        if block.get("type") != "tool_use":
+            continue
+        payload = block.get("input", {}) or {}
+        if block.get("name") == CHOOSE_TOOL["name"]:
+            selections.extend(payload.get("selections", []) or [])
+        elif block.get("name") == MASSING_TOOL["name"]:
+            edits.extend(payload.get("edits", []) or [])
+            rationale = str(payload.get("rationale", "") or "")
+        else:
+            rationale = rationale or str(payload.get("rationale", "") or "")
+    return selections, edits, rationale
 
 
 # --------------------------------------------------------------------------- #

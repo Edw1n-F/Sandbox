@@ -1,0 +1,53 @@
+{
+  "id": "8088ae72-8bfc-45de-b3d5-9118f8445878",
+  "plan_id": "9a49b316-3bc7-4d22-b1f2-c1d6c2c3eeff",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.982,
+          22.425
+        ],
+        [
+          114.005,
+          22.425
+        ],
+        [
+          114.005,
+          22.455
+        ],
+        [
+          113.982,
+          22.455
+        ],
+        [
+          113.982,
+          22.425
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "massing_height",
+  "source": "ai",
+  "params": {
+    "op": "scale_all",
+    "multiplier": 1.25,
+    "heightM": null,
+    "siteId": null,
+    "basis": "existing procedural massing across the study area",
+    "rationale": "matched a massing phrasing in the instruction (scale_all)",
+    "instruction": "make the district 25% taller",
+    "provider": "heuristic",
+    "status": "draft_pending_human_review",
+    "note": "Annotates the existing procedural massing. Adds no building and returns no coordinate."
+  },
+  "style": {
+    "color": "#ff8f3f",
+    "opacity": 0.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-08T09:46:33Z",
+  "updated_at": "2026-10-08T09:46:33Z"
+}

@@ -15,7 +15,12 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
-import { addCityModel, type CityModelHandle, type MassingCollection } from './cityModel'
+import {
+  addCityModel,
+  type CityModelHandle,
+  type MassingCollection,
+  type MassingOp,
+} from './cityModel'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { addInterventions } from './interventionLayer'
 import {
@@ -28,6 +33,9 @@ import {
 /** The live city-model handle, so the panel can edit geometry without prop drilling. */
 let cityModelHandle: CityModelHandle | null = null
 let propsHandle: OnlinePropHandle | null = null
+
+/** Massing ops from the active plan, held until the city model exists. */
+const pendingMassingOps = { current: [] as MassingOp[] }
 
 /**
  * Selection notification. Holds a revision counter rather than the selection
@@ -339,6 +347,12 @@ export default function SandboxViewer() {
           return
         }
         cityModelHandle = handle
+        // The plan may have been selected before the model finished loading, in
+        // which case its massing ops were parked. Apply them now.
+        if (pendingMassingOps.current.length) {
+          handle?.applyMassingOps(pendingMassingOps.current)
+          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
+        }
         useCityModel.setState((st) => ({ rev: st.rev + 1 }))
         if (!showCityModel) {
           // Rendered but hidden: keep the handle so the toggle is instant.
@@ -410,12 +424,41 @@ export default function SandboxViewer() {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
 
+    // A `massing_height` feature carries geometry only so it can be listed and
+    // highlighted. It must NOT be handed to the intervention layer: with
+    // opacity 0 it would still create a clickable entity that shows up in picks
+    // and in the feature count. Split it out and apply it to the city model
+    // instead -- that is the whole point of the feature.
+    const isMassing = (f: { properties?: { interventionType?: string } }) =>
+      f.properties?.interventionType === 'massing_height'
+    const drawn = interventions.features.filter((f) => !isMassing(f))
+    const massingFeatures = interventions.features.filter(isMassing)
+
+    if (showInterventions) {
+      const ops = massingFeatures.map(
+        (f) => f.properties?.params as unknown as MassingOp,
+      )
+      if (cityModelHandle) {
+        cityModelHandle.applyMassingOps(ops)
+        // The panel's mean height reads from the handle, so it has to be told the
+        // geometry moved. Skipping this left the number stale while the skyline
+        // silently changed -- the worst combination, because the screen disagreed
+        // with the model.
+        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
+      } else {
+        pendingMassingOps.current = ops
+      }
+    } else if (cityModelHandle) {
+      cityModelHandle.applyMassingOps([])
+      useCityModel.setState((st) => ({ rev: st.rev + 1 }))
+    }
+
     let disposed = false
     let dispose: (() => void) | undefined
 
     void addInterventions(viewer, {
       type: 'FeatureCollection',
-      features: showInterventions ? interventions.features : [],
+      features: showInterventions ? drawn : [],
     }).then((fn) => {
       // The effect may have been torn down while the GeoJSON was in flight.
       if (disposed) {

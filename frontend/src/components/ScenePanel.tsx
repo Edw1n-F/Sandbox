@@ -37,6 +37,22 @@ export default function ScenePanel() {
   const activePlanId = usePlanStore((s) => s.activePlanId)
   const features = usePlanStore((s) => s.interventions.features.length)
   const plan = plans.find((p) => p.planId === activePlanId)
+  // A massing edit is an AI proposal like any other, so it is shown with the
+  // same posture ADR-030 requires: named, attributed, and reversible.
+  const interventionFeatures = usePlanStore((s) => s.interventions.features)
+  const massingEdit = interventionFeatures.find(
+    (f) => f.properties?.interventionType === 'massing_height',
+  )
+  const massingParams = massingEdit?.properties?.params as
+    | { op?: string; multiplier?: number; heightM?: number; rationale?: string }
+    | undefined
+  const massingSummary = massingParams
+    ? massingParams.op === 'reset'
+      ? 'reset to generated heights'
+      : massingParams.op === 'scale_all'
+        ? `scale all x${massingParams.multiplier}`
+        : `set ${massingParams.heightM} m`
+    : null
   const selectPlan = usePlanStore((s) => s.selectPlan)
   const refreshPlans = usePlanStore((s) => s.refreshPlans)
   const sceneId = useSceneStore((s) => s.sceneId)
@@ -194,6 +210,16 @@ export default function ScenePanel() {
             Click a building to select it, then edit its height directly.
           </Typography>
         </Paper>
+      )}
+
+      {massingSummary && (
+        <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
+          <Typography variant="caption">
+            <strong>AI massing edit:</strong> {massingSummary}
+            {massingParams?.rationale ? ` — ${massingParams.rationale}` : ''}
+            . Applied to the live model; switch plans to revert.
+          </Typography>
+        </Alert>
       )}
 
       <Paper variant="outlined" sx={{ p: 1.5 }}>

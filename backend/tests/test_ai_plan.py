@@ -21,6 +21,8 @@ for extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
 from app.services.ai_plan import (  # noqa: E402
     ANTHROPIC_URL,
     CHOOSE_TOOL,
+    MASSING_TOOL,
+    parse_massing_intent,
     HeuristicProvider,
     LLMProvider,
     PlanGenerationError,
@@ -121,9 +123,14 @@ def test_llm_choices_become_real_grounded_geometry() -> None:
     check("request went to the Messages API", capture["url"] == ANTHROPIC_URL,
           capture.get("url", ""))
     check("api key forwarded", capture["api_key"] == "test-key", "missing")
-    check("tool_choice forces the tool",
-          capture["payload"]["tool_choice"]["name"] == CHOOSE_TOOL["name"],
-          "tool_choice missing")
+    # Was a forced tool; is now `any`, because a massing instruction and an
+    # intervention instruction are genuinely different intents. The compensation
+    # is the system-prompt routing rule, asserted separately in
+    # test_massing_tool_is_offered_alongside_the_site_tool.
+    check("both tools are offered",
+          [t["name"] for t in capture["payload"]["tools"]]
+          == [CHOOSE_TOOL["name"], MASSING_TOOL["name"]],
+          str([t["name"] for t in capture["payload"]["tools"]]))
     check("marked source=ai", f["source"] == "ai", f["source"])
     check("geometry is the real site, not invented",
           f["geometry"] == g.reservoir_sites[0]["geometry"], "geometry differs")
@@ -207,6 +214,140 @@ def test_stored_ai_features_are_all_drafts() -> None:
             checked += 1
     if not checked:
         print("      (no AI plans stored yet; skipped)")
+
+
+def massing_transport(edits: list[dict], rationale: str = "because", *, capture=None):
+    """A transport replaying a recorded `modify_massing` tool-use response."""
+    def _send(url: str, api_key: str, payload: dict) -> dict:
+        if capture is not None:
+            capture.update({"url": url, "api_key": api_key, "payload": payload})
+        return {
+            "id": "msg_fixture", "type": "message", "role": "assistant",
+            "content": [{
+                "type": "tool_use", "id": "toolu_fixture",
+                "name": "modify_massing",
+                "input": {"edits": edits, "rationale": rationale},
+            }],
+            "stop_reason": "tool_use",
+        }
+    return _send
+
+
+def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
+    """"Make the district 25% taller" -> one massing_height feature, multiplier 1.25.
+
+    The acceptance test from the gap brief. Checks source, status, the multiplier,
+    and that the geometry is a real closed ring rather than an invented shape.
+    """
+    g = load_grounding()
+    provider = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "scale_all", "multiplier": 1.25}]))
+    out = provider.propose("make the district 25% taller", g)
+
+    check("one feature produced", len(out) == 1, f"got {len(out)}")
+    if not out:
+        return
+    f = out[0]
+    check("intervention_type is massing_height",
+          f["intervention_type"] == "massing_height", f["intervention_type"])
+    check("multiplier is 1.25", f["params"]["multiplier"] == 1.25,
+          str(f["params"]["multiplier"]))
+    check("op is scale_all", f["params"]["op"] == "scale_all", str(f["params"]["op"]))
+    check("source is ai", f["source"] == "ai", f["source"])
+    check("rationale carried through", bool(f["params"]["rationale"]), "no rationale")
+    ring = f["geometry"]["coordinates"][0]
+    check("geometry is a closed ring",
+          f["geometry"]["type"] == "Polygon" and len(ring) >= 4 and ring[0] == ring[-1],
+          f"{f['geometry']['type']} {len(ring)} pts")
+    check("carries no model-authored coordinate",
+          "coordinates" not in json.dumps(f["params"])[:200]
+          or "siteId" in f["params"], "params leaked a coordinate")
+
+
+def test_massing_tool_is_offered_alongside_the_site_tool() -> None:
+    """`tool_choice: any` weakens the forced tool, so both must be offered."""
+    capture: dict = {}
+    provider = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "reset"}], capture=capture))
+    provider.propose("reset the heights", load_grounding())
+    names = [t["name"] for t in capture["payload"]["tools"]]
+    check("both tools offered", names == ["select_intervention_sites", "modify_massing"],
+          str(names))
+    check("tool_choice is any", capture["payload"]["tool_choice"] == {"type": "any"},
+          json.dumps(capture["payload"]["tool_choice"]))
+    system = capture["payload"]["system"]
+    check("system prompt disambiguates the two intents",
+          "modify_massing" in system and "height" in system.lower(),
+          "no routing rule in the system prompt")
+
+
+def test_massing_ops_are_validated_not_guessed() -> None:
+    """An incomplete or oversized op is dropped, not coerced to a default."""
+    g = load_grounding()
+    bad = [
+        {"op": "scale_all"},                                  # no multiplier
+        {"op": "scale_all", "multiplier": 500},               # out of range
+        {"op": "levitate"},                                   # unknown op
+        {"op": "set_site", "site_id": "nope#0", "height_m": 40},   # unknown site
+        {"op": "set_site", "site_id": "green_space#0"},        # no height
+    ]
+    for edit in bad:
+        provider = LLMProvider(api_key="k", transport=massing_transport([edit]))
+        out = provider.propose("do something to the buildings", g)
+        check(f"rejected: {json.dumps(edit)[:44]}", out == [],
+              f"accepted {len(out)}")
+
+
+def test_heuristic_reads_massing_instructions_too() -> None:
+    """The no-key fallback must not silently lose the headline capability."""
+    g = load_grounding()
+    cases = {
+        "make the district 25% taller": 1.25,
+        "make the buildings 1.4x higher": 1.4,
+        "lower the buildings by 20%": 0.8,
+        "make it 30% shorter": 0.7,
+    }
+    for text, expected in cases.items():
+        ops = parse_massing_intent(text)
+        got = ops[0]["multiplier"] if ops else None
+        check(f"{text!r} -> x{expected}", got == expected, f"got {got}")
+
+    out = HeuristicProvider().propose("make the district 25% taller", g)
+    check("produces a massing feature",
+          bool(out) and out[0]["intervention_type"] == "massing_height",
+          str([f["intervention_type"] for f in out]))
+
+    reset = HeuristicProvider().propose("reset the building heights", g)
+    check("reset is understood",
+          bool(reset) and reset[0]["params"]["op"] == "reset",
+          str([f["params"].get("op") for f in reset]))
+
+    # And it must not fire on unrelated instructions.
+    for text in ("add two water reservoirs", "make it nicer"):
+        check(f"no false positive: {text!r}", parse_massing_intent(text) == [],
+              str(parse_massing_intent(text)))
+
+
+def test_stored_massing_features_are_drafts() -> None:
+    """The service, not the provider, assigns status -- and it must be draft."""
+    from app import db
+    from app.config import settings
+
+    checked = 0
+    for path in db.list_docs(settings.plans_dir):
+        doc = db.read_doc(path)
+        if not doc:
+            continue
+        for item in doc.get("interventions", []):
+            if item.get("intervention_type") != "massing_height":
+                continue
+            check("stored massing edit is draft", item.get("status") == "draft",
+                  str(item.get("status")))
+            check("stored massing edit records its op", bool(item["params"].get("op")),
+                  "no op recorded")
+            checked += 1
+    if not checked:
+        print("      (no massing plans stored yet; skipped)")
 
 
 def _run() -> int:
