@@ -27,8 +27,11 @@ from app.services.ai_plan import (  # noqa: E402
     LLMProvider,
     OpenAICompatProvider,
     PlanGenerationError,
+    _cell_axes,
+    _fraction_ring,
     _post_json,
     build_prompt,
+    resolve_scope,
     route_tools,
     get_provider,
     load_grounding,
@@ -266,6 +269,28 @@ def massing_transport(edits: list[dict], rationale: str = "because", *, capture=
     return _send
 
 
+# Substrings that would let a model author geometry. Checked against the tool's
+# own property names rather than its serialised text: "string" contains "ring",
+# so a naive substring scan of the schema reports a false positive every time.
+GEOMETRY_WORDS = ("coord", "ring", "geometry", "polygon", "point", "lat", "lon",
+                  "position", "vertex", "wkt", "geojson")
+
+
+def _geometry_fields(tool: dict, prefix: str = "") -> list[str]:
+    """Every property name anywhere in a tool schema that could carry geometry."""
+    found: list[str] = []
+    properties = (tool.get("input_schema") or tool).get("properties") or {}
+    for name, spec in properties.items():
+        path = f"{prefix}{name}"
+        if any(word in name.lower() for word in GEOMETRY_WORDS):
+            found.append(path)
+        for key in ("items", "properties"):
+            nested = (spec or {}).get(key)
+            if isinstance(nested, dict):
+                found.extend(_geometry_fields(nested, f"{path}."))
+    return found
+
+
 def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
     """"Make the district 25% taller" -> one massing_height feature, multiplier 1.25.
 
@@ -273,8 +298,9 @@ def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
     and that the geometry is a real closed ring rather than an invented shape.
     """
     g = load_grounding()
+    capture: dict = {}
     provider = LLMProvider(api_key="k", transport=massing_transport(
-        [{"op": "scale_all", "multiplier": 1.25}]))
+        [{"op": "scale_all", "multiplier": 1.25}], capture=capture))
     out = provider.propose("make the district 25% taller", g)
 
     check("one feature produced", len(out) == 1, f"got {len(out)}")
@@ -292,9 +318,529 @@ def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
     check("geometry is a closed ring",
           f["geometry"]["type"] == "Polygon" and len(ring) >= 4 and ring[0] == ring[-1],
           f"{f['geometry']['type']} {len(ring)} pts")
-    check("carries no model-authored coordinate",
-          "coordinates" not in json.dumps(f["params"])[:200]
-          or "siteId" in f["params"], "params leaked a coordinate")
+    check("the request offered the model no coordinate to echo",
+          not _geometry_fields(capture["payload"]["tools"][0]),
+          f"coordinate-bearing fields: {_geometry_fields(capture['payload']['tools'][0])}")
+
+
+def test_scope_is_resolved_here_and_is_not_the_model_s_geometry() -> None:
+    """"Make the western blocks 30% taller" must not become a global edit.
+
+    This is the regression that motivated scope. The first massing tool had no
+    way to say *where*, so the region word was discarded and `scale_all` was
+    returned for every building: a plausible 3D answer to a different question.
+    The model may name a region; it may not place one.
+    """
+    g = load_grounding()
+    capture: dict = {}
+    provider = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "scale_all", "multiplier": 1.3, "scope": "west"}], capture=capture))
+    out = provider.propose("make the western blocks 30% taller", g)
+    check("one feature produced", len(out) == 1, f"got {len(out)}")
+    if not out:
+        return
+    scope = out[0]["params"]["scope"]
+    lon_min, lat_min, lon_max, lat_max = g.bounds
+    mid = round(lon_min + (lon_max - lon_min) / 2, 7)
+    west = [p[0] for p in scope["ring"]]
+    check("scope is a region, not the whole study area", scope["kind"] == "region",
+          scope["kind"])
+    check("the ring is the western half of the locked bbox",
+          max(west) == mid and min(west) == round(lon_min, 7),
+          f"lon {min(west)}..{max(west)} vs mid {mid}")
+    check("the feature's own geometry is the area it affects",
+          out[0]["geometry"]["coordinates"][0] == scope["ring"], "geometry differs")
+    check("label is human-readable", scope["label"] == "the west", scope["label"])
+    # The tool schema is where a coordinate would have to come from.
+    tool = capture["payload"]["tools"][0]
+    check("the tool offers no coordinate field",
+          not _geometry_fields(tool),
+          f"coordinate-bearing fields: {_geometry_fields(tool)}")
+
+
+def test_a_scoped_edit_reaches_less_than_the_whole_area() -> None:
+    """Two different scopes must not resolve to the same polygon."""
+    g = load_grounding()
+    rings = {}
+    for region in ("all", "west", "east", "north-west", "centre"):
+        feature = LLMProvider(api_key="k", transport=massing_transport(
+            [{"op": "scale_all", "multiplier": 1.1, "scope": region}])).propose(
+                f"scale {region}", g)
+        rings[region] = feature[0]["params"]["scope"]["ring"] if feature else None
+    check("every named region resolves", all(rings.values()), str(rings))
+    check("all ten regions are distinct where they should be",
+          len({json.dumps(r) for r in rings.values()}) == len(rings),
+          "two regions resolved to the same polygon")
+    lon_min, lat_min, lon_max, lat_max = g.bounds
+    mid_lon = (lon_min + lon_max) / 2
+    mid_lat = (lat_min + lat_max) / 2
+    inside = lambda ring, lon, lat: (  # noqa: E731
+        min(p[0] for p in ring) <= lon <= max(p[0] for p in ring)
+        and min(p[1] for p in ring) <= lat <= max(p[1] for p in ring))
+    check("the west does not contain the east",
+          not inside(rings["west"], lon_max - 0.0005, lat_max - 0.0005),
+          "west ring reaches the eastern edge")
+    check("the north-west quadrant excludes the south-east",
+          not inside(rings["north-west"], lon_max - 0.0005, lat_min + 0.0005),
+          "north-west ring reaches the south-east corner")
+    check("the centre contains the middle", inside(rings["centre"], mid_lon, mid_lat),
+          "centre ring misses its own middle")
+
+
+def test_set_site_is_scoped_to_the_site_it_names() -> None:
+    """`set_site` used to apply its height to every building in the district.
+
+    The site id selected a *polygon* in the geometry, and the frontend had no way
+    to filter by it, so the only safe-looking reading was "everywhere". The scope
+    now carries that polygon, so the id means something.
+    """
+    g = load_grounding()
+    if not g.paving_sites:
+        print("      (skipped: no paving sites)")
+        return
+    out = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "set_site", "site_id": "permeable_paving#0", "height_m": 40}]
+    )).propose("set the buildings there to 40 m", g)
+    check("one feature produced", len(out) == 1, f"got {len(out)}")
+    if not out:
+        return
+    scope = out[0]["params"]["scope"]
+    check("scope kind is the site", scope["kind"] == "site", scope["kind"])
+    check("the ring is that site's own polygon",
+          scope["ring"] == g.paving_sites[0]["geometry"]["coordinates"][0],
+          "ring differs from the catalogue entry")
+    check("and it is smaller than the study area",
+          len({tuple(p) for p in scope["ring"]})
+          < len({tuple(p) for p in _fraction_ring(g.bounds, (0, 0, 1, 1))})
+          or scope["ring"] != _fraction_ring(g.bounds, (0, 0, 1, 1)),
+          "the site covers everything")
+    check("siteId is recorded for provenance", scope["siteId"] == "permeable_paving#0",
+          str(scope.get("siteId")))
+
+
+def test_placement_footprints_are_generated_on_built_up_land_in_scope() -> None:
+    """`place` is the one op that creates geometry, so it is checked hardest.
+
+    The footprints must be inside the scope, on land the analysis calls built up,
+    of the requested height and count, with ids the viewer can key on -- and they
+    must be the system's coordinates, not the model's.
+    """
+    import numpy as np
+
+    g = load_grounding()
+    if g.overlay is None:
+        print("      (skipped: no overlay)")
+        return
+    out = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "place", "count": 3, "height_m": 60, "scope": "east"}],
+        rationale="more homes on serviced land",
+    )).propose("add three 60 m residential towers in the east", g)
+    check("one feature produced", len(out) == 1, f"got {len(out)}")
+    if not out:
+        return
+    params = out[0]["params"]
+    placements = params.get("placements") or []
+    check("three blocks placed", len(placements) == 3, f"got {len(placements)}")
+    check("ids are unique and stable",
+          len({b["id"] for b in placements}) == len(placements),
+          str([b["id"] for b in placements]))
+
+    scope = params["scope"]["ring"]
+    s_west, s_east = min(p[0] for p in scope), max(p[0] for p in scope)
+    s_south, s_north = min(p[1] for p in scope), max(p[1] for p in scope)
+    check("every footprint lies inside the scope",
+          all(s_west <= p[0] <= s_east and s_south <= p[1] <= s_north
+              for b in placements for p in b["ring"]),
+          "a footprint fell outside the named region")
+    check("rings are closed", all(b["ring"][0] == b["ring"][-1] for b in placements),
+          "an unclosed ring is not a polygon")
+    check("heights are as instructed",
+          all(b["heightM"] == 60.0 for b in placements),
+          str({b["heightM"] for b in placements}))
+
+    # And on land the analysis actually calls built up.
+    lon_min, _, _, lat_max = g.bounds
+    cw, ch = _cell_axes(g.overlay)
+    paved = g.overlay.class_mask("paved")
+    on_paved = True
+    for block in placements:
+        west = min(p[0] for p in block["ring"])
+        east = max(p[0] for p in block["ring"])
+        south = min(p[1] for p in block["ring"])
+        north = max(p[1] for p in block["ring"])
+        c0, c1 = int((west - lon_min) / cw), int((east - lon_min) / cw)
+        r0, r1 = int((lat_max - north) / ch), int((lat_max - south) / ch)
+        if not paved[max(r0, 0):r1 + 1, max(c0, 0):c1 + 1].any():
+            on_paved = False
+    check("every footprint sits on ESA WorldCover paved cells", on_paved,
+          "a block was placed on land the land cover does not call built up")
+    check("basis states where the footprints came from",
+          "paved" in params["basis"], params["basis"])
+
+
+def test_placement_avoids_the_blocks_that_already_exist() -> None:
+    """A new tower must not land inside an existing envelope.
+
+    Placement reuses `make_citymodel.build_blocks` on a paved mask with the
+    already-occupied cells removed, so the two cannot disagree about what a block
+    is. If nothing unbuilt is available the filter is dropped, and `basis` says so
+    -- so this only asserts the strong form when the basis claims it.
+    """
+    from app.config import settings
+
+    path = settings.rasters_dir / "citymodel_hsk.json"
+    if not path.exists():
+        print("      (skipped: run make_citymodel.py first)")
+        return
+    existing = {
+        json.dumps(f["geometry"]["coordinates"][0])
+        for f in json.loads(path.read_text(encoding="utf-8"))["features"]
+    }
+    g = load_grounding()
+    out = HeuristicProvider().propose("add two 70 m towers in the west", g)
+    placed = [f for f in out if f["params"].get("op") == "place"]
+    if not placed:
+        print("      (skipped: no placeable land in the west)")
+        return
+    params = placed[0]["params"]
+    rings = [json.dumps(b["ring"]) for b in params["placements"]]
+    if params["basis"].startswith("new massing on unbuilt paved land"):
+        check("no placed block duplicates an existing envelope",
+              not (set(rings) & existing),
+              f"{len(set(rings) & existing)} of {len(rings)} coincide with a block")
+    else:
+        check("fallback placement declares itself in the basis",
+              "existing envelopes excluded where possible" in params["basis"],
+              params["basis"])
+
+
+def test_a_model_cannot_place_a_building_by_coordinate() -> None:
+    """Hostile-response test for the one op that creates geometry."""
+    g = load_grounding()
+    out = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "place", "count": 1, "height_m": 200, "scope": "east",
+         # A model that tries to place by coordinate, and one that tries to smuggle
+         # a ring past the scope.
+         "coordinates": [[[114.05, 22.49]]],
+         "ring": [[[113.0, 22.0]]],
+         "geometry": {"type": "Polygon", "coordinates": [[[114.05, 22.49]]]}},
+    ])).propose("put a 200 m tower at 114.05, 22.49", g)
+    check("the op is still honoured, on the analysis's terms", len(out) == 1,
+          f"got {len(out)}")
+    if not out:
+        return
+    params = out[0]["params"]
+    lon_min, lat_min, lon_max, lat_max = g.bounds
+    east = [p[0] for p in params["scope"]["ring"]]
+    check("the scope is still the eastern half, not the model's point",
+          max(east) == round(lon_max, 7) and min(east) > 113.99,
+          f"{min(east)}..{max(east)}")
+    check("no footprint is at the model-authored coordinate",
+          all(abs(p[0] - 114.05) > 0.001 for b in params["placements"]
+              for p in b["ring"]),
+          "a placed block used the coordinate the model supplied")
+
+
+def test_rotate_is_read_scoped_and_bounded() -> None:
+    g = load_grounding()
+    out = HeuristicProvider().propose("rotate the western blocks 30 degrees", g)
+    check("rotate is understood", bool(out) and out[0]["params"]["op"] == "rotate",
+          str([f["params"].get("op") for f in out]))
+    if out:
+        check("and is scoped", out[0]["params"]["scope"]["label"] == "the west",
+              out[0]["params"]["scope"]["label"])
+        check("with the stated angle", out[0]["params"]["degrees"] == 30.0,
+              str(out[0]["params"].get("degrees")))
+    # Out of range is dropped, not clamped: a 400 degree turn is a mistake.
+    bad = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "rotate", "degrees": 400, "scope": "west"}])).propose("spin", g)
+    check("an impossible rotation is dropped", bad == [], f"accepted {len(bad)}")
+    # A default angle is declared as a default, not reported as an instruction.
+    defaulted = HeuristicProvider().propose("reorient the buildings", g)
+    check("a defaulted angle is flagged",
+          bool(defaulted) and defaulted[0]["params"].get("angleDefaulted") is True,
+          str(defaulted[0]["params"].get("angleDefaulted") if defaulted else "none"))
+
+
+def test_a_height_change_is_not_read_as_an_absolute_height() -> None:
+    """"30 m taller" must not set every building to 30 m.
+
+    This one is worth a test because the failure is invisible: the model changes,
+    the panel reports a height, and nothing says the number was the wrong one.
+    """
+    ops = parse_massing_intent("make the eastern blocks 30 m taller")
+    check("exactly one operation", len(ops) == 1, f"got {len(ops)}")
+    if not ops:
+        return
+    check("read as a delta", ops[0].get("deltaM") == 30.0 and "heightM" not in ops[0],
+          json.dumps(ops[0]))
+    check("and scoped", ops[0]["scope"] == "east", str(ops[0].get("scope")))
+
+
+def test_the_deterministic_parser_is_not_the_weak_half() -> None:
+    """No-key baseline: everything the LLM can do, the parser can do.
+
+    A fallback that quietly loses the headline capability is the worst kind,
+    because the demo still runs and just shows less.
+    """
+    cases = {
+        "make the district 25% taller": ("scale_all", "all"),
+        "make the western blocks 30% taller": ("scale_all", "west"),
+        "set the buildings in the south to 45 m": ("set_site", "south"),
+        "make the north-east blocks 30 m taller": ("set_site", "north-east"),
+        "rotate the eastern blocks 30 degrees": ("rotate", "east"),
+        "move the northern blocks 25 m north": ("move", "north"),
+        "add three 60 m residential towers in the eastern part": ("place", "east"),
+        "place four 80 m towers in the north-west": ("place", "north-west"),
+        "reset the building heights": ("reset", None),
+    }
+    for text, (op, scope) in cases.items():
+        ops = parse_massing_intent(text)
+        got = (ops[0]["op"], ops[0].get("scope")) if ops else (None, None)
+        check(f"{text!r} -> {op} in {scope}", got == (op, scope), f"got {got}")
+
+    # Things that must still not fire.
+    for text in ("add two water reservoirs", "make it nicer",
+                 "permeable paving please"):
+        check(f"no false positive: {text!r}", parse_massing_intent(text) == [],
+              str(parse_massing_intent(text)))
+
+
+def test_a_model_that_drops_the_array_wrapper_is_still_understood() -> None:
+    """`qwen2.5:3b-instruct` answers with the operation, not an array of them.
+
+    The schema asks for ``{"edits": [ ... ]}``; the local model returns
+    ``{"op": "place", "count": 3, "scope": "east"}``. Reading ``args["edits"]``
+    alone found nothing, so a working model producing a correct answer yielded
+    zero features and a green tick in the panel. Found by running it, not by
+    reading it.
+    """
+    def _flat(url: str, api_key: str, payload: dict) -> dict:
+        return {
+            "id": "msg_flat", "type": "message", "role": "assistant",
+            "content": [{
+                "type": "tool_use", "id": "tu_flat", "name": MASSING_TOOL["name"],
+                "input": {"op": "scale_all", "multiplier": 1.4, "scope": "west"},
+            }],
+            "stop_reason": "tool_use",
+        }
+
+    out = LLMProvider(api_key="k", transport=_flat).propose(
+        "make the western blocks 40% taller", load_grounding())
+    check("a flattened answer is still read", len(out) == 1, f"got {len(out)}")
+    if out:
+        check("with its scope and multiplier",
+              out[0]["params"]["multiplier"] == 1.4
+              and out[0]["params"]["scope"]["region"] == "west",
+              json.dumps(out[0]["params"]["scope"]))
+
+
+def test_the_structured_fallback_cannot_answer_the_other_question() -> None:
+    """A massing instruction must never come back as interventions.
+
+    The JSON-schema retry is asked to satisfy the *massing* schema, and a small
+    model fills in the intervention shape anyway -- ``selections`` with real,
+    valid catalogue ids. The parser believed it, and "add three 60 m towers in
+    the east" produced three water reservoirs: a complete, plausible, wrong plan
+    for a question nobody asked. This is the failure mode this project treats as
+    the worst one there is, so it is pinned.
+    """
+    seen: list[dict] = []
+
+    def _no_tools_then_wrong_shape(url: str, api_key: str, payload: dict) -> dict:
+        seen.append(payload)
+        if payload.get("tools"):
+            return {"choices": [{"index": 0, "finish_reason": "stop",
+                                 "message": {"role": "assistant", "content": None}}]}
+        return {
+            "choices": [{
+                "index": 0, "finish_reason": "stop",
+                "message": {"role": "assistant", "content": json.dumps({
+                    "selections": [{"site_id": "water_reservoir#0",
+                                    "intervention_type": "water_reservoir",
+                                    "rationale": "the deepest basin"}],
+                })},
+            }],
+        }
+
+    provider = OpenAICompatProvider(base_url="http://local.invalid/v1", api_key="k",
+                                    model="m")
+    provider._transport = _no_tools_then_wrong_shape  # type: ignore[assignment]
+    features = provider.propose("add three 60 m residential towers in the east",
+                                load_grounding())
+    check("the schema retry did happen", len(seen) == 2, f"{len(seen)} requests")
+    check("the retry enforced the massing schema",
+          (seen[1].get("response_format") or {}).get("json_schema", {}).get("name")
+          == MASSING_TOOL["name"],
+          json.dumps(seen[1].get("response_format")) if len(seen) > 1 else "no retry")
+    check("and the wrong-shaped answer was refused, not believed",
+          features == [], f"produced {len(features)} intervention(s) instead")
+
+
+def test_move_is_read_as_an_offset_in_metres() -> None:
+    """"Move the western blocks 30 m north" -- and it composes, it does not compound.
+
+    The offset is resolved here rather than left as a bearing, because "30 m
+    north" has to be the same number whatever a block's orientation is, and a
+    compass angle is exactly the kind of thing a model will invent.
+    """
+    ops = parse_massing_intent("move the western blocks 30 m north")
+    check("move is understood", bool(ops) and ops[0]["op"] == "move",
+          str(parse_massing_intent("move the western blocks 30 m north")))
+    if not ops:
+        return
+    check("as a north-positive offset",
+          ops[0].get("dyM") == 30.0 and ops[0].get("dxM") == 0.0,
+          json.dumps(ops[0]))
+    check("and scoped", ops[0]["scope"] == "west", str(ops[0].get("scope")))
+
+    ops_east = parse_massing_intent("shift the eastern blocks 40 m east")
+    check("east is east-positive",
+          bool(ops_east) and ops_east[0].get("dxM") == 40.0
+          and ops_east[0].get("dyM") == 0.0,
+          json.dumps(ops_east))
+
+    g = load_grounding()
+    out = HeuristicProvider().propose("move the western blocks 30 m north", g)
+    check("produces a move feature",
+          bool(out) and out[0]["params"]["op"] == "move",
+          str([f["params"].get("op") for f in out]))
+
+    # A distance with no direction is not a move, and neither is a move of zero.
+    check("a distance with no direction yields nothing",
+          parse_massing_intent("move the buildings 30 m") == [],
+          str(parse_massing_intent("move the buildings 30 m")))
+    dropped = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "move", "direction": "north", "distance_m": 0, "scope": "west"}],
+    )).propose("nudge them", g)
+    check("a zero-distance move is dropped", dropped == [], f"{len(dropped)} accepted")
+
+    # direction + distance_m is the same request as dx/dy, and must be honoured
+    # rather than read as a move with no offset at all.
+    both = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "move", "direction": "east", "distance_m": 25, "scope": "west"}],
+    )).propose("shift the west 25 m east", g)
+    check("direction + distance is accepted as an offset",
+          bool(both) and both[0]["params"]["dxM"] == 25.0
+          and both[0]["params"]["dyM"] == 0.0,
+          json.dumps(both[0]["params"]) if both else "no feature")
+
+    # A compass word outranks the model's own arithmetic. This is not
+    # hypothetical: qwen2.5:3b-instruct answered "40 m north" with dx=40, dy=0,
+    # transposing the axes into a plausible pair of numbers pointing the wrong way.
+    transposed = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "move", "scope": "west", "dx_m": 40, "dy_m": 0,
+         "direction": "north", "distance_m": 40},
+    ])).propose("move the western blocks 40 m north", g)
+    check("a named direction overrides transposed dx/dy",
+          bool(transposed) and transposed[0]["params"]["dyM"] == 40.0
+          and transposed[0]["params"]["dxM"] == 0.0,
+          json.dumps(transposed[0]["params"]) if transposed else "no feature")
+
+
+def test_a_named_region_outranks_a_stray_site_id() -> None:
+    """A model fills in every schema field, so a placeholder id arrives too.
+
+    `qwen2.5:3b-instruct` sent `scope: "west"` *and* `site_id: "road#0"` for "move
+    the western blocks". Site-id precedence answered a different question and moved
+    all 2,639 buildings. The region the instruction named is the deliberate choice.
+    """
+    g = load_grounding()
+    out = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "move", "scope": "west", "site_id": "road#0",
+         "dx_m": 0, "dy_m": 40},
+    ])).propose("move the western blocks 40 m north", g)
+    check("one feature", len(out) == 1, f"got {len(out)}")
+    if not out:
+        return
+    scope = out[0]["params"]["scope"]
+    check("the named region won",
+          scope["kind"] == "region" and scope["region"] == "west",
+          json.dumps(scope))
+    check("the stray id is still recorded for provenance",
+          scope["siteId"] == "road#0", str(scope.get("siteId")))
+
+    # ...and with no region named, a site id is still the scope.
+    site_only = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "scale_all", "multiplier": 1.2, "site_id": "permeable_paving#0"},
+    ])).propose("make it taller", g)
+    check("a site id alone still scopes",
+          bool(site_only) and site_only[0]["params"]["scope"]["kind"] == "site",
+          json.dumps(site_only[0]["params"]["scope"]) if site_only else "none")
+
+    # An unknown region is still fatal, even with a valid site id alongside it.
+    mixed = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "scale_all", "multiplier": 1.2, "scope": "the moon",
+         "site_id": "road#0"},
+    ])).propose("do something", g)
+    check("an unknown region is still refused", mixed == [], f"{len(mixed)} accepted")
+
+
+def test_an_irrelevant_field_cannot_invalidate_an_operation() -> None:
+    """A model fills in the schema, so it sends fields the op does not use.
+
+    `qwen2.5:3b-instruct` answered a move with `height_m: 0` alongside a correct
+    `dx_m`/`dy_m`. A shared range check on every field then rejected the whole
+    operation, and "move the western blocks 40 m north" produced nothing at all.
+    Validation is per-operation for exactly this reason.
+    """
+    g = load_grounding()
+    noisy = LLMProvider(api_key="k", transport=massing_transport([
+        {"op": "move", "scope": "west", "height_m": 0, "count": 999,
+         "degrees": 9999, "dx_m": 40, "dy_m": 0},
+    ])).propose("move the western blocks 40 m north", g)
+    check("the operation survives unrelated fields", len(noisy) == 1,
+          f"got {len(noisy)}")
+    if noisy:
+        check("with its offset intact",
+              noisy[0]["params"]["dxM"] == 40.0 and noisy[0]["params"]["dyM"] == 0.0,
+              json.dumps(noisy[0]["params"]))
+
+    # ...but a field the op *does* use is still enforced, and a contradiction is
+    # still a contradiction.
+    cases = (
+        # (payload, expected feature count, why)
+        ({"op": "scale_all", "multiplier": 1.2, "height_m": 5000}, 1,
+         "height_m is irrelevant to scale_all"),
+        ({"op": "rotate", "degrees": 20, "dx_m": 9000}, 1,
+         "dx_m is irrelevant to rotate"),
+        ({"op": "move", "dx_m": 40, "degrees": 9999}, 1,
+         "degrees is irrelevant to move"),
+        ({"op": "set_site", "height_m": 40, "delta_m": 10}, 0,
+         "an absolute height and a delta contradict each other"),
+        ({"op": "rotate", "degrees": 400}, 0, "400 degrees is not a rotation"),
+        ({"op": "move", "dx_m": 4000}, 0, "4 km is not a plausible shift"),
+        ({"op": "scale_all", "multiplier": 500}, 0, "x500 is not a scenario"),
+    )
+    for payload, expected, why in cases:
+        out = LLMProvider(api_key="k", transport=massing_transport(
+            [payload])).propose("do something to the buildings", g)
+        check(f"{why} ({json.dumps(payload)[:44]})", len(out) == expected,
+              f"got {len(out)}, expected {expected}")
+
+
+def test_an_unrecognised_scope_is_dropped_not_widened() -> None:
+    """The bug this whole mechanism exists to prevent, asserted directly.
+
+    A scope we do not recognise must produce no edit. Falling back to "the whole
+    study area" would answer a scoped question with an unscoped one, which is the
+    silent-wrong-answer failure mode rather than an honest failure.
+    """
+    g = load_grounding()
+    check("a nonsense region resolves to nothing",
+          resolve_scope("the far side of the moon", None, g) is None,
+          "it silently became a scope")
+    out = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "scale_all", "multiplier": 2.0, "scope": "the far side of the moon"}],
+    )).propose("make the far side of the moon twice as tall", g)
+    check("so the op is dropped", out == [], f"accepted {len(out)}")
+    # ...while a hyphenated compound region still works, since that is a real one.
+    ok = LLMProvider(api_key="k", transport=massing_transport(
+        [{"op": "scale_all", "multiplier": 0.9, "scope": "north-west"}],
+    )).propose("make the north-west 10% shorter", g)
+    check("a hyphenated compound region still resolves",
+          bool(ok) and ok[0]["params"]["scope"]["region"] == "north-west",
+          str(ok[0]["params"]["scope"] if ok else "no feature"))
 
 
 def test_massing_tool_is_offered_alongside_the_site_tool() -> None:

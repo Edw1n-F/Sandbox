@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,18 +63,49 @@ if version < RECOMMENDED_PYTHON:
     )
 
 # The trap this script exists for: a venv in the repo that is not this one.
+#
+# The advice has to be *derived*, not hard-coded. An earlier version always said
+# "activate backend/.venv", which was once right and then became wrong the moment
+# .venv was rebuilt -- pointing someone at a 3.10 interpreter with no numpy is a
+# worse trap than the one this check exists to catch. So it asks the other
+# interpreter directly and names whichever one can actually import the deps.
+REQUIRED = ("fastapi", "pydantic", "numpy", "PIL")
 repo_venv = BACKEND_DIR / ".venv"
 if repo_venv.exists():
     other = repo_venv / "bin" / "python"
     if other.exists() and other.resolve() != Path(sys.executable).resolve():
-        check(
-            "repo .venv is not shadowing this interpreter",
-            False,
-            f"{repo_venv} exists but you are running {sys.executable}. "
-            "If a script fails with ModuleNotFoundError, activate the right "
-            "one: source backend/.venv/bin/activate",
-            warn_only=True,
-        )
+        try:
+            probe = subprocess.run(
+                [str(other), "-c",
+                 "import " + ", ".join(REQUIRED) + "; print('ok')"],
+                capture_output=True, text=True, timeout=60,
+            )
+            usable = probe.returncode == 0
+            version = subprocess.run(
+                [str(other), "-V"], capture_output=True, text=True, timeout=30,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            usable, version = False, "unreadable"
+
+        if usable:
+            check(
+                "another interpreter is also present",
+                True,
+                f"{other} is {version} and can import "
+                f"{', '.join(REQUIRED)}; it is not the one running. Harmless, "
+                f"but the tested environment is {sys.version.split()[0]}",
+            )
+        else:
+            check(
+                "repo .venv cannot run this project",
+                False,
+                f"{other} is {version} and is missing at least one of "
+                f"{', '.join(REQUIRED)}. Keep using "
+                f"{Path(sys.executable).name} ({sys.version.split()[0]}); "
+                f"activating .venv would raise ModuleNotFoundError from inside "
+                f"a raster script, which reads as 'the script is broken'",
+                warn_only=True,
+            )
 
 # --- packages ------------------------------------------------------------- #
 for module, why in (

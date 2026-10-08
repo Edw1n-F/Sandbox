@@ -27,6 +27,38 @@ most impervious contiguous block -- and records the raster it came from in
 ``params.basis``. If no grounding data is available, the module says so and
 refuses to invent geometry.
 
+## Scope: the missing idea, and why it is the important one
+
+An LLM asked to "make the district 25% taller" and then "set the western blocks
+to 60 m" produces two sentences that differ in exactly one respect: **where**.
+The first version of the massing tool had no way to express that, so ``scope``
+did not exist and both sentences collapsed onto ``scale_all`` for the entire
+study area. The second request silently returned the first request's answer,
+which is the worst failure mode this module has: not an error, not a wrong
+number, but a plausible 3D result that answers a different question.
+
+So every massing operation now carries a **scope**, and it is resolved in this
+module from three sources and nowhere else:
+
+- ``scope="west"`` -- one of ten named regions of the locked study area, as a
+  fraction of the bbox. Deterministic arithmetic over a constant we already own.
+- ``site_id="water_reservoir#0"`` -- a site from the grounded catalogue, whose
+  polygon the analysis already derived.
+- neither -- the whole study area.
+
+The model supplies a *name* or an opaque id. It never supplies a coordinate, so
+the guarantee that made site selection safe survives the addition of spatial
+scope: **the model chooses where to point, the data decides where that is.**
+
+## Placement: new massing, on land the analysis says is built up
+
+``place`` is the other half of the capability. The footprints are generated here,
+by :func:`placement_footprints`, from the same ESA WorldCover ``paved`` mask and
+the same block pitch ``make_citymodel.py`` uses -- and they avoid the cells the
+existing envelopes already occupy, so a new tower lands on unbuilt paved land
+rather than inside an existing block. The model chooses a count, a height and a
+scope; the land cover chooses the coordinates.
+
 ## Two providers, and why
 
 ``ANTHROPIC_API_KEY`` decides which runs. Both produce the same structures.
@@ -45,6 +77,7 @@ is exercised on every test run without a key or a network.
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass, field
@@ -93,9 +126,11 @@ EN_ALIASES: dict[str, str] = {
     "windbreak": "wind",
     "ventilation": "wind",
     "podium": "podium",
-    "reorient": "reorient",
-    "rotate": "reorient",
-    "angle": "reorient",
+    # "rotate" / "reorient" / "angle" used to be here, mapped to a `reorient`
+    # kind that has no grounding pool -- so the phrase parsed successfully and
+    # then resolved to nothing. They are real operations on the massing now, so
+    # they are handled by parse_massing_intent() instead. Leaving them here would
+    # mean one sentence producing a phantom intervention intent as well.
     "reservoir": "water_reservoir",
     "pond": "water_reservoir",
 }
@@ -114,6 +149,9 @@ class Grounding:
     green_sites: list[dict[str, Any]] = field(default_factory=list)
     paving_sites: list[dict[str, Any]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    # The loaded Overlay, kept so placement can re-read the paved mask without
+    # loading it a second time. Not part of the prompt: it is numpy, not data.
+    overlay: Any = field(default=None, repr=False, compare=False)
 
     def any_available(self) -> bool:
         return bool(self.reservoir_sites or self.green_sites or self.paving_sites)
@@ -146,6 +184,7 @@ def load_grounding() -> Grounding:
     try:
         ov = load_overlay()
         g.bounds = ov.bounds
+        g.overlay = ov
     except Exception as exc:  # noqa: BLE001
         g.notes.append(f"analysis unavailable ({exc}); refusing to place features")
         return g
@@ -270,8 +309,357 @@ def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
 
 
 # --------------------------------------------------------------------------- #
+# Scope: turning "the west" into a polygon the model never got to choose
+# --------------------------------------------------------------------------- #
+
+# Regions as fractions of the locked study-area bbox, in (lon_min, lat_min,
+# lon_max, lat_max) order. Plain arithmetic over a constant this project already
+# owns, which is what makes a region name safe to accept from a language model:
+# there is nothing to hallucinate, only a box to divide.
+REGION_FRACTIONS: dict[str, tuple[float, float, float, float]] = {
+    "all": (0.0, 0.0, 1.0, 1.0),
+    "west": (0.0, 0.0, 0.5, 1.0),
+    "east": (0.5, 0.0, 1.0, 1.0),
+    "south": (0.0, 0.0, 1.0, 0.5),
+    "north": (0.0, 0.5, 1.0, 1.0),
+    "centre": (0.25, 0.25, 0.75, 0.75),
+    "north-west": (0.0, 0.5, 0.5, 1.0),
+    "north-east": (0.5, 0.5, 1.0, 1.0),
+    "south-west": (0.0, 0.0, 0.5, 0.5),
+    "south-east": (0.5, 0.0, 1.0, 0.5),
+}
+
+# What a model or a user might say. Order matters: `_match_region` returns the
+# first phrase that appears, so the two-word compounds must precede the single
+# words they contain. Keys are space-separated because hyphens are flattened
+# before matching -- otherwise "north-east" matches "east" and half the request
+# is applied to the wrong half of the district.
+REGION_SYNONYMS: dict[str, str] = {
+    "whole study area": "all", "entire district": "all", "the district": "all",
+    "whole area": "all", "everywhere": "all", "study area": "all",
+    "north west": "north-west", "north east": "north-east",
+    "south west": "south-west", "south east": "south-east",
+    "northwestern": "north-west", "northeastern": "north-east",
+    "southwestern": "south-west", "southeastern": "south-east",
+    "western": "west", "eastern": "east", "northern": "north", "southern": "south",
+    "central": "centre", "middle": "centre", "center": "centre", "centre": "centre",
+    "west": "west", "east": "east", "north": "north", "south": "south", "all": "all",
+    "nw": "north-west", "ne": "north-east", "sw": "south-west", "se": "south-east",
+}
+
+
+def _match_region(text: str) -> str | None:
+    """The region a phrase names, or None. Deterministic; no model involved.
+
+    Hyphens become spaces first, because "north-west" would otherwise match the
+    single word "west" -- `\b` treats the hyphen as a boundary -- and a request
+    for the north-west would be applied to the entire western half.
+    """
+    lowered = text.lower().replace("-", " ")
+    for phrase, region in REGION_SYNONYMS.items():
+        if re.search(rf"\b{re.escape(phrase)}\b", lowered):
+            return region
+    return None
+
+
+def _fraction_ring(bounds: tuple[float, float, float, float],
+                   fr: tuple[float, float, float, float]) -> list[list[float]]:
+    """A closed rectangular ring for one region of the study area."""
+    lon_min, lat_min, lon_max, lat_max = bounds
+    r = lambda v: round(v, 7)  # noqa: E731
+    west = r(lon_min + (lon_max - lon_min) * fr[0])
+    east = r(lon_min + (lon_max - lon_min) * fr[2])
+    south = r(lat_min + (lat_max - lat_min) * fr[1])
+    north = r(lat_min + (lat_max - lat_min) * fr[3])
+    return [[west, south], [east, south], [east, north], [west, north], [west, south]]
+
+
+def resolve_scope(hint: str | None, site_id: str | None,
+                  grounding: Grounding) -> dict[str, Any] | None:
+    """Turn a scope *reference* into a real polygon. None if it is not one we offered.
+
+    Three inputs, and the precedence between them is not arbitrary:
+
+    - ``hint`` -- a region name, normalised through :data:`REGION_SYNONYMS`. A
+      region the model named **explicitly** wins, because a region is what an
+      instruction tends to say ("the western blocks") and it is the coarser,
+      more deliberate choice.
+    - ``site_id`` -- an opaque catalogue id such as ``water_reservoir#0``, used
+      when no region was named. The polygon is the one the analysis derived.
+    - neither -- the whole study area.
+
+    Site ids do **not** outrank a named region. `qwen2.5:3b-instruct` fills in
+    every field of the schema, so "move the western blocks 40 m north" came back
+    carrying both `scope: "west"` and a placeholder `site_id: "road#0"` -- and
+    site-id precedence silently answered a different question, moving every
+    building in the district. The region is trusted first; the site id is still
+    recorded in the record either way.
+
+    Returning None for anything unrecognised is deliberate. The alternative --
+    falling back to "all" -- is the exact bug this function exists to remove: a
+    scoped request would then be answered with an unscoped edit, and the user
+    would be looking at a 3D result for a question they did not ask.
+    """
+    if grounding.bounds is None:
+        return None
+
+    region = "all"
+    if hint:
+        # Normalised the same way _match_region does, so the region name a
+        # parser produces ("north-west") and the phrase a user typed
+        # ("north west") resolve identically. Without this the two halves
+        # disagreed and every compound region was silently dropped.
+        key = str(hint).strip().lower().replace("-", " ")
+        region = REGION_SYNONYMS.get(key) or (key if key in REGION_FRACTIONS else "")
+        if not region:
+            return None
+
+    if site_id and region == "all":
+        pool_name, _, index = str(site_id).partition("#")
+        pool = POOL_FOR_KIND.get(pool_name)
+        sites = getattr(grounding, pool, []) if pool else []
+        if not index.isdigit() or int(index) >= len(sites):
+            return None
+        site = sites[int(index)]
+        return {
+            "kind": "site",
+            "region": None,
+            "siteId": site_id,
+            "label": f"{pool_name} site {index}",
+            "evidence": site["evidence"],
+            "ring": [list(p) for p in site["geometry"]["coordinates"][0]],
+        }
+
+    return {
+        "kind": "all" if region == "all" else "region",
+        "region": region,
+        "siteId": str(site_id) if site_id else None,
+        "label": "the whole study area" if region == "all" else f"the {region}",
+        "evidence": f"{region} of the locked study-area bbox",
+        "ring": _fraction_ring(grounding.bounds, REGION_FRACTIONS[region]),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Placement: new massing on land the analysis says is built up
+# --------------------------------------------------------------------------- #
+
+# Hong Kong residential floor-to-floor. The same figure make_citymodel.py uses;
+# a storey count in a prompt is converted with it so the model can think in
+# storeys, which is how the planning conversation actually goes.
+STOREY_M = 3.1
+DEFAULT_PLACEMENT_HEIGHT_M = 45.0
+MAX_PLACEMENTS = 12
+
+_OCCUPANCY_CACHE: dict[str, Any] = {}
+
+
+def _point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
+    """Ray casting. The rings here are 5-point rectangles, but a site polygon
+    from ``_components`` is a bounding box too -- so this stays correct if either
+    ever becomes a real outline."""
+    inside = False
+    n = len(ring)
+    for i in range(n - 1):
+        x1, y1 = ring[i][0], ring[i][1]
+        x2, y2 = ring[i + 1][0], ring[i + 1][1]
+        if (y1 > lat) != (y2 > lat):
+            crossing = x1 + (lat - y1) * (x2 - x1) / (y2 - y1)
+            if lon < crossing:
+                inside = not inside
+    return inside
+
+
+def _cell_axes(ov: Any) -> tuple[float, float]:
+    """Cell size in degrees, matching make_citymodel.py's convention."""
+    import math
+
+    lon_min, lat_min, _, lat_max = ov.bounds
+    cw = float(ov.grid["cell_width_m"]) / (
+        111_320.0 * math.cos(math.radians((lat_min + lat_max) / 2))
+    )
+    return cw, float(ov.grid["cell_height_m"]) / 110_574.0
+
+
+def _occupied_mask(ov: Any) -> Any:
+    """Cells already carrying a massing envelope, so a new block does not land
+    inside an existing one.
+
+    Read from the committed city model rather than recomputed, so placement and
+    the model on screen cannot disagree about where the existing blocks are.
+    """
+    import numpy as np
+
+    if "mask" in _OCCUPANCY_CACHE:
+        return _OCCUPANCY_CACHE["mask"]
+
+    mask = np.zeros((ov.rows, ov.cols), dtype=bool)
+    path = settings.rasters_dir / "citymodel_hsk.json"
+    if path.exists():
+        try:
+            collection = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            collection = {}
+        cw, ch = _cell_axes(ov)
+        lon_min, _, _, lat_max = ov.bounds
+        for feature in collection.get("features", []):
+            ring = (feature.get("geometry") or {}).get("coordinates", [[]])[0]
+            if len(ring) < 4:
+                continue
+            west = min(p[0] for p in ring)
+            east = max(p[0] for p in ring)
+            south = min(p[1] for p in ring)
+            north = max(p[1] for p in ring)
+            c0 = max(0, int((west - lon_min) / cw))
+            c1 = min(ov.cols - 1, int((east - lon_min) / cw))
+            r0 = max(0, int((lat_max - north) / ch))
+            r1 = min(ov.rows - 1, int((lat_max - south) / ch))
+            for r in range(r0, r1 + 1):
+                lat = lat_max - (r + 0.5) * ch
+                for c in range(c0, c1 + 1):
+                    lon = lon_min + (c + 0.5) * cw
+                    if _point_in_ring(lon, lat, ring):
+                        mask[r, c] = True
+    _OCCUPANCY_CACHE["mask"] = mask
+    return mask
+
+
+def placement_footprints(scope_ring: list[list[float]], count: int,
+                          grounding: Grounding) -> list[dict[str, Any]]:
+    """Generate `count` new massing footprints inside `scope_ring`.
+
+    The geometry comes from the ESA WorldCover ``paved`` class and the same block
+    pitch ``make_citymodel.py`` uses, so a placed block is indistinguishable in
+    kind from a generated one. Cells already occupied by an existing envelope are
+    excluded, so placement adds to the district instead of stacking on it; if
+    that leaves nothing -- a fully built scope -- the occupied filter is dropped
+    rather than returning an empty proposal, and the caller records that it did.
+
+    Nothing here reads a coordinate from the model. The model said *how many*,
+    *how tall* and roughly *where*; this function decided where that is.
+    """
+    import numpy as np
+
+    ov = grounding.overlay
+    if ov is None or count <= 0:
+        return []
+
+    from make_citymodel import build_blocks
+
+    cw, ch = _cell_axes(ov)
+    lon_min, _, _, lat_max = ov.bounds
+
+    west = min(p[0] for p in scope_ring)
+    east = max(p[0] for p in scope_ring)
+    south = min(p[1] for p in scope_ring)
+    north = max(p[1] for p in scope_ring)
+
+    c0 = max(0, int((west - lon_min) / cw))
+    c1 = min(ov.cols - 1, int((east - lon_min) / cw))
+    r0 = max(0, int((lat_max - north) / ch))
+    r1 = min(ov.rows - 1, int((lat_max - south) / ch))
+    if r1 < r0 or c1 < c0:
+        return []
+
+    paved = ov.class_mask("paved")
+    # A FULL-grid mask, not a slice of one. build_blocks() derives each block's
+    # coordinates from the grid origin it is handed, so passing a slice makes it
+    # place every block at the slice's row/column offset from the study-area
+    # origin -- plausible-looking geometry in the wrong half of the map.
+    free = np.ones_like(paved)
+    free[:r0, :] = False
+    free[r1 + 1:, :] = False
+    free[:, :c0] = False
+    free[:, c1 + 1:] = False
+    in_scope = paved & free
+    if not in_scope.any():
+        return []
+
+    occupied = _occupied_mask(ov)
+    candidates: list[dict[str, Any]] = []
+    for label, mask in (
+        ("unbuilt paved land", in_scope & ~occupied),
+        ("paved land (existing envelopes excluded where possible)", in_scope),
+    ):
+        if not mask.any():
+            continue
+        # Same generator the city model uses, on a scope-masked array, so the
+        # block definition -- pitch, minimum size, built-up threshold -- is
+        # literally the same code and cannot drift from what is on screen.
+        candidates = build_blocks(mask, cw, ch, lon_min, lat_max, seed=7)
+        if candidates:
+            picked = _pick_placements(candidates, count, label, scope_ring)
+            if picked:
+                return picked
+
+    return []
+
+
+def _clip_to_scope(ring: list[list[float]], scope: list[list[float]]) -> list[list[float]] | None:
+    """Intersect a generated footprint with the scope it was generated in.
+
+    A candidate block only has to be *mostly* built up, so one sitting near a
+    scope edge can overhang it by up to a block width -- 30 m of tower standing
+    outside the region the request named. Clipping to the intersection keeps the
+    promise the scope makes.
+
+    Both shapes are axis-aligned rectangles by construction (`_fraction_ring` and
+    `extent_ring` both emit one), so the intersection is a rectangle and this is
+    arithmetic. A genuinely irregular scope would need Sutherland-Hodgman here,
+    and the assumption is stated rather than assumed silently.
+    """
+    w = max(min(p[0] for p in scope), min(p[0] for p in ring))
+    e = min(max(p[0] for p in scope), max(p[0] for p in ring))
+    s = max(min(p[1] for p in scope), min(p[1] for p in ring))
+    n = min(max(p[1] for p in scope), max(p[1] for p in ring))
+    if e - w <= 1e-9 or n - s <= 1e-9:
+        return None
+    r = lambda v: round(v, 7)  # noqa: E731
+    w, e, s, n = r(w), r(e), r(s), r(n)
+    return [[w, s], [e, s], [e, n], [w, n], [w, s]]
+
+
+def _pick_placements(candidates: list[dict[str, Any]], count: int, basis: str,
+                     scope: list[list[float]]) -> list[dict[str, Any]]:
+    """Choose `count` candidate blocks, spread across the scope.
+
+    Evenly spaced through the generator's row-major output rather than the first
+    N: `build_blocks` walks the grid south to north, so taking a prefix would put
+    every new tower in one corner of the region the model asked about.
+    """
+    count = min(int(count), MAX_PLACEMENTS, len(candidates))
+    if count <= 0:
+        return []
+    step = len(candidates) / count
+    out: list[dict[str, Any]] = []
+    for i in range(count):
+        block = candidates[int(i * step)]
+        ring = _clip_to_scope(block["geometry"]["coordinates"][0], scope)
+        if ring is None:
+            continue
+        out.append({
+            "id": f"ai-bldg-{len(out):02d}",
+            "ring": ring,
+            "storeys": block["properties"].get("storeys"),
+            "landClass": "paved (ESA WorldCover)",
+            "basis": basis,
+            "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        })
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Providers
 # --------------------------------------------------------------------------- #
+
+
+def _pick(edit: dict[str, Any], *keys: str) -> Any:
+    """First present key. The tool schema is snake_case (JSON Schema for a model)
+    and the heuristic parser is camelCase, and both reach this function."""
+    for key in keys:
+        if edit.get(key) is not None:
+            return edit[key]
+    return None
 
 
 def _massing_feature(edit: dict[str, Any], grounding: Grounding,
@@ -279,77 +667,165 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
                      rationale: str) -> dict[str, Any] | None:
     """Turn a `modify_massing` op into a feature carrying REAL geometry.
 
-    The geometry is the study-area extent for `scale_all` / `reset`, or the
-    chosen site's polygon for `set_site`. It exists so the feature is a valid
-    GeoJSON polygon that can be listed, selected and highlighted -- but it draws
-    no block, and it is not a building. `opacity: 0` keeps it from painting.
+    The feature's own geometry is the **resolved scope** -- the area the edit
+    actually affects -- so the record states what was changed rather than always
+    claiming the whole study area. It draws no block (`opacity: 0`); it exists so
+    the feature is a valid, listable GeoJSON polygon.
 
-    An unknown op, a non-numeric multiplier, or a site id that was never offered
-    returns None rather than a plausible-looking default.
+    An unknown op, an unrecognised scope, a non-numeric multiplier or a site id
+    that was never offered returns None rather than a plausible-looking default.
     """
-    op = str(edit.get("op", ""))
-    if op not in ("scale_all", "set_site", "reset"):
+    op = str(_pick(edit, "op") or "")
+    if op not in ("scale_all", "set_site", "reset", "rotate", "place", "move"):
         return None
 
-    geometry = None
-    site_id = edit.get("site_id")
-    if op == "set_site":
-        pool_name, _, index = str(site_id or "").partition("#")
-        pool = POOL_FOR_KIND.get(pool_name, "")
-        sites = getattr(grounding, pool, []) if pool else []
-        if not index.isdigit() or int(index) >= len(sites):
-            return None
-        site = sites[int(index)]
-        geometry = site["geometry"]
-        basis = f"existing massing at {site_id} ({site['evidence']})"
-    else:
-        # The whole study area. Real geometry, straight from the locked bbox.
-        lon_min, lat_min, lon_max, lat_max = grounding.bounds
-        r = lambda v: round(v, 7)  # noqa: E731
-        geometry = {"type": "Polygon", "coordinates": [[
-            [r(lon_min), r(lat_min)], [r(lon_max), r(lat_min)],
-            [r(lon_max), r(lat_max)], [r(lon_min), r(lat_max)],
-            [r(lon_min), r(lat_min)],
-        ]]}
-        basis = "existing procedural massing across the study area"
+    scope = resolve_scope(
+        _pick(edit, "scope", "region"), _pick(edit, "site_id", "siteId"), grounding,
+    )
+    if scope is None:
+        return None
 
-    multiplier = edit.get("multiplier")
-    height = edit.get("height_m")
+    params: dict[str, Any] = {
+        "op": op,
+        "scope": scope,
+        "siteId": scope["siteId"],
+        "basis": (
+            f"{scope['evidence']}"
+            if scope["kind"] == "site"
+            else f"existing procedural massing within {scope['label']}"
+        ),
+        "rationale": rationale,
+        "instruction": instruction,
+        "provider": provider,
+        "status": "draft_pending_human_review",
+    }
+
+    multiplier = _pick(edit, "multiplier")
+    height = _pick(edit, "height_m", "heightM")
+    delta = _pick(edit, "delta_m", "deltaM")
+    degrees = _pick(edit, "degrees", "degrees_cw")
+    count = _pick(edit, "count")
+    dx = _pick(edit, "dx_m", "dxM")
+    dy = _pick(edit, "dy_m", "dyM")
+    # A direction word outranks the model's own trigonometry.
+    #
+    # `qwen2.5:3b-instruct` asked to move blocks "40 m north" returned
+    # `dx_m: 40, dy_m: 0` -- north and east transposed, a plausible pair of
+    # numbers and completely the wrong direction. Copying the word out of the
+    # instruction cannot transpose an axis; doing the conversion can. So when a
+    # direction is named it wins, and dx/dy are only the fallback.
+    direction = str(edit.get("direction") or "").strip().lower().replace("-", " ")
+    if direction in DIRECTIONS:
+        distance = _pick(edit, "distance_m", "distanceM")
+        if distance is None and (dx or dy):
+            try:
+                distance = math.hypot(float(dx), float(dy))
+            except (TypeError, ValueError):
+                distance = None
+        try:
+            ux, uy = DIRECTIONS[direction]
+            metres = float(distance) if distance is not None else None
+        except (TypeError, ValueError):
+            return None
+        if metres is None or not 0.0 < abs(metres) <= 500.0:
+            return None
+        dx, dy = ux * metres, uy * metres
+
+    # Coerce first, range-check per operation *afterwards*.
+    #
+    # Validating every field for every op looks tidier and is wrong: a real model
+    # fills in the schema, so `move` arrived carrying `height_m: 0` -- a field that
+    # means nothing for a move -- and the shared 1..800 m check rejected the whole
+    # operation. The instruction was answered with nothing. Only the fields an op
+    # actually uses are allowed to invalidate it.
     try:
-        if multiplier is not None:
-            multiplier = float(multiplier)
-            if not 0.05 <= multiplier <= 8.0:
-                return None
-        if height is not None:
-            height = float(height)
-            if not 1.0 <= height <= 800.0:
-                return None
+        multiplier = float(multiplier) if multiplier is not None else None
+        height = float(height) if height is not None else None
+        delta = float(delta) if delta is not None else None
+        degrees = float(degrees) if degrees is not None else None
+        dx = float(dx) if dx is not None else None
+        dy = float(dy) if dy is not None else None
+        count = int(count) if count is not None else None
     except (TypeError, ValueError):
         return None
-    if op == "scale_all" and multiplier is None:
-        return None
-    if op == "set_site" and height is None:
-        return None
+
+    if op == "scale_all":
+        if multiplier is None or not 0.05 <= multiplier <= 8.0:
+            return None
+    elif op == "set_site":
+        # Exactly one of an absolute height and a delta. Neither means the model
+        # did not say; both means it contradicted itself.
+        if (height is None) == (delta is None):
+            return None
+        if height is not None and not 1.0 <= height <= 800.0:
+            return None
+        if delta is not None and not -400.0 <= delta <= 400.0:
+            return None
+    elif op == "rotate":
+        if degrees is None or not -180.0 <= degrees <= 180.0:
+            return None
+    elif op == "move":
+        for axis in (dx, dy):
+            if axis is not None and not -500.0 <= axis <= 500.0:
+                return None
+        if not dx and not dy:
+            # A move of zero metres is a no-op, and returning it would report an
+            # edit that did nothing.
+            return None
+
+    placements: list[dict[str, Any]] = []
+    params["multiplier"] = multiplier
+    params["heightM"] = height
+    params["deltaM"] = delta
+    params["degrees"] = degrees
+    params["dxM"] = dx
+    params["dyM"] = dy
+
+    if op == "place":
+        # A placed block's height is the instruction's height, defaulting to a
+        # stated 45 m -- and it has to be written *after* the generic assignment
+        # above, or a `place` with no stated height records None and the panel
+        # reports a tower of no height at all.
+        height_m = height if height is not None else DEFAULT_PLACEMENT_HEIGHT_M
+        if not 6.0 <= height_m <= 400.0:
+            return None
+        placements = placement_footprints(scope["ring"], count or 2, grounding)
+        if not placements:
+            # No built-up land in scope. Saying so beats placing a tower in a
+            # field, and beats returning a feature that would render nothing.
+            return None
+        for block in placements:
+            block["heightM"] = round(float(height_m), 1)
+        params["count"] = len(placements)
+        params["requestedCount"] = int(count or 2)
+        params["heightM"] = round(float(height_m), 1)
+        params["basis"] = (
+            f"new massing on {placements[0]['basis']} within {scope['label']}"
+        )
+        params["note"] = (
+            "Adds real, editable footprints on land the analysis classifies as "
+            "built up. Footprints are generated from ESA WorldCover, not surveyed; "
+            "the height is as instructed."
+        )
+
+    if placements:
+        params["placements"] = placements
+    # Carried for provenance: the deterministic parser says which readings were
+    # defaults, so a demo cannot present a guess as something that was asked for.
+    for flag in ("countDefaulted", "heightDefaulted", "angleDefaulted"):
+        if edit.get(flag):
+            params[flag] = True
+    if op != "place":
+        params["note"] = (
+            "Annotates the existing procedural massing. Adds no building and "
+            "returns no coordinate."
+        )
 
     return {
-        "geometry": geometry,
+        "geometry": {"type": "Polygon", "coordinates": [scope["ring"]]},
         "intervention_type": "massing_height",
         "source": "ai",
-        "params": {
-            "op": op,
-            "multiplier": multiplier,
-            "heightM": height,
-            "siteId": site_id,
-            "basis": basis,
-            "rationale": rationale,
-            "instruction": instruction,
-            "provider": provider,
-            "status": "draft_pending_human_review",
-            "note": (
-                "Annotates the existing procedural massing. Adds no building and "
-                "returns no coordinate."
-            ),
-        },
+        "params": params,
         "style": dict(MASSING_STYLE),
     }
 
@@ -441,9 +917,19 @@ def parse_intent(instruction: str) -> list[tuple[str, int]]:
     return found
 
 
-# Massing phrasings, and what each implies. Checked before the intervention
-# vocabulary, because "make the district 25% taller" contains no intervention
-# noun at all and would otherwise fall through to "nothing recognised".
+# --------------------------------------------------------------------------- #
+# Massing phrasings -> operations
+# --------------------------------------------------------------------------- #
+#
+# Checked before the intervention vocabulary, because "make the district 25%
+# taller" contains no intervention noun at all and would otherwise fall through
+# to "nothing recognised".
+#
+# Several patterns can match one sentence -- "add three 60 m towers and make the
+# rest 20% shorter" is two operations -- so this returns a *list*, and the
+# operations apply in the order they are found. `reset` is the exception: it
+# supersedes everything, because "go back to the original heights" cannot also
+# mean "and then scale by 1.25".
 MASSING_PATTERNS: tuple[tuple[str, str, float | None], ...] = (
     (r"reset\s+(the\s+)?(building\s+)?heights?", "reset", None),
     (r"\b(?:original|default|base)\s+heights?\b", "reset", None),
@@ -455,14 +941,80 @@ MASSING_PATTERNS: tuple[tuple[str, str, float | None], ...] = (
     (r"\b(shorter|lower|less\s+dense)\b", "scale_all", 0.8),
 )
 
+ROTATE_VERB = r"\b(rotate|rotating|rotated|turn|twist|reorient|reorienting|re-?align)"
+ANGLE_RE = re.compile(r"(\d{1,3})\s*(?:deg|degree|degrees|\u00b0)")
+
+# A placement noun must be accompanied by a verb that *creates* something.
+# Without the verb requirement, "make the buildings 25% taller" would also read
+# as "place 2 buildings", which is how one sentence produced two operations that
+# contradicted each other. Note that bare "block" is not a noun here: "the
+# largest open blocks" is site-selection language, not a request for towers.
+PLACE_NOUN_RE = re.compile(
+    r"\b(towers?|high-?rises?|highrises?|skyscrapers?|residential|housing|"
+    r"apartments?|flats?|buildings?|podiums?|schools?|hospitals?)\b"
+)
+PLACE_VERB_RE = re.compile(
+    r"\b(add|place|build|put|insert|create|introduce|propose|erect|develop|deploy)\b"
+)
+STOREYS_RE = re.compile(r"(\d{1,2})\s*(?:storey|storeys|story|stories|floors?)\b")
+METRES_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:m\b|metres?\b|meters?\b)")
+COUNT_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "a ": 1, "an ": 1, "several": 3, "some": 2,
+}
+
+# A move is expressed as an offset in metres, never as an angle: "30 m north"
+# has to become the same number whatever the block's orientation, and a compass
+# bearing invites a model to invent one. Direction words map to a unit vector.
+DIRECTIONS: dict[str, tuple[float, float]] = {
+    "north": (0.0, 1.0), "south": (0.0, -1.0),
+    "east": (1.0, 0.0), "west": (-1.0, 0.0),
+    "north-east": (0.7071, 0.7071), "north-west": (-0.7071, 0.7071),
+    "south-east": (0.7071, -0.7071), "south-west": (-0.7071, -0.7071),
+}
+MOVE_VERB = r"\b(move|shift|slide|translate|nudge|displace|relocate)"
+
+
+def _count_before(text: str, end: int) -> int | None:
+    """A count in the ~24 characters before a noun, or None.
+
+    Measurements are stripped first. "add three 60 m residential towers" puts both
+    a count and a height in that window, and taking the last number returned 60
+    towers instead of 3 -- a silent absurdity rather than an error.
+    """
+    window = text[max(0, end - 24):end]
+    window = re.sub(
+        r"\d+(?:\.\d+)?\s*(?:m\b|metres?\b|meters?\b|storeys?\b|stories\b|floors?\b"
+        r"|%|deg\b|degrees?\b|\u00b0|x\b|\u00d7)",
+        " ",
+        window,
+    )
+    digits = re.findall(r"\b(\d{1,2})\b", window)
+    if digits:
+        return int(digits[-1])
+    return next((v for w, v in COUNT_WORDS.items() if w in window), None)
+
+
+def _height_in_metres(text: str) -> tuple[float | None, bool]:
+    """An absolute height, and whether it was stated or converted from storeys."""
+    storeys = STOREYS_RE.search(text)
+    if storeys:
+        return round(float(storeys.group(1)) * STOREY_M, 1), True
+    metres = METRES_RE.search(text)
+    if metres:
+        return float(metres.group(1)), False
+    return None, False
+
 
 def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
     """Extract massing operations from an instruction.
 
     Deterministic and inspectable, like `parse_intent`. Returns ops in the shape
-    `_massing_feature` expects, so both providers converge on one materialiser.
+    `_massing_feature` expects, so both providers converge on one materialiser,
+    and it is the **no-key baseline**: if the deterministic parser cannot do
+    something, then a demo without credentials silently loses a capability.
 
-    Two things this gets right that the first version did not:
+    Three things this gets right that the first version did not:
 
     - **"25% taller" is 1.25, not 25.** A bare capture of the digits is wrong by
       two orders of magnitude, and because `_massing_feature` accepts any
@@ -471,20 +1023,114 @@ def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
       sentence. Percentages are now converted relative to 1.0.
     - **"20% shorter" is 0.8, not 1.2.** Shorter and taller are both relative to
       the current height, so a reduction is ``1 - pct/100``.
+    - **"the western blocks" is a scope, not a modifier.** Previously the region
+      word was simply dropped and the op came back as a global ``scale_all`` --
+      the request was answered with a different, plausible-looking edit. Every op
+      now carries the region it was scoped to.
     """
-    text = instruction.lower()
+    # Hyphens are flattened to spaces for the whole parse. "12-storey housing"
+    # and "north-west" are the two phrasings that need it, and both fail in a
+    # quietly wrong direction without it: the first reads as "12 towers", the
+    # second as "the west".
+    text = instruction.lower().replace("-", " ")
     ops: list[dict[str, Any]] = []
+    scope = _match_region(text)
 
+    # --- reset: supersedes everything else in the sentence ------------------- #
+    for pattern, op, _default in MASSING_PATTERNS:
+        if op == "reset" and re.search(pattern, text):
+            return [{"op": "reset", "scope": scope}]
+
+    # --- rotate ------------------------------------------------------------- #
+    if re.search(ROTATE_VERB, text):
+        angle = ANGLE_RE.search(text)
+        quarter = re.search(r"\b(quarter|half)\s*(?:turn|rotation)\b", text)
+        if angle:
+            degrees = float(angle.group(1))
+        elif quarter:
+            degrees = 90.0 if "quarter" in quarter.group(1) else 180.0
+        else:
+            degrees = 15.0
+        if abs(degrees) <= 180.0:
+            ops.append({
+                "op": "rotate", "degrees": round(degrees, 2), "scope": scope,
+                # Recorded so a default is never presented as an instruction.
+                "angleDefaulted": angle is None and quarter is None,
+            })
+
+    # --- move: translate the footprints ------------------------------------- #
+    if re.search(MOVE_VERB, text):
+        amount = METRES_RE.search(text)
+        direction = next(
+            (d for d in DIRECTIONS
+             if re.search(rf"\b{re.escape(d)}\b", text)), None,
+        )
+        if amount and direction:
+            distance = float(amount.group(1))
+            ux, uy = DIRECTIONS[direction]
+            # A shift is a *request*, so it is clamped rather than rejected: a
+            # planner asking for a 3 km move has made an arithmetic slip, not a
+            # different question, and refusing to answer loses the sentence.
+            # 500 m is more than three street widths on a 30 m block pitch.
+            distance = max(-500.0, min(500.0, distance))
+            ops.append({
+                "op": "move",
+                "dxM": round(ux * distance, 2),
+                "dyM": round(uy * distance, 2),
+                "direction": direction,
+                "distanceM": distance,
+                "scope": scope,
+            })
+
+    # --- place: new massing -------------------------------------------------- #
+    noun = PLACE_NOUN_RE.search(text)
+    if noun and PLACE_VERB_RE.search(text):
+        count = _count_before(text, noun.start())
+        height, from_storeys = _height_in_metres(text)
+        ops.append({
+            "op": "place",
+            "count": count if count else 2,
+            "countDefaulted": count is None,
+            "heightM": height if height is not None else DEFAULT_PLACEMENT_HEIGHT_M,
+            "heightDefaulted": height is None,
+            "heightFromStoreys": from_storeys,
+            "scope": scope,
+        })
+
+    # --- set an absolute height, or a change by a number of metres ----------- #
+    # "30 m taller" is a delta and "60 m tall" is an absolute height. Reading the
+    # first as the second would set every building to 30 m, which is the kind of
+    # mistake a 3D view hides completely.
+    delta_match = re.search(
+        r"(\d{1,3}(?:\.\d+)?)\s*(?:m\b|metres?\b|meters?\b)[^.]{0,16}?"
+        r"\b(taller|higher|shorter|lower|more|less)\b",
+        text,
+    )
+    absolute, _ = _height_in_metres(text)
+    if delta_match:
+        amount = float(delta_match.group(1))
+        sign = -1.0 if re.search(r"shorter|lower|less", delta_match.group(2)) else 1.0
+        ops.append({"op": "set_site", "deltaM": sign * amount, "scope": scope})
+    elif absolute is not None and re.search(
+        r"\b(set|make|all|uniform|every|each)\b|\b\d+\s*m\s*(?:tall|high)\b", text
+    ):
+        ops.append({"op": "set_site", "heightM": absolute, "scope": scope})
+
+    # --- scale -------------------------------------------------------------- #
+    # A bare "taller"/"shorter" with no magnitude is only read as a 25% / 20%
+    # change when the sentence has not already stated one. Without this gate,
+    # "make the eastern blocks 30 m taller" produced BOTH a +30 m set and a
+    # x1.25 scale, and the second silently overwrote the first.
+    quantified = any(op["op"] == "set_site" for op in ops)
     for pattern, op, default in MASSING_PATTERNS:
+        if op != "scale_all":
+            continue
         match = re.search(pattern, text)
         if not match:
             continue
-
-        if op == "reset":
-            ops.append({"op": "reset"})
-            break
-
         if default is not None:
+            if quantified:
+                break
             multiplier = default
         else:
             try:
@@ -504,8 +1150,10 @@ def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
                 multiplier = 1.0 / magnitude if magnitude > 1.0 else magnitude
             else:
                 multiplier = magnitude
-        ops.append({"op": op, "multiplier": round(float(multiplier), 4)})
+        ops.append({"op": "scale_all", "multiplier": round(float(multiplier), 4),
+                    "scope": scope})
         break
+
     return ops
 
 
@@ -594,10 +1242,14 @@ CHOOSE_TOOL = {
 MASSING_TOOL = {
     "name": "modify_massing",
     "description": (
-        "Scale, set or reset the height of the EXISTING 3D massing model. Use "
-        "this only when the instruction is about building height, density or "
-        "massing. It never returns geometry and never invents buildings -- it "
-        "adjusts a scalar on envelopes that already exist."
+        "Place new massing, or modify the height/orientation of the EXISTING 3D "
+        "massing model. Use this whenever the instruction is about buildings: "
+        "height, a height multiplier, density, orientation, or adding new blocks. "
+        "It never returns geometry and never invents buildings -- 'place' adds "
+        "real footprints that the system derives from the land cover, and the "
+        "other operations adjust entities that already exist. Always set 'scope' "
+        "so the edit lands where the instruction says, or 'site_id' when the "
+        "instruction points at one of the listed candidate sites."
     ),
     "input_schema": {
         "type": "object",
@@ -609,15 +1261,83 @@ MASSING_TOOL = {
                     "properties": {
                         "op": {
                             "type": "string",
-                            "enum": ["scale_all", "set_site", "reset"],
+                            "enum": ["scale_all", "set_site", "rotate", "place",
+                                     "move", "reset"],
+                            "description": (
+                                "scale_all: multiply heights. set_site: set or "
+                                "shift heights. rotate: turn the blocks. place: "
+                                "add new massing. move: translate the blocks. "
+                                "reset: restore generated heights and orientations."
+                            ),
+                        },
+                        "scope": {
+                            "type": "string",
+                            "enum": sorted(REGION_FRACTIONS),
+                            "description": (
+                                "Which part of the study area the edit applies "
+                                "to. Use 'all' when the instruction does not name "
+                                "a part."
+                            ),
+                        },
+                        "site_id": {
+                            "type": "string",
+                            "description": (
+                                "A candidate site id, when the instruction points "
+                                "at one of the listed sites. Takes precedence "
+                                "over scope."
+                            ),
                         },
                         "multiplier": {
                             "type": "number", "minimum": 0.25, "maximum": 4.0,
+                            "description": "For scale_all. 1.25 means 25% taller.",
                         },
                         "height_m": {
                             "type": "number", "minimum": 1, "maximum": 400,
+                            "description": (
+                                "Absolute height in metres. For set_site and for "
+                                "the height of a placed block."
+                            ),
                         },
-                        "site_id": {"type": "string"},
+                        "delta_m": {
+                            "type": "number", "minimum": -200, "maximum": 200,
+                            "description": (
+                                "Change in metres rather than an absolute height. "
+                                "Use for '30 m taller'. Negative lowers."
+                            ),
+                        },
+                        "degrees": {
+                            "type": "number", "minimum": -180, "maximum": 180,
+                            "description": "Clockwise rotation for rotate.",
+                        },
+                        "count": {
+                            "type": "integer", "minimum": 1, "maximum": 12,
+                            "description": "How many new blocks for place.",
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["north", "south", "east", "west",
+                                     "north-east", "north-west", "south-east",
+                                     "south-west"],
+                            "description": (
+                                "Compass direction for move. Prefer this over "
+                                "dx_m/dy_m: copy the word from the instruction "
+                                "rather than converting it, because a "
+                                "transposed axis is a plausible-looking wrong "
+                                "answer. Requires distance_m."
+                            ),
+                        },
+                        "distance_m": {
+                            "type": "number", "minimum": 1, "maximum": 500,
+                            "description": "How far to move, in metres.",
+                        },
+                        "dx_m": {
+                            "type": "number", "minimum": -500, "maximum": 500,
+                            "description": "East-positive offset in metres.",
+                        },
+                        "dy_m": {
+                            "type": "number", "minimum": -500, "maximum": 500,
+                            "description": "North-positive offset in metres.",
+                        },
                     },
                     "required": ["op"],
                 },
@@ -634,7 +1354,10 @@ MASSING_SAFETY_NOTE = (
     "no coordinate, so it is safe under the same principle that makes site "
     "selection safe: the model chooses an operation and a scope, never "
     "geometry. 'Make the district 25% taller' is not a generation problem at all "
-    "-- it is a parameter, and a parameter cannot be an invented coordinate."
+    "-- it is a parameter, and a parameter cannot be an invented coordinate. "
+    "Placement is the one operation that creates geometry, and the geometry is "
+    "generated by the system from the land cover and the named scope; the model "
+    "supplies only a count, a height and which part of the area to use."
 )
 
 MASSING_STYLE = {"color": "#ff8f3f", "opacity": 0.0}
@@ -660,9 +1383,13 @@ def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict
         "site you choose must be defensible from the evidence given. If no site "
         "is appropriate, return an empty selection list rather than forcing one. "
         "Call select_intervention_sites for interventions. Call modify_massing "
-        "ONLY when the instruction concerns building height, a height "
-        "multiplier, density, or resetting heights. Never return a coordinate "
-        "from either tool."
+        "ONLY when the instruction concerns buildings: their height, a height "
+        "multiplier, density, orientation, or adding new blocks. Never return a "
+        "coordinate from either tool. "
+        "The study area can be divided by naming a scope when you call "
+        f"modify_massing -- one of {sorted(REGION_FRACTIONS)} -- so an "
+        "instruction about one part of the district is applied to that part only. "
+        "Omitting scope means the whole study area."
     )
     user = json.dumps({
         "instruction": instruction,
@@ -832,10 +1559,10 @@ class OpenAICompatProvider:
             "temperature": 0,
         }
         raw = self._transport(self._endpoint(), self.api_key, payload)
-        selections, edits, rationale = _parse_openai_tool_use(raw)
+        selections, edits, rationale = _parse_openai_tool_use(raw, forced)
 
         if not selections and not edits and STRUCTURED_FALLBACK and tools:
-            # No tool call came back. Re-ask with the schema enforced.
+            # No usable tool call came back. Re-ask with the schema enforced.
             schema_payload = {
                 **payload,
                 "tools": None,
@@ -862,8 +1589,16 @@ class OpenAICompatProvider:
                     except ValueError:
                         args = {}
                     if isinstance(args, dict):
-                        selections = list(args.get("selections", []) or [])
-                        edits = list(args.get("edits", []) or [])
+                        # Only the routed tool's key is read. Reading both is how
+                        # "add three 60 m towers in the east" once came back as
+                        # three water reservoirs: the massing schema was enforced,
+                        # the model filled in the *intervention* shape anyway, and
+                        # the parser believed it. A schema-constrained answer is
+                        # only trustworthy if it is read against the question.
+                        if forced == MASSING_TOOL["name"]:
+                            edits = _massing_edits(args)
+                        else:
+                            selections = _selections(args)
                         rationale = str(args.get("rationale", "") or "")
 
         return self._materialise(selections, edits, instruction, grounding, rationale)
@@ -919,8 +1654,37 @@ def _to_openai_tool(tool: dict) -> dict:
     }
 
 
-def _parse_openai_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
-    """Pull tool calls out of a chat/completions response."""
+def _massing_edits(args: dict) -> list[dict]:
+    """The edits in a `modify_massing` payload, tolerating a flattened answer.
+
+    The schema says ``{"edits": [ ... ]}`` and a large model complies. A small
+    local one reliably answers with the operation *itself* --
+    ``{"op": "place", "count": 3, "scope": "east"}`` -- dropping the one-element
+    array wrapper. Reading ``args["edits"]`` alone therefore found nothing and the
+    instruction produced zero features: a working model, a correct answer, and a
+    silent discard.
+    """
+    edits = args.get("edits")
+    if isinstance(edits, list) and edits:
+        return [e for e in edits if isinstance(e, dict)]
+    if isinstance(args.get("op"), str):
+        return [args]
+    return []
+
+
+def _selections(args: dict) -> list[dict]:
+    selections = args.get("selections")
+    return [s for s in selections if isinstance(s, dict)] if isinstance(selections, list) else []
+
+
+def _parse_openai_tool_use(raw: dict, forced: str = "") -> tuple[list[dict], list[dict], str]:
+    """Pull tool calls out of a chat/completions response.
+
+    `forced` is the tool :func:`route_tools` chose. When a response somehow
+    carries calls for both, only the routed one is read -- an earlier version
+    merged both lists, which meant a `place` instruction could also produce
+    interventions and vice versa.
+    """
     selections: list[dict] = []
     edits: list[dict] = []
     rationale = ""
@@ -931,15 +1695,18 @@ def _parse_openai_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
     for call in calls:
         fn = call.get("function") or {}
         name = fn.get("name", "")
+        if forced and name != forced:
+            continue
         try:
             args = json.loads(fn.get("arguments") or "{}")
         except (TypeError, ValueError):
             continue
-        if name == CHOOSE_TOOL["name"]:
-            selections.extend(args.get("selections", []) or [])
-        elif name == MASSING_TOOL["name"]:
-            edits.extend(args.get("edits", []) or [])
-            rationale = str(args.get("rationale", "") or "")
+        if not isinstance(args, dict):
+            continue
+        if name == CHOOSE_TOOL["name"] or name == MASSING_TOOL["name"]:
+            selections.extend(_selections(args))
+            edits.extend(_massing_edits(args))
+            rationale = str(args.get("rationale", "") or "") or rationale
         else:
             rationale = rationale or str(args.get("rationale", "") or "")
     return selections, edits, rationale
@@ -996,11 +1763,12 @@ def _parse_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
         if block.get("type") != "tool_use":
             continue
         payload = block.get("input", {}) or {}
-        if block.get("name") == CHOOSE_TOOL["name"]:
-            selections.extend(payload.get("selections", []) or [])
-        elif block.get("name") == MASSING_TOOL["name"]:
-            edits.extend(payload.get("edits", []) or [])
-            rationale = str(payload.get("rationale", "") or "")
+        if not isinstance(payload, dict):
+            continue
+        if block.get("name") in (CHOOSE_TOOL["name"], MASSING_TOOL["name"]):
+            selections.extend(_selections(payload))
+            edits.extend(_massing_edits(payload))
+            rationale = str(payload.get("rationale", "") or "") or rationale
         else:
             rationale = rationale or str(payload.get("rationale", "") or "")
     return selections, edits, rationale
