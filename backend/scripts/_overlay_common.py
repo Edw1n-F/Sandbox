@@ -46,16 +46,62 @@ HEAT_INDEX: dict[str, float] = {
 # SCS Curve Number by land class, hydrologic soil group D (conservative).
 # Source: USDA NRCS TR-55 tables. HSG D is assumed for HSK/HT and still needs
 # Lia's independent check -- docs/OCT6_STATUS.md 2.3.
+# ---------------------------------------------------------------------------
+# Curve Numbers, hydrologic soil group D
+#
+# Source: USDA NRCS, *Urban Hydrology for Small Watersheds* (TR-55), Table 2-2.
+# Each value below cites its row. This table was WRONG until 8 Oct 2026 and the
+# correction is worth stating plainly, because it moved the headline numbers:
+#
+#   green: 68 -> 80    68 is the HSG **A** "open space poor" figure. HSG D's
+#                      vegetated rows are 80 (open space good), 78 (meadow) and
+#                      77 (woods good). The old value understated runoff on
+#                      vegetated land by 12 CN points, and the old comment
+#                      claimed it was the "good condition" row while citing a
+#                      number that is good-condition in a *different* soil group.
+#   bare:  86 -> 94    86 matches no TR-55 row. "Fallow, bare soil" is 94.
+#   paved: 96 -> 98    "Paved parking, roofs, driveways, streets" is 98 for
+#                      every soil group.
+#
+# The old values looked reasonable, which is exactly why nothing caught them.
+# `tests/test_constants.py` now pins each one against its cited row.
+# ---------------------------------------------------------------------------
+
+CN_SOURCE = "USDA NRCS TR-55 (Urban Hydrology for Small Watersheds), Table 2-2"
+
+CN_CITATIONS: dict[str, str] = {
+    "paved": "TR-55 Table 2-2, 'Paved parking, roofs, driveways, streets' = 98 (all HSG)",
+    "bare": "TR-55 Table 2-2, 'Fallow, bare soil' = 94 (HSG D)",
+    "green": (
+        "TR-55 Table 2-2, 'Open space, good (>75% grass)' = 80 (HSG D). The ESA "
+        "class aggregates tree/shrub/grassland; woods good is 77 and meadow is 78, "
+        "so 80 is the conservative end of the vegetated range."
+    ),
+    "wetland": (
+        "No TR-55 row exists for wetland. Retained for transparency only: this "
+        "class contributes ZERO generation (see COUNTED_AS and ADR-015), so its "
+        "CN is never used. Wetland is modelled as storage, not as a source."
+    ),
+    "water": "Open water; everything falls as runoff. ~100, the conventional maximum.",
+}
+
 CURVE_NUMBER_HSG_D: dict[str, float] = {
-    "paved": 96.0,
-    "bare": 86.0,
-    "green": 68.0,  # "good condition" row; poor condition would be ~79
-    "wetland": 90.0,
-    "water": 100.0,  # open water: everything falls as runoff
+    "paved": 98.0,
+    "bare": 94.0,
+    "green": 80.0,
+    "wetland": 90.0,  # unused; see CN_CITATIONS
+    "water": 100.0,
 }
 
 # Water and wetland are excluded from the *generation* term and counted in the
 # *retention* term instead, so a pond is never counted twice (ADR-015).
+#
+# This was declared but not implemented until 8 Oct 2026: `compute()` zeroed only
+# the *water* class, so wetland generated runoff at CN 90 **and** received a
+# 0.60 m retention allowance. That is the double count ADR-015 exists to
+# prevent -- roughly 2x on the wetland contribution. `make_wetgrid.py` now zeros
+# every class listed here as retention, and a test asserts the declaration and the
+# implementation agree.
 COUNTED_AS: dict[str, str] = {
     "paved": "generation",
     "bare": "generation",

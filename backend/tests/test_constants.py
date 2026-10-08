@@ -66,8 +66,19 @@ def test_retention_is_never_negative() -> None:
 
 
 def test_curve_number_ordering_is_physical() -> None:
-    """Impervious surfaces shed more water than vegetated ones."""
-    order = [CURVE_NUMBER_HSG_D[n] for n in ("water", "paved", "wetland", "bare", "green")]
+    """Impervious surfaces shed more water than vegetated ones.
+
+    Only classes that actually generate runoff are checked. Wetland's CN is
+    recorded for transparency but is never used -- it is zeroed in generation
+    because it is modelled as storage (ADR-015), so including it here would
+    assert an ordering that does not govern anything.
+    """
+    from _overlay_common import COUNTED_AS
+
+    generating = [n for n in ("paved", "bare", "green")
+                  if COUNTED_AS.get(n) == "generation"]
+    assert set(generating) == {"paved", "bare", "green"}, generating
+    order = [CURVE_NUMBER_HSG_D[n] for n in ("water",) + tuple(generating)]
     assert order == sorted(order, reverse=True), f"CN ordering is wrong: {order}"
 
 
@@ -349,6 +360,104 @@ def test_dem_height_range_is_physically_plausible() -> None:
     assert 50.0 <= dem.max() <= 1000.0, f"DEM max {dem.max()} m is implausible for HSK/HT"
     relief = float(dem.max() - dem.min())
     assert 20.0 < relief < 900.0, f"relief {relief:.0f} m is implausible for HSK/HT"
+
+
+def test_curve_numbers_match_their_cited_tr55_rows() -> None:
+    """Pin each CN to the TR-55 row it claims, so it cannot drift again.
+
+    These values were wrong until 8 Oct 2026 and nothing caught them, because
+    they looked plausible. `green` was 68 -- the HSG **A** open-space-poor figure
+    -- while the model assumed HSG D throughout, understating runoff on vegetated
+    land by 12 CN points. A test per class is the only thing that stops a
+    plausible number from being quietly wrong.
+    """
+    from _overlay_common import CN_CITATIONS, CN_SOURCE, CURVE_NUMBER_HSG_D
+
+    tr55_hsg_d = {
+        # cover: HSG D value, from USDA NRCS TR-55 Table 2-2
+        "paved": 98.0,   # paved parking / roofs / driveways / streets, all HSG
+        "bare": 94.0,    # fallow, bare soil
+        "green": 80.0,   # open space, good (>75% grass)
+    }
+    for name, expected in tr55_hsg_d.items():
+        assert CURVE_NUMBER_HSG_D[name] == expected, (
+            f"CN {name} is {CURVE_NUMBER_HSG_D[name]}, TR-55 HSG D says {expected}"
+        )
+
+    # The specific regression: 68 is an HSG A value and must never be the
+    # vegetated row of an HSG D model.
+    assert CURVE_NUMBER_HSG_D["green"] != 68.0, "68 is HSG A open-space-poor"
+
+    assert all(name in CN_CITATIONS and CN_CITATIONS[name].strip()
+               for name in CURVE_NUMBER_HSG_D), "a class has no citation"
+    assert "TR-55" in CN_SOURCE, CN_SOURCE
+
+    # Wetland's CN is recorded but never used; say so rather than let a reader
+    # assume it contributes.
+    assert "never used" in CN_CITATIONS["wetland"], (
+        "the wetland citation must state that its CN is unused"
+    )
+
+
+def test_no_class_is_counted_as_both_generation_and_retention() -> None:
+    """ADR-015, and the wetland double-count that violated it.
+
+    `COUNTED_AS` declared wetland a retention class, but `compute()` zeroed only
+    the *water* class. Wetland therefore generated runoff at CN 90 *and* drew a
+    0.60 m storage allowance -- roughly a 2x error on the wetland contribution,
+    and precisely the quiet failure ADR-015 was written to prevent.
+
+    This runs the real computation and asserts a retention class emits no
+    generation at all, rather than checking the declaration against itself.
+    """
+    import sys as _sys
+
+    for extra in (BACKEND_DIR / "scripts",):
+        if str(extra) not in _sys.path:
+            _sys.path.insert(0, str(extra))
+    from _overlay_common import COUNTED_AS, LAND_CLASSES
+    from make_wetgrid import compute
+
+    assert set(COUNTED_AS) == set(LAND_CLASSES), (
+        f"unclassified: {set(LAND_CLASSES) - set(COUNTED_AS)}"
+    )
+
+    result = compute(450.0, 5.0)
+    ov = result["overlay"]
+    runoff = result["runoff_m"]
+    for name, side in COUNTED_AS.items():
+        if side != "retention":
+            continue
+        mask = ov.class_mask(name)
+        if not mask.any():
+            continue
+        peak = float(runoff[mask].max())
+        assert peak == 0.0, (
+            f"retention class {name!r} generates {peak:.4f} m of runoff -- "
+            f"it is counted in both terms"
+        )
+
+
+def test_cn_scaling_is_monotonic_and_clamped() -> None:
+    """The sensitivity pass must move the answer in one direction only, and a
+    scaled CN must never imply more than 100% runoff."""
+    import sys as _sys
+
+    for extra in (BACKEND_DIR / "scripts",):
+        if str(extra) not in _sys.path:
+            _sys.path.insert(0, str(extra))
+    from make_wetgrid import compute
+
+    previous = -1.0
+    for scale in (0.8, 1.0, 1.2):
+        r = compute(450.0, 5.0, cn_scale=scale)
+        total = float(r["runoff_m"].sum() * r["overlay"].cell_area_m2())
+        assert total > previous, f"runoff not monotonic at CN scale {scale:.0%}"
+        previous = total
+
+    extreme = compute(450.0, 5.0, cn_scale=50.0)
+    depth = float(extreme["runoff_m"].max())
+    assert depth <= 0.4501, f"runoff depth {depth:.3f} m exceeds the 450 mm rainfall"
 
 
 def _run() -> int:

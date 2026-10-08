@@ -1,0 +1,53 @@
+{
+  "id": "749d2050-9249-4666-a89c-f35d6d7c0e24",
+  "plan_id": "58886935-0d66-45d7-a7a9-640ab9adc997",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.982,
+          22.425
+        ],
+        [
+          114.005,
+          22.425
+        ],
+        [
+          114.005,
+          22.455
+        ],
+        [
+          113.982,
+          22.455
+        ],
+        [
+          113.982,
+          22.425
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "massing_height",
+  "source": "ai",
+  "params": {
+    "op": "scale_all",
+    "multiplier": 0.8,
+    "heightM": null,
+    "siteId": null,
+    "basis": "existing procedural massing across the study area",
+    "rationale": "",
+    "instruction": "lower the buildings by 20%",
+    "provider": "openai-compatible",
+    "status": "draft_pending_human_review",
+    "note": "Annotates the existing procedural massing. Adds no building and returns no coordinate."
+  },
+  "style": {
+    "color": "#ff8f3f",
+    "opacity": 0.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-08T11:20:54Z",
+  "updated_at": "2026-10-08T11:20:54Z"
+}

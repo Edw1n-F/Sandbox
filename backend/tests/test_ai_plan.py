@@ -29,6 +29,7 @@ from app.services.ai_plan import (  # noqa: E402
     PlanGenerationError,
     _post_json,
     build_prompt,
+    route_tools,
     get_provider,
     load_grounding,
     parse_intent,
@@ -129,10 +130,12 @@ def test_llm_choices_become_real_grounded_geometry() -> None:
     # intervention instruction are genuinely different intents. The compensation
     # is the system-prompt routing rule, asserted separately in
     # test_massing_tool_is_offered_alongside_the_site_tool.
-    check("both tools are offered",
-          [t["name"] for t in capture["payload"]["tools"]]
-          == [CHOOSE_TOOL["name"], MASSING_TOOL["name"]],
+    check("only the site tool is offered for an intervention instruction",
+          [t["name"] for t in capture["payload"]["tools"]] == [CHOOSE_TOOL["name"]],
           str([t["name"] for t in capture["payload"]["tools"]]))
+    check("and it is forced",
+          capture["payload"]["tool_choice"] == {"type": "tool", "name": CHOOSE_TOOL["name"]},
+          json.dumps(capture["payload"]["tool_choice"]))
     check("marked source=ai", f["source"] == "ai", f["source"])
     check("geometry is the real site, not invented",
           f["geometry"] == g.reservoir_sites[0]["geometry"], "geometry differs")
@@ -176,14 +179,42 @@ def test_llm_without_a_key_refuses_rather_than_silently_degrading() -> None:
 
 
 def test_auto_provider_falls_back_and_says_so() -> None:
-    check("auto picks the heuristic with no key",
-          isinstance(get_provider("auto"), HeuristicProvider),
-          type(get_provider("auto")).__name__)
+    """`auto` falls back only when nothing is configured.
+
+    An earlier version of this test read the ambient settings, so it began
+    failing the moment a local Ollama was configured -- which is the point of the
+    feature, not a regression. It now controls the configuration it depends on,
+    by patching the settings the providers actually read.
+    """
+    from app.config import settings
+    from app.services.ai_plan import get_provider, live_providers
+
+    saved = (settings.anthropic_api_key, settings.llm_base_url, settings.llm_model)
     try:
-        get_provider("llm")
-        check("explicit llm without a key raises", False, "no error")
-    except PlanGenerationError:
-        check("explicit llm without a key raises", True)
+        settings.anthropic_api_key = ""
+        settings.llm_base_url = ""
+        settings.llm_model = ""
+        check("nothing configured -> no live providers", live_providers() == [],
+              str([p.name for p in live_providers()]))
+        check("auto picks the heuristic when nothing is configured",
+              isinstance(get_provider("auto"), HeuristicProvider),
+              type(get_provider("auto")).__name__)
+        try:
+            get_provider("llm")
+            check("explicit llm with nothing configured raises", False, "no error")
+        except PlanGenerationError:
+            check("explicit llm with nothing configured raises", True)
+    finally:
+        (settings.anthropic_api_key, settings.llm_base_url,
+         settings.llm_model) = saved
+
+    # With something configured, auto must prefer it over the heuristic.
+    if live_providers():
+        check("auto prefers a configured provider over the heuristic",
+              not isinstance(get_provider("auto"), HeuristicProvider),
+              "fell back to the heuristic while a provider was configured")
+    else:
+        print("      (no provider configured; preference branch not exercised)")
 
 
 def test_vague_instruction_invents_nothing() -> None:
@@ -273,14 +304,11 @@ def test_massing_tool_is_offered_alongside_the_site_tool() -> None:
         [{"op": "reset"}], capture=capture))
     provider.propose("reset the heights", load_grounding())
     names = [t["name"] for t in capture["payload"]["tools"]]
-    check("both tools offered", names == ["select_intervention_sites", "modify_massing"],
-          str(names))
-    check("tool_choice is any", capture["payload"]["tool_choice"] == {"type": "any"},
+    check("only the massing tool is offered for a height instruction",
+          names == ["modify_massing"], str(names))
+    check("and it is forced",
+          capture["payload"]["tool_choice"] == {"type": "tool", "name": "modify_massing"},
           json.dumps(capture["payload"]["tool_choice"]))
-    system = capture["payload"]["system"]
-    check("system prompt disambiguates the two intents",
-          "modify_massing" in system and "height" in system.lower(),
-          "no routing rule in the system prompt")
 
 
 def test_massing_ops_are_validated_not_guessed() -> None:
@@ -486,6 +514,29 @@ def test_http_round_trip_against_a_spec_shaped_server() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_tool_routing_is_decided_in_code_not_by_the_model() -> None:
+    """The model is offered one tool, chosen deterministically.
+
+    Both tools used to be advertised with a permissive `tool_choice`, on the
+    reasoning that a system-prompt rule would be enough. A real model settled
+    it: asked "make the district 25% taller to reduce flood risk" with both
+    tools available, qwen2.5:3b-instruct returned no tool call at all and the
+    feature was lost silently. Offering one tool is a guarantee; a prompt rule
+    is a request.
+    """
+    for text, expected in (
+        ("make the district 25% taller", "modify_massing"),
+        ("lower the buildings by 20%", "modify_massing"),
+        ("reset the building heights", "modify_massing"),
+        ("add two water reservoirs", "select_intervention_sites"),
+        ("permeable paving please", "select_intervention_sites"),
+    ):
+        tools, forced = route_tools(text)
+        check(f"{text!r} -> {expected}",
+              forced == expected and [t["name"] for t in tools] == [expected],
+              f"got {[t['name'] for t in tools]}")
 
 
 def test_grounding_survives_a_hostile_response() -> None:

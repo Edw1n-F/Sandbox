@@ -41,6 +41,8 @@ from hydrology import condition as condition_dem  # noqa: E402
 from _overlay_common import (  # noqa: E402
     attach_to_scene,
     COUNTED_AS,
+    CN_CITATIONS,
+    CN_SOURCE,
     CURVE_NUMBER_HSG_D,
     LAND_CLASSES,
     load_overlay,
@@ -97,7 +99,15 @@ def _fill_to_volume(
     return depth, level
 
 
-def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True) -> dict:
+def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
+            cn_scale: float = 1.0) -> dict:
+    """One wet-grid run.
+
+    ``cn_scale`` multiplies every Curve Number. It exists for the sensitivity
+    pass, and it is the honest answer to "how much does this number depend on the
+    one assumption nobody has verified": rather than defending a single value,
+    the model reports the range the assumption implies.
+    """
     ov = load_overlay(resolution_m)
     cell_area = ov.cell_area_m2()
 
@@ -126,7 +136,9 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True) -> 
     # ---- 1. generation -----------------------------------------------------
     cn = np.zeros_like(ov.elevation)
     for name, value in CURVE_NUMBER_HSG_D.items():
-        cn[ov.class_mask(name)] = value
+        # clamp to 100: a scaled CN above the physical maximum would silently
+        # imply more than 100% runoff, which is not a thing.
+        cn[ov.class_mask(name)] = min(100.0, value * cn_scale)
 
     runoff_m = runoff_depth(rainfall_mm, cn)
 
@@ -137,7 +149,16 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True) -> 
 
     # A retention cell generates nothing: an existing pond's contribution is
     # already inside its storage term, so counting it again would double count.
-    runoff_m[ov.class_mask("water")] = 0.0
+    #
+    # This used to zero only `water`, while `COUNTED_AS` declared *both* water and
+    # wetland as retention. Wetland therefore generated runoff at CN 90 **and** drew
+    # a 0.60 m storage allowance -- the double count ADR-015 exists to prevent, and
+    # it was worth roughly 2x on the wetland contribution. Driving it off
+    # `COUNTED_AS` rather than a literal list means the declaration and the
+    # implementation cannot drift apart again.
+    for _name, _side in COUNTED_AS.items():
+        if _side == "retention":
+            runoff_m[ov.class_mask(_name)] = 0.0
 
     unstored_m = np.maximum(runoff_m - storage_m, 0.0)
 
@@ -154,6 +175,7 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True) -> 
 
     return {
         "overlay": ov,
+        "cn_scale": cn_scale,
         "raw_elevation": raw_elevation,
         "accumulation": accumulation,
         "cells_raised": cells_raised,
@@ -182,6 +204,40 @@ def to_rgba(depth_field: np.ndarray) -> np.ndarray:
     return np.dstack([red, green, blue, alpha])
 
 
+def _sensitivity(args) -> int:
+    """How far does the answer move if the Curve Number table is wrong?
+
+    The CN table is the single unverified assumption in the model, so the useful
+    output is not one number but the spread around it. Each row is a full
+    recomputation through the same `compute()` the real run uses, so this
+    measures the model and not a simplified proxy of it.
+    """
+    print(f"[wetgrid] CN sensitivity at {args.rainfall} mm rainfall")
+    print(f"[wetgrid] CN source: {CN_SOURCE}")
+    print()
+    print(f"  {'CN scale':>9} {'runoff m3':>14} {'unstored m3':>14} "
+          f"{'wet ha':>9} {'wet %':>7}")
+    rows = []
+    for scale in (0.8, 0.9, 1.0, 1.1, 1.2):
+        r = compute(args.rainfall, args.resolution,
+                    sink_fill=not args.no_sink_fill, cn_scale=scale)
+        ov = r["overlay"]
+        runoff = float(r["runoff_m"].sum() * ov.cell_area_m2())
+        rows.append((scale, runoff, r["volume_m3"], r["wet_area_ha"]))
+        print(f"  {scale:>8.0%} {runoff:>14,.0f} {r['volume_m3']:>14,.0f} "
+              f"{r['wet_area_ha']:>9,.1f} {100*r['wet_area_ha']/r['total_area_ha']:>6.1f}%")
+
+    low = min(r[1] for r in rows)
+    high = max(r[1] for r in rows)
+    base = next(r[1] for r in rows if r[0] == 1.0)
+    print()
+    print(f"[wetgrid] runoff range over CN +/-20%: {low:,.0f} .. {high:,.0f} m3")
+    print(f"[wetgrid] spread is {100*(high-low)/base:.1f}% of the central value")
+    print("[wetgrid] This range, not the single figure, is the honest answer to")
+    print("           'what if the Curve Number table is wrong?'")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rainfall", type=float, default=450.0, help="rainfall depth, mm")
@@ -190,10 +246,17 @@ def main() -> int:
         "--out", default=None, help="output PNG (default data/rasters/wetgrid_hsk.png)"
     )
     parser.add_argument(
+        "--sensitivity", action="store_true",
+        help="report how the result moves across a CN range, then exit",
+    )
+    parser.add_argument(
         "--no-sink-fill", action="store_true",
         help="skip Priority-Flood conditioning (shows how much it matters)",
     )
     args = parser.parse_args()
+
+    if args.sensitivity:
+        return _sensitivity(args)
 
     result = compute(args.rainfall, args.resolution,
                      sink_fill=not args.no_sink_fill)

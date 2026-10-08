@@ -13,7 +13,7 @@
     "note": "Implemented in scripts/hydrology.py. richdem and hydrotools are the standard open-source tools for this; both were installed and neither is usable on this host because richdem needs GDAL headers to build."
   },
   "landCoverSource": "esa-worldcover",
-  "warning": "Real 1 arc-second elevation (Open-Meteo / SRTM) and real ESA WorldCover land cover, but this is still a screening view: sinks are not conditioned, there is no flow routing, and it is not a flood prediction.",
+  "warning": "Real elevation and real ESA WorldCover land cover. The surface is Priority-Flood conditioned and D8 flow accumulation is computed and reported, but the runoff VOLUME is still allocated by solving for a water level rather than routed downhill cell by cell. It is a screening view, not a flood prediction.",
   "inputs": {
     "rainfall_mm": 450.0,
     "resolution_m": 5.0,
@@ -30,9 +30,9 @@
   "assumptions": {
     "hydrologicSoilGroup": "D",
     "curveNumberByClass": {
-      "paved": 96.0,
-      "bare": 86.0,
-      "green": 68.0,
+      "paved": 98.0,
+      "bare": 94.0,
+      "green": 80.0,
       "wetland": 90.0,
       "water": 100.0
     },
@@ -53,13 +53,13 @@
     "verticalDatum": "mPD"
   },
   "results": {
-    "runoffVolumeM3": 3171780.2,
-    "unstoredVolumeM3": 3015062.8,
-    "wetCells": 81418,
-    "wetAreaHa": 203.47,
+    "runoffVolumeM3": 3326897.7,
+    "unstoredVolumeM3": 3170180.3,
+    "wetCells": 83250,
+    "wetAreaHa": 208.05,
     "totalAreaHa": 786.55,
-    "wetAreaFraction": 0.2587,
-    "meanDepthInWetAreaM": 1.4818
+    "wetAreaFraction": 0.2645,
+    "meanDepthInWetAreaM": 1.5238
   },
   "render": {
     "minVisibleDepthM": 0.005,

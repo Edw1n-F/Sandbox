@@ -708,17 +708,16 @@ class LLMProvider:
             )
 
         system, user = build_prompt(instruction, grounding)
+        tools, forced = route_tools(instruction)
         payload = {
             "model": self.model,
             "max_tokens": 1500,
             "system": system,
             "messages": [{"role": "user", "content": user}],
-            "tools": [CHOOSE_TOOL, MASSING_TOOL],
-            # `any` rather than a forced tool, because the two intents are
-            # genuinely different and the system prompt disambiguates them. A
-            # test feeds both instruction classes and asserts the right tool
-            # comes back, so the weakening is measured rather than assumed.
-            "tool_choice": {"type": "any"},
+            "tools": tools,
+            # The tool is chosen in route_tools(), not by the model -- see the
+            # note there. Forcing it is what makes that guarantee real.
+            "tool_choice": {"type": "tool", "name": forced},
         }
         raw = self._transport(ANTHROPIC_URL, self.api_key, payload)
         selections, edits, rationale = _parse_tool_use(raw)
@@ -814,21 +813,59 @@ class OpenAICompatProvider:
             )
 
         system, user = build_prompt(instruction, grounding)
+        tools, forced = route_tools(instruction)
         payload = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "tools": [_to_openai_tool(CHOOSE_TOOL), _to_openai_tool(MASSING_TOOL)],
-            # The OpenAI shape forces a *named* function rather than "any", so
-            # routing is expressed the way this API allows: auto is the closest
-            # equivalent, and the system prompt carries the same routing rule.
-            "tool_choice": "auto",
+            "tools": [_to_openai_tool(t) for t in tools],
+            # Forced, not "auto". A small local model asked to choose between two
+            # tools returns no tool call at all, which loses the feature
+            # silently. route_tools() decides instead.
+            "tool_choice": {"type": "function", "function": {"name": forced}},
             "max_tokens": 1500,
+            # Greedy decoding. A small local model at default temperature gives a
+            # different answer for the same sentence, which is unacceptable for
+            # a demo: the plan a judge watches must be the plan you rehearsed.
+            "temperature": 0,
         }
         raw = self._transport(self._endpoint(), self.api_key, payload)
         selections, edits, rationale = _parse_openai_tool_use(raw)
+
+        if not selections and not edits and STRUCTURED_FALLBACK and tools:
+            # No tool call came back. Re-ask with the schema enforced.
+            schema_payload = {
+                **payload,
+                "tools": None,
+                "tool_choice": None,
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": tools[0]["name"],
+                        "schema": tools[0]["input_schema"],
+                    },
+                },
+                "temperature": 0,
+            }
+            try:
+                raw = self._transport(self._endpoint(), self.api_key, schema_payload)
+            except Exception:  # noqa: BLE001 - fall through to the empty result
+                raw = None
+            if raw:
+                content = ((raw.get("choices") or [{}])[0]
+                           .get("message", {}).get("content"))
+                if isinstance(content, str) and content.strip():
+                    try:
+                        args = json.loads(content)
+                    except ValueError:
+                        args = {}
+                    if isinstance(args, dict):
+                        selections = list(args.get("selections", []) or [])
+                        edits = list(args.get("edits", []) or [])
+                        rationale = str(args.get("rationale", "") or "")
+
         return self._materialise(selections, edits, instruction, grounding, rationale)
 
     def _materialise(self, selections: list[dict], edits: list[dict],
@@ -853,6 +890,21 @@ class OpenAICompatProvider:
             if feature:
                 out.append(feature)
         return out
+
+
+# Fallback for models whose tool-calling is unreliable.
+#
+# `qwen2.5:3b-instruct` returns NO tool call at all for the massing schema --
+# empty content, finish_reason "stop" -- so the feature is lost silently. Ollama
+# and the OpenAI-compatible API both accept a JSON *schema* instead
+# (`response_format: {"type": "json_schema"}`), which the same model satisfies
+# correctly and instantly. So: try native tools first, and if no tool call comes
+# back, ask for schema-constrained JSON and parse that.
+#
+# This does not weaken the grounding guarantee. It lives in `_massing_feature`
+# and `_materialise`, which validate identically either way -- a schema-
+# constrained answer still cannot invent a site id that gets used.
+STRUCTURED_FALLBACK = True
 
 
 def _to_openai_tool(tool: dict) -> dict:
@@ -891,6 +943,27 @@ def _parse_openai_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
         else:
             rationale = rationale or str(args.get("rationale", "") or "")
     return selections, edits, rationale
+
+
+def route_tools(instruction: str) -> tuple[list[dict], str]:
+    """Decide which tool the model is offered, in code rather than by prompt.
+
+    Both live providers originally advertised both tools with a permissive
+    ``tool_choice``, on the reasoning that a system-prompt rule would be enough.
+    A real model settled that argument: asked "make the district 25% taller to
+    reduce flood risk" with both tools available, ``qwen2.5:3b-instruct``
+    returned **no tool call at all** and the request produced zero features. The
+    same instruction through the heuristic produced a correct ``scale_all``.
+
+    A system-prompt instruction is a *request*. Offering one tool is a
+    *guarantee*. Since the two intents are separable by a deterministic phrase
+    check, the separation happens here and the model is never asked to route.
+    That is strictly safer than either a prompt rule or a permissive
+    ``tool_choice``, and it costs one regex.
+    """
+    if parse_massing_intent(instruction):
+        return [MASSING_TOOL], MASSING_TOOL["name"]
+    return [CHOOSE_TOOL], CHOOSE_TOOL["name"]
 
 
 def _post_json(url: str, api_key: str, payload: dict) -> dict:

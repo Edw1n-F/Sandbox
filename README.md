@@ -48,7 +48,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
-| **Generative AI** — natural language → grounded 3D interventions | Working; LLM path needs a key, deterministic fallback does not | 10 tests, incl. the LLM path via a recorded transport |
+| **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 18 tests, incl. a real-HTTP round trip |
 | **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded/reproducible; browser-verified edit |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
@@ -521,7 +521,8 @@ run. It will not produce geometry with nothing to site it on.
 
 | Provider | What it is | Credentials |
 |---|---|---|
-| `claude` | Anthropic Messages API, tool-use for structured selection | `ANTHROPIC_API_KEY` |
+| `claude` | Anthropic Messages API, forced tool-use | `ANTHROPIC_API_KEY` |
+| `openai-compatible` | Any `/chat/completions`: **Ollama** (live, local), OpenRouter, DeepSeek, Moonshot, DashScope, Groq, vLLM | none for Ollama |
 | `heuristic` | Deterministic intent parser — **not AI**, the baseline and the fallback | none |
 
 `auto` uses the LLM when a key is present and falls back otherwise, and the
@@ -544,12 +545,68 @@ output.
 The LLM path is exercised on every test run through an injected transport that
 replays a recorded response, so it is not untested code waiting for a key.
 
+### Running it live, with no key at all
+
+Ollama serves an OpenAI-compatible API, so a real model needs no vendor account:
+
+```bash
+# runtime (no Homebrew, no Docker)
+curl -L -o ollama.tgz https://github.com/ollama/ollama/releases/latest/download/ollama-darwin.tgz
+mkdir -p ~/.local/bin/lib/ollama && tar -xzf ollama.tgz -C ~/.local/bin/lib/ollama
+cp ~/.local/bin/lib/ollama/ollama ~/.local/bin/ollama && chmod +x ~/.local/bin/ollama
+ollama serve &
+
+ollama pull qwen2.5:3b-instruct        # ~1.9 GB
+```
+
+Then in `backend/.env`:
+
+```ini
+LLM_BASE_URL=http://localhost:11434/v1
+LLM_API_KEY=ollama
+LLM_MODEL=qwen2.5:3b-instruct
+```
+
+Check it, and make one real call:
+
+```bash
+python scripts/llm_probe.py --instruction "make the district 25% taller"
+curl -s localhost:8000/health | grep -A6 '"llm"'      # isAi: true
+```
+
+`llm_probe.py` never prints a key — only whether one is set and its length. It
+validates the configured model id against `GET /v1/models` rather than trusting a
+hard-coded string, so a rotated id is caught before the demo rather than during
+it.
+
+### Two things a small local model forced us to fix
+
+**The model must not choose the tool.** Both tools were originally advertised
+with a permissive `tool_choice`, on the reasoning that a system-prompt rule
+would be enough. `qwen2.5:3b-instruct` settled that: asked *"make the district
+25% taller to reduce flood risk"* with both tools available, it returned **no
+tool call at all** and the feature vanished silently. Offering one tool is a
+guarantee; a prompt rule is a request. Routing is now decided in code by
+`route_tools()`, and the model is never asked.
+
+**Tool-calling is not universal, structured output is.** The same model returns
+nothing at all for the massing schema. So the OpenAI-compatible provider falls
+back to JSON-schema-constrained output
+(`response_format: {"type": "json_schema"}`), which the same model satisfies
+instantly and correctly. The grounding guarantee is untouched either way,
+because it lives in `_materialise`, not in the tool plumbing.
+
+Decoding is pinned to `temperature: 0`. At default temperature the same sentence
+gave different answers on successive runs, and a demo must show the plan you
+rehearsed.
+
 ### Try it
 
 ```bash
 cd backend
 python scripts/ai_plan.py "add two water reservoirs and a green space" --dry-run
-python scripts/ai_plan.py "add two water reservoirs and a green space"
+python scripts/ai_plan.py "make the district 25% taller"
+python scripts/llm_probe.py
 ```
 
 **What it does not do:** it places *interventions* — reservoirs, green space,
