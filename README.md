@@ -48,14 +48,18 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
-| **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 18 tests, incl. a real-HTTP round trip |
-| **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded/reproducible; browser-verified edit |
+| **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 30 tests, incl. real-HTTP round trips |
+| **AI 3D placement** — new massing on real land cover | Working, screening-grade | 3 blocks × 60 m rendered, pixel-verified, selectable |
+| **AI 3D alteration, scoped** — height / density / orientation, by region or site | Working | 1,232 of 2,639 buildings for "western blocks"; west/east visible in the render |
+| **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded; click-to-select + per-building height, browser-verified |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
 
 **Not working / not built:** PostGIS + MinIO store, a physics engine, flow
-routing, a validated Curve Number table, Hato flood validation, AI modules. See
+routing, a validated Curve Number table, Hato flood validation, and the ability
+to *move* or *delete* an individual building — the AI can place blocks and change
+their height, density and orientation, not reposition them. See
 [Limitations](#limitations--what-this-is-not).
 
 ## Tech stack
@@ -94,9 +98,9 @@ paid or token-gated API. Each is documented with the reason in
 
 ## Running it locally
 
-> **This guide is tested, not aspirational.** Every step below was run against a
-> clean `git archive` export of the repository — a fresh clone with no `.env`, no
-> `node_modules` and no caches. `preflight.py` reported *Ready*, 24/24 tests
+> **This guide is tested, not aspirational.** Every step below was run against
+> a clean `git archive` export of the repository — a fresh clone with no `.env`,
+> no `node_modules` and no caches. `preflight.py` reported *Ready*, 59/59 tests
 > passed, and both overlays regenerated from the committed data. If a step here
 > breaks, that is a bug in the repo rather than a surprise for you.
 
@@ -298,7 +302,8 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 cd backend
 python scripts/preflight.py      # environment; exits non-zero if not runnable
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    # 13/13 — constants, DEM, raster/feature invariants
+python tests/test_constants.py    # 18/18 — constants, DEM, raster/feature invariants
+python tests/test_ai_plan.py      # 30/30 — grounding, scope, placement
 
 cd ../frontend
 npx tsc --noEmit                 # must be clean
@@ -350,7 +355,7 @@ database; the backend never knows what Cesium is.
 | Raster scripts | `backend/scripts/` | Fetch and analysis. Pure functions over arrays; they attach results to a scene at the end. |
 | API client | `frontend/src/api/` | One `fetch` wrapper, one module per resource, typed. |
 | Stores | `frontend/src/state/` | Zustand. `sceneStore` and `planStore` only. |
-| View | `frontend/src/view/` | Cesium. `SandboxViewer` owns the Viewer; `terrainLoader`, `demProvider` and `interventionLayer` are separate concerns. |
+| View | `frontend/src/view/` | Cesium. `SandboxViewer` owns the Viewer; `terrainLoader`, `demProvider`, `cityModel` and `interventionLayer` are separate concerns. |
 | Components | `frontend/src/components/` | Panel, layer switches, camera, sliders. No Cesium imports except `CameraController`. |
 
 ### API surface
@@ -609,15 +614,24 @@ python scripts/ai_plan.py "make the district 25% taller"
 python scripts/llm_probe.py
 ```
 
-**What it does not do:** it places *interventions* — reservoirs, green space,
-permeable paving, drainage. It does **not** generate buildings or modify building
-geometry; nothing in `技术文档` asks for that, and there is no massing model
-behind it. "Adjust the building angles" would need a real 3D city model, which
-this project does not have.
+**What it does not do:** it does not reason about flood hydraulics, and it does
+not design a district. It places *interventions* and it places and reshapes
+*buildings* — five operations, all grounded in the analysis. It cannot invent a
+footprint, and it cannot move a block.
+
+```bash
+cd backend
+python scripts/ai_plan.py "add three 60 m residential towers in the east"
+python scripts/ai_plan.py "make the western blocks 30% taller"
+python scripts/ai_plan.py "rotate the northern blocks 20 degrees"
+python scripts/ai_plan.py "add two water reservoirs and a green space"
+python scripts/llm_probe.py
+```
 
 ## 3D city model, and editing it
 
-The sandbox has a 2,639-building massing model that you can change directly.
+The sandbox has a 2,639-building massing model that you can change directly, and
+that the language model can change for you.
 
 **Where the geometry comes from — and what was tried first.** OSM building
 footprints were the first choice and are **unreachable from this host**. Overpass
@@ -641,17 +655,75 @@ entities are per-feature property bags, so a height edit is a property
 assignment: no rebuild, no re-upload, no regeneration. Changing the model is
 the point.
 
-**Editing, three ways:**
+**Editing by hand, three ways:**
 
 | Gesture | What it does |
 |---|---|
 | **+25% / −20% height** | Scales every building. The scenario question — "what if the district were taller?" |
 | **Click a building** | Selects it (highlighted), then type a height in metres |
-| **Reset** | Back to the generated heights |
+| **Reset** | Back to the generated heights, orientations and block count |
 
-Verified in a browser: mean height 35.3 m → 44.1 m on +25%, which is exactly
-×1.25. The generator is seeded, so the same command twice produces an identical
-file.
+Verified in a browser: mean height 35.3 m → 40.2 m for "western blocks 30%
+taller", which reaches 1,232 of 2,639 buildings — and in the render the western
+half is visibly taller while the eastern half is untouched. The generator is
+seeded, so the same command twice produces an identical file.
+
+**Editing by language, five ways.** Every one of these is grounded — the model
+names a region or a catalogue site, never a coordinate:
+
+| Instruction | Operation | What it does |
+|---|---|---|
+| "make the district 25% taller" | `scale_all` | Every building's height × 1.25 |
+| "set the buildings in the west to 60 m" | `set_site` | Absolute height, one region |
+| "make the eastern blocks 30 m taller" | `set_site` | A **change** in metres, not an absolute — reading it as absolute would silently set every building to 30 m |
+| "rotate the northern blocks 20 degrees" | `rotate` | Turns the footprints about their own centroids, in metres |
+| "add three 60 m residential towers in the east" | `place` | **Adds** three real footprints |
+| "reset the building heights" | `reset` | Back to generated |
+
+### Scope: the part that was missing, and why it mattered
+
+`place` is placement. The other four are alteration — and alteration is
+meaningless without *where*.
+
+The first version of this had no way to say "the western blocks". The region word
+was parsed, then discarded, and `scale_all` came back for every building in the
+district. The screen filled with a taller, plausible, entirely wrong skyline, and
+the panel cheerfully reported success. It is the worst failure mode in this
+project: not an error, not a wrong number, but a 3D result that answers a
+question nobody asked.
+
+So every operation now carries a **scope**, and it is resolved in the backend
+from three sources and nowhere else:
+
+- a **region** — one of ten named fractions of the locked study-area bbox
+  (`west`, `east`, `north`, `south`, `centre`, and the four corners). Plain
+  arithmetic over a constant the project already owns, so there is nothing for a
+  model to hallucinate.
+- a **site id** from the grounded catalogue — `water_reservoir#0`,
+  `permeable_paving#2` — whose polygon the analysis already derived.
+- nothing, meaning the whole study area.
+
+A region we do not recognise produces **no edit at all**, never a fallback to
+"everything". A test asserts that directly, because the fallback is the bug.
+
+### Where a placed block comes from
+
+The model chooses a count, a height and a region. It never chooses a coordinate.
+The footprints are generated by `placement_footprints()` from the same ESA
+WorldCover `paved` mask and the same block pitch `make_citymodel.py` uses — and
+cells already occupied by an existing envelope are excluded, so a new tower lands
+on unbuilt paved land rather than inside an existing block. If a scope has no
+unbuilt land left, the filter is dropped and `params.basis` says so.
+
+The result is a real, selectable, editable entity in the same model as the
+generated ones: click it, type a height, and it changes like any other. The panel
+reports how many blocks a plan added, and how many buildings an alteration
+reached — because a 3D view looks identical whether an operation hit 400
+buildings or all 2,639.
+
+> **Placed blocks are not a design.** They sit on real land cover, at a height
+> the model asked for, in a region the model named. That is a scenario, not a
+> scheme.
 
 ## Online 3D assets
 
@@ -746,7 +818,8 @@ frontend store only; re-running the script is a manual step. The panel says so.
 ```bash
 cd backend
 python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    # 13/13 — constants, DEM, raster/feature invariants
+python tests/test_constants.py    # 18/18 — constants, DEM, raster/feature invariants
+python tests/test_ai_plan.py      # 30/30 — grounding, scope, placement, hostile responses
 cd ../frontend && npx tsc --noEmit
 ```
 
@@ -771,11 +844,29 @@ floodplain — a DEM that decodes to 800 km is a broken source, not a broken nig
 **`scripts/preflight.py` guards the environment itself, which is where the
 most common failure actually lives.
 
-A note on verification: **a clean `tsc` did not mean the frontend worked.** Three
+A note on verification: **a clean `tsc` did not mean the frontend worked.** Four
 runtime bugs passed the type checker, including a `tsconfig` path alias that
 TypeScript resolved and Vite did not. Frontend changes here are verified by
 driving a real headless-Chromium render and asserting zero console errors, not
 by the compiler.
+
+**The 3D editing path is verified the same way, and it earned its keep.** Two
+bugs in it were invisible to every other check in this repository:
+
+- **Click-to-select never worked.** `GeoJsonDataSource` copies `properties.title`
+  or `properties.name` onto `entity.name` and nothing else, and these features
+  have neither — their key is `properties.id`, which Cesium does not copy. So
+  `picked.id.name` was always `undefined`, every click resolved to "no building",
+  and the panel's "click a building to select it" did nothing at all. 915 clicks
+  across the district selected nothing. The fix is a reverse map keyed on entity
+  identity; after it, nine clicks selected one.
+- **The AI's scope was discarded.** "Make the western blocks 30% taller" produced
+  a correct `scale_all` for the whole district. No test could see it, because the
+  result was a valid feature carrying a valid multiplier.
+
+The browser check therefore asserts what the *viewer* reports, not what the
+backend asked for — "1,232 of 2,639 buildings" — because a 3D view looks the same
+either way.
 
 ---
 
@@ -843,6 +934,7 @@ T1/
     │   │   ├── SandboxViewer.tsx owns the Cesium Viewer
     │   │   ├── terrainLoader.ts  imagery + terrain binding, with honest fallback
     │   │   ├── demProvider.ts    terrain-RGB → CustomHeightmapTerrainProvider
+    │   │   ├── cityModel.ts      the editable 3D massing model; scoped AI ops
     │   │   └── interventionLayer.ts  discrete features (extrusion)
     │   ├── components/           panel, layer switches, camera, sliders
     │   ├── App.tsx  main.tsx  index.css
