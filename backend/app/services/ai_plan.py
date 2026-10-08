@@ -763,6 +763,136 @@ class LLMProvider:
         return out
 
 
+class OpenAICompatProvider:
+    """Any OpenAI-compatible ``/chat/completions`` endpoint.
+
+    The durability fix, and the only route to a *live* run with no vendor key at
+    all. It exists because hard-coding one vendor means one outage, one billing
+    problem or one blocked network kills the demo, and because:
+
+    - **Ollama** serves an OpenAI-compatible API at ``/v1`` (verified in the gap
+      brief, Appendix A), so a local model needs no key and no account;
+    - OpenRouter, DeepSeek, Moonshot, Qwen/DashScope, Groq and vLLM all speak
+      the same shape, so one implementation covers all of them.
+
+    Only the transport and the response shape differ from
+    :class:`LLMProvider`. ``build_prompt()`` and ``_materialise()`` are shared
+    unchanged, which is deliberate: **the grounding guarantee lives in
+    ``_materialise``, not in the tool plumbing**, so switching vendor cannot
+    weaken it.
+    """
+
+    name = "openai-compatible"
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None,
+                 model: str | None = None, transport=None):
+        self.base_url = (base_url or getattr(settings, "llm_base_url", "")
+                         or "").rstrip("/")
+        self.api_key = api_key or getattr(settings, "llm_api_key", "") or ""
+        self.model = model or getattr(settings, "llm_model", "") or ""
+        self._transport = transport or _post_json
+
+    @property
+    def available(self) -> bool:
+        return bool(self.base_url and self.model and
+                    (self.api_key or getattr(settings, "llm_allow_no_key", False)))
+
+    def _endpoint(self) -> str:
+        return self.base_url if self.base_url.endswith("/chat/completions") \
+            else f"{self.base_url}/chat/completions"
+
+    def propose(self, instruction: str, grounding: Grounding) -> list[dict[str, Any]]:
+        if not self.base_url or not self.model:
+            raise PlanGenerationError(
+                "LLM_BASE_URL and LLM_MODEL must be set for the "
+                "OpenAI-compatible provider (e.g. http://localhost:11434/v1)"
+            )
+        if not grounding.any_available():
+            raise PlanGenerationError(
+                "no grounded candidate sites are available; run the fetch and "
+                "make_wetgrid scripts first"
+            )
+
+        system, user = build_prompt(instruction, grounding)
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "tools": [_to_openai_tool(CHOOSE_TOOL), _to_openai_tool(MASSING_TOOL)],
+            # The OpenAI shape forces a *named* function rather than "any", so
+            # routing is expressed the way this API allows: auto is the closest
+            # equivalent, and the system prompt carries the same routing rule.
+            "tool_choice": "auto",
+            "max_tokens": 1500,
+        }
+        raw = self._transport(self._endpoint(), self.api_key, payload)
+        selections, edits, rationale = _parse_openai_tool_use(raw)
+        return self._materialise(selections, edits, instruction, grounding, rationale)
+
+    def _materialise(self, selections: list[dict], edits: list[dict],
+                     instruction: str, grounding: Grounding,
+                     rationale: str = "") -> list[dict[str, Any]]:
+        """Identical validation to the Anthropic path. Shared on purpose."""
+        out: list[dict[str, Any]] = []
+        for sel in selections:
+            site_id = str(sel.get("site_id", ""))
+            pool_name, _, index = site_id.partition("#")
+            pool = POOL_FOR_KIND.get(pool_name, "")
+            sites = getattr(grounding, pool, []) if pool else []
+            if not index.isdigit() or int(index) >= len(sites):
+                continue
+            out.append(_feature(
+                pool_name, sites[int(index)], instruction, self.name,
+                str(sel.get("rationale", "")) or f"selected {site_id}",
+            ))
+        for edit in edits:
+            feature = _massing_feature(edit, grounding, instruction,
+                                       self.name, rationale)
+            if feature:
+                out.append(feature)
+        return out
+
+
+def _to_openai_tool(tool: dict) -> dict:
+    """Anthropic tool schema -> OpenAI function-tool schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["input_schema"],
+        },
+    }
+
+
+def _parse_openai_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
+    """Pull tool calls out of a chat/completions response."""
+    selections: list[dict] = []
+    edits: list[dict] = []
+    rationale = ""
+    choices = raw.get("choices") or []
+    if not choices:
+        return selections, edits, rationale
+    calls = ((choices[0].get("message") or {}).get("tool_calls") or [])
+    for call in calls:
+        fn = call.get("function") or {}
+        name = fn.get("name", "")
+        try:
+            args = json.loads(fn.get("arguments") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if name == CHOOSE_TOOL["name"]:
+            selections.extend(args.get("selections", []) or [])
+        elif name == MASSING_TOOL["name"]:
+            edits.extend(args.get("edits", []) or [])
+            rationale = str(args.get("rationale", "") or "")
+        else:
+            rationale = rationale or str(args.get("rationale", "") or "")
+    return selections, edits, rationale
+
+
 def _post_json(url: str, api_key: str, payload: dict) -> dict:
     """Minimal stdlib HTTP POST. urllib rather than a SDK, to keep deps at zero."""
     import urllib.request
@@ -808,20 +938,54 @@ def _parse_tool_use(raw: dict) -> tuple[list[dict], list[dict], str]:
 # --------------------------------------------------------------------------- #
 
 
+def live_providers() -> list[Provider]:
+    """Every configured LLM provider, in preference order.
+
+    Anthropic first because it is the path the code was written for and the
+    cleanest story for judges. The OpenAI-compatible provider second, because it
+    is the one that can run with no key at all via a local Ollama.
+    """
+    found: list[Provider] = []
+    anthropic = LLMProvider()
+    if anthropic.available:
+        found.append(anthropic)
+    compat = OpenAICompatProvider()
+    if compat.available:
+        found.append(compat)
+    return found
+
+
 def get_provider(prefer: str = "auto") -> Provider:
     """Pick a provider.
 
-    ``auto`` uses the LLM when a key is present and falls back to the heuristic
-    otherwise, so the demo never dies for want of a credential. The fallback is
-    reported, never silent: the plan records which provider produced it.
+    ``auto`` uses a configured LLM and falls back to the heuristic otherwise, so
+    the demo never dies for want of a credential. The fallback is reported, never
+    silent: the response always names the provider that ran, and the UI shows a
+    badge saying the heuristic is not AI.
+
+    ``prefer="llm"`` is strict: with nothing configured it raises rather than
+    downgrading, so a test or a demo cannot silently lose the GenAI path.
     """
-    llm = LLMProvider()
-    if prefer in ("auto", "llm", "claude"):
-        if llm.available:
-            return llm
-        if prefer == "llm":
+    if prefer in ("auto", "llm", "claude", "openai", "local"):
+        found = live_providers()
+        if found:
+            if prefer == "claude" and isinstance(found[0], OpenAICompatProvider):
+                raise PlanGenerationError(
+                    "provider=claude was requested but ANTHROPIC_API_KEY is not set"
+                )
+            if prefer in ("openai", "local") and not isinstance(
+                found[0], OpenAICompatProvider
+            ):
+                raise PlanGenerationError(
+                    "an OpenAI-compatible provider was requested but "
+                    "LLM_BASE_URL / LLM_MODEL are not set"
+                )
+            return found[0]
+        if prefer != "auto":
             raise PlanGenerationError(
-                "the LLM provider was requested but ANTHROPIC_API_KEY is not set"
+                "no LLM provider is configured. Set ANTHROPIC_API_KEY, or "
+                "LLM_BASE_URL + LLM_MODEL for any OpenAI-compatible endpoint "
+                "(a local Ollama needs no key)."
             )
     if prefer in ("auto", "heuristic", "baseline"):
         return HeuristicProvider()

@@ -51,6 +51,17 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
 
+    # Any OpenAI-compatible endpoint. This is how a live run happens with NO
+    # vendor key: Ollama serves an OpenAI-compatible API at /v1, so
+    #   LLM_BASE_URL=http://localhost:11434/v1  LLM_MODEL=<model>
+    # is a complete live configuration. OpenRouter / DeepSeek / Moonshot /
+    # DashScope / Groq / vLLM all speak the same shape.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+    llm_model: str = ""
+    # Ollama needs a placeholder key but does not check it.
+    llm_allow_no_key: bool = True
+
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",

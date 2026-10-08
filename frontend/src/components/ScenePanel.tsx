@@ -59,6 +59,24 @@ export default function ScenePanel() {
   const [instruction, setInstruction] = useState('')
   const [aiBusy, setAiBusy] = useState(false)
   const [aiResult, setAiResult] = useState<AiPlanResult | null>(null)
+  // Read from /health so the badge reflects the *server's* configuration, not
+  // what this browser last happened to run. A demo on a machine with no key must
+  // say so before a judge draws the conclusion, not after.
+  const [llm, setLlm] = useState<{ configured: boolean; model: string | null } | null>(
+    null,
+  )
+  useEffect(() => {
+    let cancelled = false
+    void fetch('/health')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!cancelled && d?.llm) setLlm(d.llm)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [aiResult])
   const [aiError, setAiError] = useState<string | null>(null)
   const terrain = useSceneStore((s) => s.terrain)
   // The city model loads asynchronously, so reading the stats once at mount
@@ -79,6 +97,11 @@ export default function ScenePanel() {
    * special-casing for AI output. That is §3.3.2's "one pipeline" requirement
    * made visible in the UI.
    */
+  // The heuristic provider is a regex parser, and calling it AI would be the one
+  // claim in this project that is simply false. So the badge and the copy both
+  // name it for what it is.
+  const aiIsLive = Boolean(aiResult && aiResult.provider !== 'heuristic')
+
   const runInstruction = async () => {
     const text = instruction.trim()
     if (!text || aiBusy || !sceneId) return
@@ -248,13 +271,36 @@ export default function ScenePanel() {
           >
             {aiBusy ? 'Generating…' : 'Generate'}
           </Button>
-          <Typography variant="caption" color="text.secondary">
-            {aiResult
-              ? `${aiResult.provider} · ${aiResult.features} feature${
-                  aiResult.features === 1 ? '' : 's'
-                }${aiResult.types.length ? ` · ${aiResult.types.join(', ')}` : ''}`
-              : 'Machine-proposed, status=draft'}
-          </Typography>
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Chip
+              size="small"
+              color={aiIsLive ? 'success' : 'warning'}
+              label={
+                aiResult
+                  ? aiResult.provider
+                  : llm?.configured
+                    ? 'LLM ready'
+                    : 'no LLM key'
+              }
+            />
+            {aiResult && !aiIsLive && (
+              <Typography variant="caption" color="text.secondary">
+                deterministic parser — <strong>not AI</strong>
+              </Typography>
+            )}
+            {!aiResult && llm && !llm.configured && (
+              <Typography variant="caption" color="text.secondary">
+                set ANTHROPIC_API_KEY or LLM_BASE_URL for a live model
+              </Typography>
+            )}
+          </Stack>
+          {aiResult && (
+            <Typography variant="caption" color="text.secondary" display="block">
+              {aiResult.features} feature{aiResult.features === 1 ? '' : 's'}
+              {aiResult.types.length ? ` · ${aiResult.types.join(', ')}` : ''} ·
+              machine-proposed, status=draft
+            </Typography>
+          )}
         </Stack>
         {aiResult && aiResult.features === 0 && aiResult.message && (
           <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>

@@ -28,6 +28,14 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // /health reports the GenAI configuration, and the panel's provider badge
+      // reads it. It lives at the root rather than under /api, so without this
+      // the badge would silently never resolve and the UI would fall back to
+      // saying nothing -- which is the same as saying "fine".
+      '/health': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
     },
   },
   build: {

@@ -121,10 +121,36 @@ app.mount(
 
 @app.get("/health", tags=["meta"])
 def health() -> dict[str, object]:
+    """Liveness, plus the demo machine's GenAI state.
+
+    `llm` is here so that on the day, whether the demo is running a real model
+    or the deterministic fallback is one `curl` away rather than a surprise. It
+    reports *configured*, never *working* -- only a real call proves that, and
+    `scripts/llm_probe.py` is what proves it. Reporting a green light for an
+    unverified path is exactly the overclaiming the spec forbids.
+    """
+    from app.services.ai_plan import live_providers
+
+    providers = live_providers()
     return {
         "status": "ok",
         "storeMode": settings.store_mode,
         "dataDir": str(settings.data_dir),
+        "llm": {
+            "configured": bool(providers),
+            # Which one `auto` would pick, and what it is.
+            "provider": providers[0].name if providers else "heuristic",
+            "isAi": bool(providers),
+            "model": (
+                settings.anthropic_model if providers and providers[0].name == "claude"
+                else settings.llm_model if providers else None
+            ),
+            "baseUrl": (
+                None if providers and providers[0].name == "claude"
+                else settings.llm_base_url or None
+            ),
+            "heuristicIsNotAi": not bool(providers),
+        },
     }
 
 

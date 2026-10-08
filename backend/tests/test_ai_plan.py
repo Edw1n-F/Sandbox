@@ -25,7 +25,9 @@ from app.services.ai_plan import (  # noqa: E402
     parse_massing_intent,
     HeuristicProvider,
     LLMProvider,
+    OpenAICompatProvider,
     PlanGenerationError,
+    _post_json,
     build_prompt,
     get_provider,
     load_grounding,
@@ -348,6 +350,161 @@ def test_stored_massing_features_are_drafts() -> None:
             checked += 1
     if not checked:
         print("      (no massing plans stored yet; skipped)")
+
+
+def test_http_round_trip_against_a_spec_shaped_server() -> None:
+    """The transport really opens a socket, and really parses what comes back.
+
+    Until now the LLM path had only ever been driven through an injected
+    transport, so the one part nobody had executed was the part most likely to
+    break on demo day: urllib, the headers, the JSON body, and the response
+    shape. A recorded fixture cannot catch a typo in any of those.
+
+    So this stands up a real HTTP server on localhost that speaks the **actual
+    Anthropic Messages response shape**, points the real ``_post_json`` at it,
+    and asserts grounded features come out the other end.
+
+    What this does and does not prove, stated plainly:
+
+    - **Does:** the socket, the method, the headers, the JSON round trip, the
+      tool-use parsing, and the grounding checks all work over real HTTP. Those
+      are the parts that are our code.
+    - **Does not:** that a real model produces good selections. That needs a real
+      model, and a spec-shaped server is not one.
+
+    It also covers the OpenAI-compatible transport, which is the route to a live
+    run with no vendor key.
+    """
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    seen: list[dict] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def _read(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            return _json.loads(self.rfile.read(length) or b"{}")
+
+        def do_POST(self):  # noqa: N802
+            body = self._read()
+            seen.append({"path": self.path, "headers": dict(self.headers), "body": body})
+            # Branch on the *body*, not the path, and on a key that genuinely
+            # differs. Two earlier attempts were wrong: branching on the URL broke
+            # when the host was rewritten to localhost, and branching on
+            # "messages" broke because the Anthropic payload has `messages` too.
+            # Only a top-level `system` is unique to the Anthropic shape.
+            if "system" in body:
+                payload = {
+                    "id": "msg_live", "type": "message", "role": "assistant",
+                    "content": [{
+                        "type": "tool_use", "id": "tu_1",
+                        "name": "modify_massing",
+                        "input": {"edits": [{"op": "scale_all", "multiplier": 1.25}],
+                                  "rationale": "live round trip"},
+                    }],
+                    "stop_reason": "tool_use",
+                }
+            else:
+                payload = {
+                    "id": "chatcmpl-live", "object": "chat.completion",
+                    "model": body.get("model", "?"),
+                    "choices": [{
+                        "index": 0, "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant", "content": None,
+                            "tool_calls": [{
+                                "id": "call_1", "type": "function",
+                                "function": {
+                                    "name": "modify_massing",
+                                    "arguments": _json.dumps({
+                                        "edits": [{"op": "scale_all",
+                                                   "multiplier": 1.5}],
+                                        "rationale": "live openai-compatible",
+                                    }),
+                                },
+                            }],
+                        },
+                    }],
+                }
+            raw = _json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):  # silence
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        g = load_grounding()
+
+        # --- Anthropic shape, real HTTP, real transport --------------------- #
+        provider = LLMProvider(api_key="test-key",
+                               transport=lambda url, key, body: _post_json(
+                                   url.replace("https://api.anthropic.com",
+                                                f"http://127.0.0.1:{port}"), key, body))
+        out = provider.propose("make the district 25% taller", g)
+        check("anthropic round trip returned a feature", len(out) == 1, f"got {len(out)}")
+        if out:
+            check("anthropic feature is massing_height",
+                  out[0]["intervention_type"] == "massing_height",
+                  out[0]["intervention_type"])
+            check("anthropic multiplier survived the round trip",
+                  out[0]["params"]["multiplier"] == 1.25,
+                  str(out[0]["params"]["multiplier"]))
+        # HTTP header names are case-insensitive and the server normalises them,
+        # so compare lowercased rather than assuming the exact casing we sent.
+        sent = [{k.lower(): v for k, v in r["headers"].items()} for r in seen]
+        check("x-api-key header was sent",
+              any(h.get("x-api-key") == "test-key" for h in sent),
+              f"headers seen: {[sorted(h) for h in sent]}")
+        check("anthropic-version header was sent",
+              any(h.get("anthropic-version") == "2023-06-01" for h in sent),
+              f"headers seen: {[sorted(h) for h in sent]}")
+
+        # --- OpenAI-compatible shape over the same socket ------------------- #
+        seen.clear()
+        compat = OpenAICompatProvider(
+            base_url=f"http://127.0.0.1:{port}/v1", api_key="k", model="local-model",
+        )
+        out2 = compat.propose("make the district 50% taller", g)
+        check("openai-compatible round trip returned a feature", len(out2) == 1,
+              f"got {len(out2)}")
+        if out2:
+            check("openai-compatible multiplier survived",
+                  out2[0]["params"]["multiplier"] == 1.5,
+                  str(out2[0]["params"]["multiplier"]))
+        check("both tools were sent in OpenAI function form",
+              any(all(t.get("type") == "function" for t in r["body"].get("tools", []))
+                  for r in seen), "tools were not OpenAI-shaped")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_grounding_survives_a_hostile_response() -> None:
+    """A real model can ignore the catalogue. The validation must still hold."""
+    g = load_grounding()
+    provider = LLMProvider(api_key="k", transport=recorded_transport([
+        # A model inventing coordinates in the rationale, and a site it was
+        # never offered.
+        {"site_id": "water_reservoir#0", "intervention_type": "water_reservoir",
+         "rationale": "I placed it at 113.9999, 22.4401 because it looked right"},
+    ]))
+    out = provider.propose("add a reservoir", g)
+    check("the real site won, not the model's coordinates",
+          bool(out) and out[0]["geometry"] == g.reservoir_sites[0]["geometry"],
+          "geometry came from somewhere other than the grounding")
+    if out:
+        check("model-authored coordinates stayed in the rationale as prose",
+              "113.9999" in out[0]["params"]["rationale"],
+              "rationale was rewritten rather than preserved")
 
 
 def _run() -> int:
