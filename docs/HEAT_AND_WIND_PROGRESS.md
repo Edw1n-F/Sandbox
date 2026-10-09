@@ -153,7 +153,7 @@ number say whether a breeze is available to compensate.
 | Stage | What | State |
 |---|---|---|
 | 0 | Research, cited and recorded here | **done** |
-| 1 | `design_metrics.py` — geometry-derived, each metric tied to a published rule: height dispersion, ground-level permeability, site coverage, shade fraction | **in progress** |
+| 1 | `design_metrics.py` — geometry-derived, each metric tied to a published rule: height dispersion, ground-level permeability, site coverage, swept-shadow fraction | **done** |
 | 2 | One `evaluate(scenario)` returning heat + wind + drainage together | next |
 | 3 | Scenario comparison — the relative judgement the AVA document asks for | planned |
 | 4 | Replace the hand-authored heat index with a solar-access basis | needs a source |
@@ -178,3 +178,24 @@ ordering must state its weights.
   the Technical Circular to extract: the policy document says outright that
   whether a scheme meets a standard **cannot be known**. So the absence is the
   finding, not a gap in my work, and it is now cited rather than defended.
+- **9 Oct 2026, Stage 1 built** — `app/services/design_metrics.py` and
+  `GET /api/scenes/{sceneId}/design-metrics`. On the real district: mean height
+  35.3 m with variation CV 0.76, site coverage 30.2%, ground-level void fraction
+  94.8%, FAD mean 0.446 over 16 directions, shade 45.6% at 09:00 and 51.2% at
+  14:00 in December. 37 tests; 227 backend tests in total.
+
+  Two things worth recording because they were wrong first:
+
+  - **Shade was first reported as 3.0%** on a winter afternoon, because the
+    shadow walk marked one cell per step instead of sweeping each building's
+    footprint. A 35 m building at a 38 deg solar altitude throws a 44 m shadow,
+    which is nine cells, not one. Sweeping the footprint gives 51.2% — and the
+    pattern (high sun 11.7%, low sun 51.2%) is the physically expected one. A
+    number that looked plausible was an artefact of the algorithm.
+  - **The sweep took 22 seconds** because it issued one NumPy assignment per
+    building per step. Our footprints come from a grid pitch, so they cluster into
+    a handful of distinct spans; grouping by span made it 0.01 s with identical
+    output.
+
+  The report prints `verdict: null` and says why: the AVA policy states that
+  whether a scheme meets a standard cannot be known, so there is nothing to pass.

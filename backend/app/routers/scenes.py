@@ -21,7 +21,7 @@ from app.schemas.scene import SceneCreate, SceneCreated, SceneRead, SceneUpdate
 from app.config import settings
 from app.services import scene_service
 from app.services.massing_fit import height_options
-from app.services.sandbox_model import DEFAULT_RAINFALL_MM, sea_level_report
+from app.services.sandbox_model import DEFAULT_RAINFALL_MM, load_grids, sea_level_report
 
 router = APIRouter(tags=["scenes"])
 
@@ -475,3 +475,72 @@ def _study_bounds() -> tuple[float, float, float, float]:
         (settings.rasters_dir / "heatmap_hsk.json").read_text())
     bounds = meta["inputs"]["bounds"]
     return bounds[0], bounds[1], bounds[2], bounds[3]
+
+
+@router.get("/scenes/{scene_id}/design-metrics")
+def get_design_metrics(scene_id: str, day_of_year: int = 355,
+                       hours: str = "9,14") -> dict:
+    """GET /api/scenes/{sceneId}/design-metrics
+
+    What the current massing does to shade and ventilation, measured from the
+    geometry, with every metric tied to a rule Hong Kong's own air ventilation
+    guidance states.
+
+    **This prints no verdict, and that is the design.** The AVA policy document
+    behind Hong Kong's guidance says a higher velocity ratio is the better design
+    but that "whether the better design option meets a standard cannot be known".
+    A pass/fail here would invent a standard that does not exist. The numbers are
+    for comparing this scheme against another one, which is Stage 3.
+
+    Every metric names its source rule. Nothing here is CFD, a comfort index, or
+    a daily energy balance, and each caveat says which of those it is not.
+    """
+    from app.services.design_metrics import design_report, footprints_from_geojson
+
+    scene_service.get_scene(scene_id)
+
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
+        )
+
+    model = scene_service.city_model_path(scene_id)
+    if not model:
+        raise HTTPException(
+            status_code=422,
+            detail="this scene has no city model; run scripts/make_citymodel.py",
+        )
+
+    features = json.loads(model.read_text()).get("features", [])
+    if not features:
+        raise HTTPException(status_code=422, detail="the city model has no features")
+
+    try:
+        parsed = [int(h) for h in hours.split(",") if h.strip()]
+    except ValueError:
+        raise HTTPException(status_code=422,
+                            detail=f"hours must be comma-separated integers, got {hours!r}")
+    if not parsed or any(h < 0 or h > 23 for h in parsed):
+        raise HTTPException(status_code=422, detail=f"hours out of range: {hours!r}")
+
+    report = design_report(
+        footprints_from_geojson(features), grids,
+        sun_hours=tuple(sorted(set(parsed))), day_of_year=day_of_year,
+    )
+    report["sceneId"] = scene_id
+    report["solarInputs"] = {"dayOfYear": day_of_year, "hoursLocal": sorted(set(parsed))}
+    report["source"] = {
+        "policy": ("Ng & Cheng, Policies and technical guidelines for urban "
+                   "planning of high-density cities - air ventilation assessment "
+                   "(AVA) of Hong Kong, Building and Environment 44 (2009) "
+                   "1478-1488"),
+        "siteSpecific": ("AVRG73 Air Ventilation Assessment for Hung Shui Kiu "
+                         "Area 13 (Planning Department / CEDD), for the HSK/HT "
+                         "velocity ratios and the prevailing wind directions"),
+        "geometry": (f"{len(features)} massing envelopes from the project's own "
+                     "seeded generator, on the 5 m land-cover grid"),
+    }
+    return report
