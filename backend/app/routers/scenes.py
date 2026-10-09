@@ -5,6 +5,7 @@ Status codes are the spec's: 201 create, 200 read/update, 204 delete, 404 with
 """
 
 import json
+import math
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response, status
@@ -17,6 +18,7 @@ from app.schemas.plan import (
     PlanListRead,
 )
 from app.schemas.scene import SceneCreate, SceneCreated, SceneRead, SceneUpdate
+from app.config import settings
 from app.services import scene_service
 from app.services.massing_fit import height_options
 from app.services.sandbox_model import DEFAULT_RAINFALL_MM, sea_level_report
@@ -389,3 +391,87 @@ def get_published_scenarios(scene_id: str, rainfall_mm: float | None = None) -> 
                  "ledger. A positive delta means worse than today under the "
                  "same rainfall."),
     }
+
+
+@router.get("/scenes/{scene_id}/ventilation")
+def get_ventilation(scene_id: str) -> dict:
+    """GET /api/scenes/{sceneId}/ventilation
+
+    Air-ventilation screening by frontal area density, per wind direction.
+
+    **This is not a wind tunnel and not a CFD solve.** It is geometry: the total
+    building face presented perpendicular to each wind, over the site area. Low
+    means the wind penetrates, high means the site is sheltered from that
+    direction. A velocity ratio is a different quantity from a different method,
+    and the two are reported side by side rather than mixed.
+
+    The published reference is the AVRG73 air ventilation assessment for Hung
+    Shui Kiu Area 13, which states the dominant wind directions for this site are
+    NE, ENE and E -- together 40.8% of wind frequency. No frequency is invented
+    for any other direction.
+
+    No pass/fail threshold is asserted. The bands live in Technical Circular 1/06
+    and its Annex A Technical Guide, which this project has not extracted, and a
+    screening that graded itself against thresholds it had not read would be
+    exactly the kind of confident wrong answer this project keeps refusing to
+    produce.
+    """
+    from app.services.ventilation import load_reference, ventilation_screening
+
+    scene_service.get_scene(scene_id)
+
+    model = scene_service.city_model_path(scene_id)
+    if not model:
+        raise HTTPException(status_code=422,
+                            detail="this scene has no city model; run scripts/make_citymodel.py")
+
+    doc = json.loads(model.read_text())
+    features = doc.get("features", [])
+    if not features:
+        raise HTTPException(status_code=422, detail="the city model has no features")
+
+    lon0, lat0, lon1, lat1 = _study_bounds()
+    site_area = abs((lon1 - lon0) * 111_320.0
+                    * math.cos(math.radians((lat0 + lat1) / 2))
+                    * (lat1 - lat0) * 110_540.0)
+
+    footprints = []
+    for f in features:
+        ring = f["geometry"]["coordinates"][0]
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        mid_lat = (min(ys) + max(ys)) / 2
+        footprints.append({
+            "widthM": (max(xs) - min(xs)) * 111_320.0 * math.cos(math.radians(mid_lat)),
+            "depthM": (max(ys) - min(ys)) * 110_540.0,
+            "heightM": float(f["properties"].get("height_m") or 0.0),
+        })
+
+    reference = load_reference()
+    wind = ((reference or {}).get("windRegime") or {})
+    result = ventilation_screening(
+        footprints, site_area,
+        prevailing=wind.get("prevailing"),
+        combined_frequency_percent=wind.get("combinedFrequencyPercent"),
+    )
+    result["sceneId"] = scene_id
+    result["publishedReference"] = {
+        "source": (reference or {}).get("source"),
+        "definition": (reference or {}).get("definition"),
+        "publishedVelocityRatios": (reference or {}).get("publishedVelocityRatios"),
+        "effectiveDesignMeasures": (reference or {}).get("effectiveDesignMeasures"),
+        "whatThisIsNot": (reference or {}).get("whatThisIsNot"),
+    }
+    if reference is None:
+        result["publishedReference"] = None
+        result["note"] += (" No AVRG73 reference file is present, so no wind "
+                           "frequencies are applied.")
+    return result
+
+
+def _study_bounds() -> tuple[float, float, float, float]:
+    """The locked study-area bounding box, from the terrain sidecar."""
+    meta = json.loads(
+        (settings.rasters_dir / "heatmap_hsk.json").read_text())
+    bounds = meta["inputs"]["bounds"]
+    return bounds[0], bounds[1], bounds[2], bounds[3]

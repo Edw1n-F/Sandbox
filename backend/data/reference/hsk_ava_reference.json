@@ -1,0 +1,45 @@
+{
+  "artefact": "ava_reference",
+  "generated": "2026-10-09",
+  "status": "PUBLISHED_REFERENCE_DATA_NOT_A_MODEL_RESULT",
+  "source": {
+    "name": "Air Ventilation Assessment for the Development of Hung Shui Kiu Area 13 (AVRG73)",
+    "publisher": "Planning Department / Civil Engineering and Development Department",
+    "url": "https://www.pland.gov.hk/file/resources/ava_register/government/pdf/AVRG73_AVA_FinalReport.pdf",
+    "retrieved": "2026-10-09",
+    "extractedWith": "pdftotext -layout (poppler)",
+    "documentDate": "2012-08-30",
+    "criteriaSource": "Technical Circular No. 1/06 - Air Ventilation Assessment, and Annex A 'Technical Guide for Air Ventilation Assessment for Developments in Hong Kong', issued 19 July 2006"
+  },
+  "definition": {
+    "velocityRatio": "VR = Vp / V-inf, where Vp is wind speed at pedestrian level and V-inf is wind speed at the top of the wind boundary layer, taken as about 596 m above the centre of the site of concern.",
+    "direction": "High VR means LESS impact from the development, i.e. better ventilation."
+  },
+  "windRegime": {
+    "prevailing": ["NE", "ENE", "E"],
+    "combinedFrequencyPercent": 40.8,
+    "note": "Stated by the report as the most dominant wind directions for this site. This is the one published wind-rose fact we use; no other direction is assigned a frequency."
+  },
+  "publishedVelocityRatios": {
+    "siteSpatialAverage": {"baseline": 0.28, "proposed": 0.31},
+    "localSpatialAverage": {"baseline": 0.29, "proposed": 0.32},
+    "byFocusArea": [
+      {"zone": "Zone 1", "baseline": 0.21, "proposed": 0.26, "improvementPercent": 23.8},
+      {"zone": "Zone 2", "baseline": 0.33, "proposed": 0.33},
+      {"zone": "Zone 3", "baseline": 0.38, "proposed": 0.45},
+      {"zone": "Zone 4", "baseline": 0.16, "proposed": 0.20, "improvementPercent": 25.0},
+      {"zone": "Zone 5", "baseline": 0.34, "proposed": 0.35}
+    ],
+    "method": "Computational fluid dynamics in the source report. We do not run CFD."
+  },
+  "effectiveDesignMeasures": [
+    "Podium-free design, for wind penetration under the building",
+    "Dedicated wind corridors along the prevailing wind directions",
+    "Empty bays at ground-floor level"
+  ],
+  "whatThisIsNot": [
+    "These velocity ratios are the source report's CFD results for its own baseline and proposed schemes. They are NOT measurements of the current Hung Shui Kiu / Ha Tsuen street layout and they are NOT our model's output.",
+    "A frontal area density computed from building geometry is a screening proxy and is NOT a velocity ratio. The two are not interchangeable and must never be reported as the same number.",
+    "The pass/fail bands live in Technical Circular 1/06 and its Annex A Technical Guide, which we have not extracted. No threshold is asserted here."
+  ]
+}
