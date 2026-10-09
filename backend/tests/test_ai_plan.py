@@ -31,13 +31,15 @@ from app.services.ai_plan import (
     _fraction_ring,
     _post_json,
     build_prompt,
+    generate_plan,
     get_provider,
     load_grounding,
     parse_fit_intent,
     parse_intent,
     parse_massing_intent,
     resolve_scope,
-    route_tools)
+    route_tools,
+    _massing_feature)
 
 FAILURES: list[str] = []
 
@@ -1193,6 +1195,158 @@ def test_fit_constraints_default_to_conservative_and_parse_goals() -> None:
     check("and turn on when the instruction mentions height",
           heights and heights["constraints"]["allow_height_change"] is True,
           str(heights))
+
+
+def _seeded_scene_id() -> str:
+    """The scene id the shipped preflight prints, resolved from the data dir."""
+    from app.config import settings
+    import json as _json
+    scenes = settings.scenes_dir
+    for path in sorted(scenes.glob("*.json")):
+        doc = _json.loads(path.read_text())
+        if doc.get("id"):
+            return str(doc["id"])
+    raise RuntimeError("no seeded scene found")
+
+
+def _drop_plan(plan_id: str | None) -> None:
+    if not plan_id:
+        return
+    from app.config import settings
+    target = settings.plans_dir / f"{plan_id}.json"
+    if target.exists():
+        target.unlink()
+
+
+def test_the_payload_is_built_for_the_tool_that_was_routed() -> None:
+    """The site catalogue is only sent to the tool that can use it.
+
+    Found on 9 Oct 2026: `qwen2.5:3b-instruct`, asked to place six towers with
+    `tool_choice` forcing `modify_massing`, returned no tool call at all -- 18
+    completion tokens, empty content, `finish_reason: stop`. Bisecting the payload
+    showed the 4,431-character candidate-site catalogue *combined with* the system
+    prompt was enough to cause it, while the system prompt alone, the catalogue
+    alone, and a short JSON payload all produced a correct tool call. And
+    `modify_massing` never selects sites, so those 4 KB were irrelevant text on
+    exactly the calls they broke.
+    """
+    g = load_grounding()
+
+    _, massing_user = build_prompt("add six 90 m towers in the centre", g)
+    check("a massing call carries no candidate-site catalogue",
+          "candidate_sites" not in massing_user, f"{len(massing_user)} chars")
+    check("and is small enough not to choke a small model",
+          len(massing_user) < 600, f"{len(massing_user)} chars")
+
+    _, site_user = build_prompt("add two reservoirs and a green space", g)
+    check("a site-selection call still gets the catalogue",
+          "candidate_sites" in site_user, f"{len(site_user)} chars")
+    check("with the grounded sites in it",
+          "water_reservoir#" in site_user or "permeable_paving#" in site_user
+          or "green_space#" in site_user, "")
+
+    check("the instruction survives in both payloads",
+          "add six 90 m towers" in massing_user
+          and "add two reservoirs" in site_user, "")
+    check("and the payload is compact rather than pretty-printed",
+          "\n" not in massing_user, "indent=2 doubled the payload for no gain")
+
+
+def test_a_silent_model_is_reported_as_a_fallback_not_as_a_bad_instruction() -> None:
+    """An empty answer means the provider FAILED, not that the user asked nothing.
+
+    The original code answered `features == 0` with "The instruction named no
+    recognised intervention type, so no sites were selected." That was false --
+    the instruction was recognised and routed correctly; the model had returned no
+    tool call -- and it told the user their own sentence was the problem.
+    """
+    import app.services.ai_plan as m
+
+    class _Silent:
+        name = "openai-compatible"
+
+        def propose(self, instruction, grounding):
+            return []
+
+    # A real scene is needed because a successful rescue goes on to create a
+    # plan; the plan is removed afterwards so the store is left as it was found.
+    scene_id = _seeded_scene_id()
+    original = m.get_provider
+    m.get_provider = lambda prefer="auto": _Silent()
+    try:
+        result = generate_plan(scene_id, "add six 90 m towers")
+    except Exception as exc:  # noqa: BLE001
+        check("a silent provider is handled without raising", False, str(exc))
+        m.get_provider = original
+        return
+    finally:
+        m.get_provider = original
+    _drop_plan(result.get("planId"))
+
+    if result.get("features"):
+        check("the deterministic parser rescues a silent provider", True,
+              f"{result['features']} feature(s) via {result['provider']}")
+        check("and the response names the fallback rather than hiding it",
+              "heuristic" in str(result["provider"]), str(result["provider"]))
+        # The provider that actually answered is named FIRST; the failed one is
+        # still named, because "heuristic" alone would hide that the GenAI path
+        # did not run.
+        check("the success path names the provider that actually answered first",
+              str(result["provider"]).startswith("heuristic"),
+              str(result["provider"]))
+        check("and still discloses which provider failed",
+              "openai-compatible" in str(result["provider"]),
+              str(result["provider"]))
+    else:
+        check("the message no longer blames the instruction",
+              "no recognised intervention type" not in str(result.get("message")),
+              str(result.get("message"))[:70])
+        check("and says no provider answered instead",
+              "no provider returned a usable answer" in str(result.get("message")),
+              str(result.get("message"))[:70])
+
+
+
+def test_fields_belonging_to_another_operation_cannot_invalidate_this_one() -> None:
+    """The same failure twice: a `place` op carrying `direction` and `distance_m`.
+
+    Found on 9 Oct 2026. A small model fills in the whole schema, so "add three
+    60 m residential towers in the eastern part" came back as a `place` op *plus*
+    `direction: "north"` and `distance_m: 0` -- fields that mean nothing when you
+    are placing rather than moving. The direction-override logic that exists to
+    stop a compass word being transposed then rejected the whole operation, because
+    a 0 m move is a no-op. Every such placement was silently lost.
+
+    This is the identical failure to the `height_m: 0` case, reintroduced six lines
+    away by the fix for it. The rule is the rule: only the fields an operation
+    actually uses may invalidate it.
+    """
+    g = load_grounding()
+
+    noisy = {"op": "place", "count": 3, "height_m": 60, "scope": "east",
+             "direction": "north", "distance_m": 0,
+             "dx_m": 0, "dy_m": 0, "multiplier": 1, "site_id": None}
+    feature = _massing_feature(noisy, g, "add three 60 m towers in the east",
+                               "test", "")
+    check("a place op survives direction and distance fields",
+          feature is not None, "DROPPED")
+    if feature:
+        check("with the count and scope the model actually asked for",
+              feature["params"]["count"] == 3
+              and feature["params"]["scope"]["region"] == "east",
+              f"count={feature['params']['count']} "
+              f"scope={feature['params']['scope']['region']}")
+
+    # The move path must still be strict, or the fix has simply moved the bug.
+    check("a move of zero distance is still refused",
+          _massing_feature({"op": "move", "scope": "west", "direction": "north",
+                            "distance_m": 0}, g, "nudge it", "test", "") is None, "")
+    moved = _massing_feature({"op": "move", "scope": "west", "dx_m": 40, "dy_m": 0,
+                              "direction": "north", "distance_m": 40},
+                             g, "move it north", "test", "")
+    check("and a real move is still accepted with its offset",
+          moved is not None and moved["params"]["dyM"] == 40.0,
+          str(moved["params"].get("dyM")) if moved else "DROPPED")
 
 
 if __name__ == "__main__":

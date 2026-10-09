@@ -707,15 +707,22 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     count = _pick(edit, "count")
     dx = _pick(edit, "dx_m", "dxM")
     dy = _pick(edit, "dy_m", "dyM")
-    # A direction word outranks the model's own trigonometry.
+    # A direction word outranks the model's own trigonometry -- **for a move only**.
     #
     # `qwen2.5:3b-instruct` asked to move blocks "40 m north" returned
     # `dx_m: 40, dy_m: 0` -- north and east transposed, a plausible pair of
     # numbers and completely the wrong direction. Copying the word out of the
-    # instruction cannot transpose an axis; doing the conversion can. So when a
-    # direction is named it wins, and dx/dy are only the fallback.
+    # instruction cannot transpose an axis; doing the conversion can.
+    #
+    # The `op == "move"` guard is not decoration. A small model fills in the whole
+    # schema, so a `place` op arrived carrying `direction: "north"` and
+    # `distance_m: 0` -- fields meaningless for placing -- and this block rejected
+    # the whole operation over them. That is the identical failure to the
+    # `height_m: 0` case fixed above, reintroduced six lines away, and it silently
+    # cost every placement the model got otherwise right. The rule holds: only the
+    # fields an operation actually uses may invalidate it.
     direction = str(edit.get("direction") or "").strip().lower().replace("-", " ")
-    if direction in DIRECTIONS:
+    if op == "move" and direction in DIRECTIONS:
         distance = _pick(edit, "distance_m", "distanceM")
         if distance is None and (dx or dy):
             try:
@@ -1427,17 +1434,34 @@ MASSING_STYLE = {"color": "#ff8f3f", "opacity": 0.0}
 
 
 def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict]]:
-    """Render the candidate sites as a compact, citable menu."""
+    """Render the candidate sites as a compact, citable menu.
+
+    The catalogue is sent **only when the routed tool can actually use it.** A
+    bisect on 9 Oct 2026 found that the 4,431-character site catalogue combined
+    with the system prompt was enough to stop ``qwen2.5:3b-instruct`` emitting any
+    tool call at all: 18 completion tokens, empty content, ``finish_reason:
+    stop``. The same call with the instruction alone, or the catalogue alone, or a
+    short JSON payload all returned a correct tool call. And `modify_massing`
+    never selects sites -- it places and reshapes buildings -- so the catalogue was
+    4 KB of irrelevant text on the exact calls it broke.
+
+    So the payload is built for the tool that was routed, not for every tool.
+    Smaller, faster, and it fixes the failure rather than documenting it.
+    """
+    _tools, forced = route_tools(instruction)
+    wants_catalogue = forced == CHOOSE_TOOL["name"]
+
     catalogue = []
-    for kind, pool in POOL_FOR_KIND.items():
-        for i, site in enumerate(getattr(grounding, pool, [])):
-            catalogue.append({
-                "site_id": f"{kind}#{i}",
-                "intervention_type": kind,
-                "area_ha": site["areaHa"],
-                "evidence": site["evidence"],
-                "metrics": site["metrics"],
-            })
+    if wants_catalogue:
+        for kind, pool in POOL_FOR_KIND.items():
+            for i, site in enumerate(getattr(grounding, pool, [])):
+                catalogue.append({
+                    "site_id": f"{kind}#{i}",
+                    "intervention_type": kind,
+                    "area_ha": site["areaHa"],
+                    "evidence": site["evidence"],
+                    "metrics": site["metrics"],
+                })
     system = (
         "You are a flood-risk planner for a Hong Kong new development area. "
         "You select intervention sites from a fixed candidate list derived from "
@@ -1454,11 +1478,13 @@ def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict
         "instruction about one part of the district is applied to that part only. "
         "Omitting scope means the whole study area."
     )
-    user = json.dumps({
-        "instruction": instruction,
-        "candidate_sites": catalogue,
-        "grounding_notes": grounding.notes,
-    }, ensure_ascii=False, indent=2)
+    payload: dict[str, Any] = {"instruction": instruction}
+    if wants_catalogue:
+        payload["candidate_sites"] = catalogue
+    payload["grounding_notes"] = grounding.notes
+    # Compact, not indent=2. Pretty-printing doubled the payload for no benefit to
+    # a model reading JSON, and the model is the constraint here, not the reader.
+    user = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return system, user
 
 
@@ -1984,15 +2010,44 @@ def generate_plan(
         )
 
     features = provider.propose(instruction, grounding)[:max_features]
+    used_provider = getattr(provider, "name", "unknown")
+
+    # A provider that returns nothing has FAILED, and that is not the same thing as
+    # the user having asked for nothing.
+    #
+    # On 9 Oct 2026 `qwen2.5:3b-instruct` was asked -- with `tool_choice` forcing
+    # `modify_massing` -- to place six towers, and returned no tool call at all.
+    # The structured retry then failed too, so `propose()` returned an empty list
+    # and this function reported "The instruction named no recognised intervention
+    # type". That was false. The instruction was recognised; the model had simply
+    # not answered, and the user was told their own sentence was the problem.
+    #
+    # So: fall back to the deterministic parser, which handles massing
+    # instructions too, and name in the response which provider actually produced
+    # the result. A demo must not die because a 3B model declined to emit JSON.
+    fallback_note = ""
+    if not features and not isinstance(provider, HeuristicProvider):
+        heuristic = HeuristicProvider()
+        rescued = heuristic.propose(instruction, grounding)[:max_features]
+        if rescued:
+            features = rescued
+            fallback_note = (
+                f" {used_provider} returned no usable answer for this "
+                f"instruction, so the deterministic parser answered instead "
+                f"({len(rescued)} feature(s)). That is a fallback, not the "
+                f"GenAI path."
+            )
+            used_provider = f"heuristic (after {used_provider} returned nothing)"
+
     if not features:
         return {
             "planId": None,
             "features": 0,
-            "provider": getattr(provider, "name", "unknown"),
+            "provider": used_provider,
             "groundingNotes": grounding.notes,
             "message": (
-                "The instruction named no recognised intervention type, so no "
-                "sites were selected. Nothing was invented."
+                "Nothing could be placed: no provider returned a usable answer "
+                "for this instruction. Nothing was invented."
             ),
         }
 
@@ -2022,7 +2077,10 @@ def generate_plan(
     return {
         "planId": created.plan_id,
         "features": created.intervention_count,
-        "provider": getattr(provider, "name", "unknown"),
+        # used_provider, not provider: after a fallback these differ, and the
+        # response has to name whichever one actually produced the features.
+        "provider": used_provider,
         "types": sorted({f["intervention_type"] for f in features}),
         "groundingNotes": grounding.notes,
+        "fallbackNote": fallback_note or None,
     }
