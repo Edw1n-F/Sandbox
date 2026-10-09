@@ -106,7 +106,7 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
     the model reports the range the assumption implies.
     """
     ov = load_overlay(resolution_m)
-    cell_area = ov.cell_area_m2()
+    cell_area = ov.cell_area_m2
 
     # --- terrain conditioning ---------------------------------------------
     # Priority-Flood before anything else touches the surface.
@@ -265,7 +265,7 @@ def _sensitivity(args) -> int:
         r = compute(args.rainfall, args.resolution,
                     sink_fill=not args.no_sink_fill, cn_scale=scale)
         ov = r["overlay"]
-        runoff = float(r["runoff_m"].sum() * ov.cell_area_m2())
+        runoff = float(r["runoff_m"].sum() * ov.cell_area_m2)
         rows.append((scale, runoff, r["volume_m3"], r["wet_area_ha"]))
         print(f"  {scale:>8.0%} {runoff:>14,.0f} {r['volume_m3']:>14,.0f} "
               f"{r['wet_area_ha']:>9,.1f} {100*r['wet_area_ha']/r['total_area_ha']:>6.1f}%")
@@ -372,8 +372,8 @@ def main() -> int:
                 filled=ov.elevation,
                 raw=result["raw_elevation"],
                 receiver=receiver_flat,
-                runoff_in_m3=result["unstored_m"] * ov.cell_area_m2(),
-                cell_area_m2=ov.cell_area_m2(),
+                runoff_in_m3=result["unstored_m"] * ov.cell_area_m2,
+                cell_area_m2=ov.cell_area_m2,
             )
             np.save(settings.rasters_dir / "routed_depth_hsk.npy",
                     cascade["depthField"].astype(np.float32))
@@ -418,7 +418,7 @@ def main() -> int:
             "rows": ov.rows,
             "cols": ov.cols,
             "bounds": list(ov.bounds),
-            "cell_area_m2": ov.cell_area_m2(),
+            "cell_area_m2": ov.cell_area_m2,
         },
         "assumptions": {
             "hydrologicSoilGroup": "D",
@@ -436,7 +436,7 @@ def main() -> int:
         },
         "results": {
             "runoffVolumeM3": round(
-                float(result["runoff_m"].sum() * ov.cell_area_m2()), 1
+                float(result["runoff_m"].sum() * ov.cell_area_m2), 1
             ),
             "unstoredVolumeM3": round(result["volume_m3"], 1),
             "wetCells": result["wet_cells"],
@@ -447,7 +447,7 @@ def main() -> int:
             ),
             "meanDepthInWetAreaM": round(
                 result["volume_m3"]
-                / max(result["wet_cells"] * ov.cell_area_m2(), 1e-9),
+                / max(result["wet_cells"] * ov.cell_area_m2, 1e-9),
                 4,
             ),
         },
@@ -489,7 +489,7 @@ def main() -> int:
         mb = cascade["massBalance"]
         print(f"[wetgrid] routed stored    {cascade['storedM3']:>12,.0f} m3")
         print(f"[wetgrid] routed discharge {cascade['dischargedM3']:>12,.0f} m3")
-        print(f"[wetgrid] routed wet area  {cascade['wetCells'] * ov.cell_area_m2() / 10_000.0:>12,.1f} ha")
+        print(f"[wetgrid] routed wet area  {cascade['wetCells'] * ov.cell_area_m2 / 10_000.0:>12,.1f} ha")
         print(f"[wetgrid] mass balance residual {mb['residualM3']:+.3e} m3 "
               f"(relative {mb['relativeResidual']:.2e}, tol {mb['tol']:.0e})")
         print(f"[wetgrid] depressions: {cascade['depressions']['count']} "

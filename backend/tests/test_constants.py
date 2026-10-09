@@ -451,7 +451,7 @@ def test_cn_scaling_is_monotonic_and_clamped() -> None:
     previous = -1.0
     for scale in (0.8, 1.0, 1.2):
         r = compute(450.0, 5.0, cn_scale=scale)
-        total = float(r["runoff_m"].sum() * r["overlay"].cell_area_m2())
+        total = float(r["runoff_m"].sum() * r["overlay"].cell_area_m2)
         assert total > previous, f"runoff not monotonic at CN scale {scale:.0%}"
         previous = total
 

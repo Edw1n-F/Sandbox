@@ -172,7 +172,7 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(ramp_rgba(field), mode="RGBA").save(out)
 
-    cell_area = ov.cell_area_m2()
+    cell_area = ov.cell_area_m2
     counts = {
         name: int((ov.land_class == i).sum()) for i, name in enumerate(LAND_CLASSES)
     }

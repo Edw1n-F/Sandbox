@@ -247,7 +247,7 @@ def load_grids() -> Grids | None:
         bounds=ov.bounds,
         rows=ov.rows,
         cols=ov.cols,
-        cell_area_m2=ov.cell_area_m2(),
+        cell_area_m2=ov.cell_area_m2,
         terrain_source=ov.terrain_source,
         landcover_source=ov.landcover_source,
         # Derived, not read: the sidecar records volumes and areas but not the

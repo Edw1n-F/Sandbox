@@ -2,6 +2,45 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-09 — status-page truth pass: Stage 4b anchored, gap 13 collapsed
+
+The repo's own documents had drifted behind its code: `STATUS.md`,
+`CHANGELOG.md` and `docs/HEAT_AND_WIND_PROGRESS.md` all said the heat anchor
+"does not exist", while `backend/data/reference/heat_anchor.json` was on disk,
+verified by `fetch_heat_anchor.py --check`, served by the API, described as
+Working in `README.md`, and covered by 11 tests. A status page that understates
+its own progress is the same failure as one that overstates it — a reader
+cannot trust either. This entry closes the doc drift **and** the one code gap
+the status page itself listed as collapsible.
+
+### Fixed (documentation drift)
+
+- **`STATUS.md` claimed the anchor was absent.** `heat_anchor.json` exists,
+  `--check` reproduces `rangeC=[26.4, 32.7]`, `anchorSource` is `"hko_station"`
+  and `test_design_metrics` runs 90 tests (11 more than the recorded 79) —
+  the anchor contract tests (fetch, verify, load, no-data branch, malformed-file
+  branch, anchored warning text). Stage 4 is now marked **done** in the stages
+  table; gap 11 is re-worded from "not anchored to any observation" to "anchored
+  to a nearby station, ~20 km away — a provenance limitation, not a data gap";
+  the honesty-constraint entry now describes the *anchored* state instead of
+  forbidding anyone from describing it.
+- **Backend test count was stale.** 393 → **404** (90 + 54 + 39 + 40 + 39 + 32 +
+  28 + 26 + 23 + 18 + 15), re-verified by running every suite.
+- **The 9 Oct entry below this one already described the anchor as "nothing yet
+  to anchor to"** — correct when written, now annotated as superseded by this
+  entry (the mechanism entry stands; the *data* landed later the same day).
+
+### Fixed (code)
+
+- **Gap 13: `Overlay.cell_area_m2` collapsed to one spelling.** The
+  `_CellAreaM2` float-subclass-that-is-also-callable bridge is deleted; every
+  caller now uses the plain-float attribute form `ov.cell_area_m2` (10 call
+  sites across `make_wetgrid.py`, `make_heatmap.py`, `sandbox_model.py`,
+  `test_constants.py`). Both raster regeneration runs are **byte-identical**
+  before and after (`wetgrid_hsk.npy` md5 `d7cc052a…`, `heatmap_hsk.png` md5
+  `306b5be9…`), and all **404** backend tests pass — the collapse changed no
+  number, which is what the status page predicted.
+
 ## 2026-10-09 — heat SVF + anchoring, wind corridors, drainage routing, compare()
 
 Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2. **393 backend tests**
@@ -35,9 +74,12 @@ Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2. **393 backend t
   broken existing tests.
 - **An anchoring mechanism with nothing yet to anchor to.**
   `load_heat_calibration()` reads `data/reference/heat_anchor.json` when it
-  exists. It does not exist, so `anchorSource: "none"`, `anchorRangeC: null`, and
-  `HEAT_INDEX` stays labelled hand-authored. The schema names the physical
-  quantity (`LST_skin` vs `HKO_air`) so the two cannot be conflated later.
+  exists. *(Superseded later the same day: the HKO Lau Fau Shan anchor landed
+  and `--check` now reproduces `rangeC=[26.4, 32.7]` — see the entry above.
+  Kept as written because it was true when written.)* When the file was absent
+  `anchorSource` was `"none"`, `anchorRangeC: null`, and `HEAT_INDEX` stayed
+  labelled hand-authored. The schema names the physical quantity (`LST_skin`
+  vs `HKO_air`) so the two cannot be conflated later.
 - **Least-cost-path ventilation corridors** — `least_cost_corridors` via
   `scipy.sparse.csgraph.dijkstra`, plus `fad_ratio()` for baseline-vs-scenario
   comparison per direction. A ratio is a comparison, which the AVA framework
@@ -131,9 +173,11 @@ Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2. **393 backend t
   and their corridors are equally optimal paths over the same cells. The symmetry
   is broken only by `directional_exposure`, which reads the *arrangement*.
   Documented in the corridor limitation, not hidden.
-- **The heat field is not anchored to anything.** No Landsat LST scene and no HKO
-  normal is on disk, so the 0–1 scale has no observational reference. The
-  mechanism is built; the data is not.
+- **The heat field was not anchored to anything at the time of this entry.** No
+  Landsat LST scene and no HKO normal was on disk, so the 0–1 scale had no
+  observational reference. *(Superseded later the same day by the HKO Lau Fau
+  Shan station anchor — see the entry above.)* The mechanism was built; the
+  data landed after.
 - **`HEAT_INDEX` is still hand-authored** and still the weakest number in the
   project. It sits in the retention path, so it touches drainage numbers too.
 - **`place` and `reset` remain unscoreable** by the scenario evaluator, as before.

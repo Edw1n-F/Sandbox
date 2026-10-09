@@ -127,24 +127,6 @@ STORAGE_DEPTH_M: dict[str, float] = {"water": 1.50, "wetland": 0.60}
 DEPRESSION_STORAGE_M = 0.02
 
 
-class _CellAreaM2(float):
-    """A cell area that is both a number and a callable.
-
-    ``Overlay`` has always exposed its cell area as a *method* -- the scripts and
-    ``tests/test_constants.py`` call ``ov.cell_area_m2()`` -- while the canonical
-    geometry in ``app/services/design_metrics.py`` reads it as an *attribute*
-    (``grids.cell_area_m2``). Those two spellings used to be bridged by a small
-    grid shim inside ``make_heatmap.py``; deleting that shim means ``Overlay``
-    itself has to satisfy both, so this value answers to each. It is a ``float``
-    in every arithmetic and JSON sense; ``()`` is the only extra thing it does.
-    """
-
-    __slots__ = ()
-
-    def __call__(self) -> float:
-        return float(self)
-
-
 @dataclass
 class Overlay:
     """Everything the two scripts need, derived once."""
@@ -181,7 +163,17 @@ class Overlay:
 
     @property
     def cell_area_m2(self) -> float:
-        return _CellAreaM2(self.grid["cell_width_m"] * self.grid["cell_height_m"])
+        """The cell area, as a plain float.
+
+        One spelling everywhere since 9 Oct 2026 (STATUS gap #13 closed): the
+        attribute form ``ov.cell_area_m2``. The earlier wart -- a ``float``
+        subclass that was also callable, bridging the scripts' method-call
+        spelling ``ov.cell_area_m2()`` against the canonical attribute spelling
+        in ``app/services/design_metrics.py`` -- was collapsed; every caller
+        now reads the attribute. It is a ``float`` in every arithmetic and
+        JSON sense, and nothing pretends otherwise.
+        """
+        return float(self.grid["cell_width_m"] * self.grid["cell_height_m"])
 
 
 def load_overlay(resolution_m: float = 5.0) -> Overlay:

@@ -3,17 +3,18 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 393 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 404 backend + 104 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **393** on
-> 2026-10-09 19:0x. The frontend figure of 104 is the frontend owner's, carried forward
-> unchanged.
+> leaves the other's alone. Backend counts below were re-verified at **404** on
+> 2026-10-09 (the 11 new tests are the Stage 4b heat-anchor contract: fetch, verify,
+> load, no-data branch, malformed-file branch). The frontend figure of 104 is the
+> frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
-| backend `test_design_metrics` | 79/79 | `python tests/test_design_metrics.py` |
+| backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
 | backend `test_scenario` | 54/54 | `python tests/test_scenario.py` |
 | backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
 | backend `test_ventilation` | 40/40 | `python tests/test_ventilation.py` |
@@ -63,11 +64,18 @@ new output carries a machine-readable `status` and a human `warning`.
   land-class index, SVF and the cast shadow into one relative 0–1 raster, served by
   `GET /api/scenes/{id}/heat-field`. It is a raster, deliberately **not** a fourth
   axis — a fourth axis would break the three-axis "never a combined score" guard.
-- **Heat: an anchoring mechanism with nothing yet to anchor to.**
-  `load_heat_calibration()` reads `data/reference/heat_anchor.json` when it exists. It
-  does not exist, so `anchorSource: "none"` and `HEAT_INDEX` stays labelled
-  hand-authored. The schema names the physical quantity (`LST_skin` vs `HKO_air`) so
-  the two cannot be conflated when the data does arrive.
+- **Heat: anchored to a cited band at last.** `load_heat_calibration()` reads
+  `data/reference/heat_anchor.json` — now **on disk**, fetched by
+  `scripts/fetch_heat_anchor.py` from the HKO Lau Fau Shan (LFS) daily station
+  record (July 2015–2024: mean daily min **26.4 °C**, mean daily max **32.7 °C**),
+  with the HKO 1991–2020 normals and an Open-Meteo ERA5 cross-check recorded as
+  cross-checks, not the anchor. `anchorSource` is `"hko_station"`, the status is
+  `ANCHORED_TO_PUBLISHED_REFERENCE`, and `fetch_heat_anchor.py --check` is the
+  drift gate: it recomputes the band and fails if the committed file no longer
+  agrees. The anchor names the physical quantity (`HKO_air`, not `LST_skin`) so
+  the two cannot be conflated, and the field stays a relative 0–1 index — the band
+  is what the index is *read against*, never converted to. `HEAT_INDEX` remains
+  hand-authored; the anchor changes only the band.
 - **Wind: least-cost-path corridors.** `least_cost_corridors` on a `1 + cellFAD` cost
   surface via `scipy.sparse.csgraph.dijkstra` (0.70 s for eight directions), plus
   `fad_ratio()` for a per-direction baseline-vs-scenario comparison. A ratio is a
@@ -166,20 +174,13 @@ already exist and are tested.
 | 1 | `design_metrics.py` — geometry metrics each tied to a published rule | **done** |
 | 2 | One `evaluate(scenario)` returning three separate deltas, never one score | **done** |
 | 3 | Scenario-vs-baseline comparison with **stated** weights | **done** — `compare()` refuses to rank without them |
-| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **partial** — SVF and the blend are done; the anchoring *mechanism* exists but no reference data is on disk |
+| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **done** — SVF, the blend, and the anchor: the HKO Lau Fau Shan July band is on disk, verified by `fetch_heat_anchor.py --check`; `anchorSource: "hko_station"`. `HEAT_INDEX` itself remains hand-authored (see gap 9) |
 | 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **done** — symmetry broken by `directional_exposure`; corridors on `1 + cellFAD`. The corridors themselves still cannot separate NE from SW (see gaps) |
 | 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **done** |
 | 7 | Expose the three axes to the LLM as an objective, never as a number | **not started** |
 
 ### Next, in order
 
-- **Stage 4b, anchoring.** `HEAT_INDEX` is still hand-authored with no published
-  provenance and is still the weakest number in the project. The *mechanism* now
-  exists (`load_heat_calibration()` plus the `heat_anchor.json` schema, which names
-  `LST_skin` vs `HKO_air` so the two cannot be conflated), but no real Landsat 8/9
-  LST scene or HKO 1991–2020 normal is on disk, so `anchorSource` is `"none"` and
-  the 0–1 scale has no observational reference. **Highest-value remaining item**:
-  until it lands, every heat number is relative.
 - **Stage 5c, corridors that can tell NE from SW.** `cell_fad` is 180°-periodic, so
   the NE and SW cost surfaces are bit-identical and their corridors are equally
   optimal paths over the same cells. The symmetry is broken only by
@@ -248,9 +249,9 @@ Ordered by what would hurt a user first.
    wetland 0.20, water 0.05` — with no published provenance, and it sits in the
    retention path, so it touches drainage numbers too. It is the weakest number in the
    project and is honest about itself (`heatIndexSource: "Hand-authored screening
-   index; awaiting verification"`). The *mechanism* to replace it now exists
-   (`load_heat_calibration()` plus the `heat_anchor.json` schema), but nothing is on
-   disk to load. Stage 4b.
+   index; awaiting verification"`). The Stage 4b anchor does **not** change this
+   table: it supplies the band the index is read against, not the index weights
+   themselves.
 10. **The massing model carries no orientation, so the *baseline* is still
     direction-blind.** `directional_exposure` breaks the NE≡SW symmetry on the real
     layout, and footprints can now be rotated, but every generated envelope is
@@ -258,20 +259,26 @@ Ordered by what would hurt a user first.
     introduce by design. Frontal area density additionally *cannot* be made
     direction-sensitive for any orientation; that is exact geometry, not a gap to be
     closed later.
-11. **The heat field is not anchored to any observation.** `anchorSource` is `"none"`,
-    so the 0–1 scale is relative and has no observational reference. A Landsat 8/9 LST
-    scene or the HKO 1991–2020 normals must be ingested before any absolute reading is
-    defensible — and the calibration schema names which quantity it is (`LST_skin` vs
-    `HKO_air`), because they are not the same thing.
+11. **The heat field is anchored to a *nearby* observation, not the site.** The
+    anchor band (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is now on
+    disk and served in every heat response, but the station is ~20 km from the
+    study area and the record is an *air*-temperature climatology, not skin
+    temperature and not a site measurement. The 0–1 field stays relative; a real
+    Landsat 8/9 LST scene over the site would still be the stronger anchor, and
+    every response says so. **Closed as a data gap; open as a provenance
+    limitation.**
 12. **The wind corridors cannot tell a north-easterly from a south-westerly.**
     `cell_fad` is 180°-periodic, so the NE and SW cost surfaces are bit-identical and
     their corridors are equally optimal paths over the same cells. `directional_exposure`
     breaks the symmetry because it reads the *arrangement*; the corridor cost surface
     does not. The limitation is stated in the corridor response rather than hidden.
-13. **`Overlay.cell_area_m2` is a `float` subclass that is also callable.** A documented
-    bridge between two spellings of the same quantity (`ov.cell_area_m2()` in the
-    scripts and tests, `grids.cell_area_m2` in the canonical geometry). It changes no
-    number, but it is surprising, and it should be collapsed to one spelling.
+13. **~~`Overlay.cell_area_m2` was a `float` subclass that was also callable.~~**
+    **Collapsed 9 Oct 2026.** The two spellings (`ov.cell_area_m2()` in the scripts,
+    `grids.cell_area_m2` in the canonical geometry) are now one: the attribute form,
+    everywhere. The `_CellAreaM2` float-subclass bridge is deleted; every caller reads
+    the plain-float property. All 404 backend tests and both raster regeneration runs
+    are byte-identical before and after (`wetgrid_hsk.npy` md5 `d7cc052a…`
+    unchanged), so the collapse changed no number.
 
 ## Honesty constraints that must survive future work
 
@@ -301,9 +308,11 @@ Ordered by what would hurt a user first.
   by another name.
 - **Every new output carries a machine-readable `status` and a human `warning`**, from
   the closed set in `docs/drafts/DESIGN_stages_3_6.md` §6. `status` is never a verdict.
-- **The heat field is a relative index, not a temperature.** With `anchorSource: "none"`
-  the 0–1 scale is anchored to nothing. Do not convert it to °C, and do not describe
-  the anchoring as done until a real LST scene or the HKO normals are ingested.
+- **The heat field is a relative index, not a temperature.** The anchor band now on
+  disk (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is what the 0–1 scale
+  is *read against*; the field itself is still not °C and never becomes °C. Do not
+  convert it, do not call the band a site measurement (the station is ~20 km away),
+  and do not conflate `HKO_air` with `LST_skin`.
 - **A FAD *ratio* is a comparison, not a velocity ratio.** `fad_ratio` compares two
   schemes' geometry; it does not become a VR by being divided.
 - **The corridors are geometry, not flow, and they cannot separate NE from SW.**
