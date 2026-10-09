@@ -9,7 +9,13 @@ import { create } from 'zustand'
 
 import { getScene, getTerrain } from '@/api/sceneApi'
 import { errorMessage } from '@/api/client'
-import type { EnvParams, LayerVisibility, Scene, TerrainMeta } from '@/api/types'
+import type {
+  EnvParams,
+  LayerVisibility,
+  Scene,
+  TerrainMeta,
+  ViewMode,
+} from '@/api/types'
 
 export interface SceneState {
   sceneId: string
@@ -18,11 +24,17 @@ export interface SceneState {
   loading: boolean
   error: string | null
   layers: LayerVisibility
-
+  /**
+   * How the scene is dressed. Session-local like `layers`, and deliberately not
+   * persisted: it is a viewing preference, not a property of the study area, so
+   * putting it on the scene record would make a renderer choice look like data.
+   */
+  viewMode: ViewMode
   load: (sceneId: string) => Promise<void>
   setEnvParams: (patch: Partial<EnvParams>) => void
   toggleLayer: (layer: keyof LayerVisibility) => void
   setLayers: (layers: Partial<LayerVisibility>) => void
+  setViewMode: (mode: ViewMode) => void
   clearError: () => void
 }
 
@@ -46,6 +58,7 @@ export const useSceneStore = create<SceneState>((set) => ({
   loading: false,
   error: null,
   layers: { ...DEFAULT_LAYERS },
+  viewMode: 'survey',
 
   load: async (sceneId) => {
     set({ loading: true, error: null, sceneId })
@@ -84,6 +97,14 @@ export const useSceneStore = create<SceneState>((set) => ({
     set((state) => ({ layers: { ...state.layers, [layer]: !state.layers[layer] } })),
 
   setLayers: (layers) => set((state) => ({ layers: { ...state.layers, ...layers } })),
+
+  /**
+   * Switching mode must not move the camera. The tactical mode dims the basemap,
+   * which reads as a change in what is being looked at, and a camera that jumped
+   * at the same moment would make the mode look like a reload.
+   */
+  setViewMode: (mode) => set({ viewMode: mode }),
+
 
   clearError: () => set({ error: null }),
 }))

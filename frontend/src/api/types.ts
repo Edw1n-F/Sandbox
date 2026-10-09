@@ -115,9 +115,19 @@ export interface FeatureCollection {
   features: InterventionFeature[]
 }
 
+/**
+ * How the scene is dressed, as opposed to what is in it.
+ *
+ * `survey` is the daylight planning view; `tactical` is the dark instrument view
+ * with neon buildings. Both render the same data — a mode changes the renderer,
+ * never the dataset, which is why this is not a field on the scene record.
+ * Defined here beside `LayerVisibility` rather than in the view layer, because
+ * the store owns it and `src/view/` must not be imported from state.
+ */
+export type ViewMode = 'survey' | 'tactical'
+
 /** Which overlay layers are switched on. Rendered by `LayerToggle`. */
-export interface LayerVisibility {
-  imagery: boolean
+export interface LayerVisibility {  imagery: boolean
   boundary: boolean
   wetGrid: boolean
   heatmap: boolean
