@@ -18,25 +18,26 @@ for extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
     if str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
 
-from app.services.ai_plan import (  # noqa: E402
+from app.services.ai_plan import (
     ANTHROPIC_URL,
     CHOOSE_TOOL,
-    MASSING_TOOL,
-    parse_massing_intent,
+    FIT_TOOL,
     HeuristicProvider,
     LLMProvider,
+    MASSING_TOOL,
     OpenAICompatProvider,
     PlanGenerationError,
     _cell_axes,
     _fraction_ring,
     _post_json,
     build_prompt,
-    resolve_scope,
-    route_tools,
     get_provider,
     load_grounding,
+    parse_fit_intent,
     parse_intent,
-)
+    parse_massing_intent,
+    resolve_scope,
+    route_tools)
 
 FAILURES: list[str] = []
 
@@ -1115,6 +1116,83 @@ def _run() -> int:
     failed_names = {f.split(":")[0] for f in FAILURES}
     print(f"\n{len(tests) - len(failed_names)}/{len(tests)} passed")
     return 1 if FAILURES else 0
+
+
+
+
+def test_the_fit_tool_asks_for_an_objective_and_never_a_number() -> None:
+    """The point of Option A: the model states intent, the ledger does the maths.
+
+    `modify_massing` asks the model for numbers, and a 3.1B model has already got
+    four of them wrong in one afternoon. `assess_building_fit` asks for an
+    objective and a set of constraints -- no multiplier, no height, no area --
+    and `app/services/massing_fit.py` computes the rest from the storage ledger.
+    """
+    tool = next(t for t in (MASSING_TOOL, FIT_TOOL) if t["name"] == "assess_building_fit")
+    schema = tool["input_schema"]
+    props = set(schema["properties"])
+
+    check("the fit tool takes an objective",
+          "objective" in props and schema["required"] == ["objective"],
+          str(schema["required"]))
+    forbidden = {"multiplier", "height_m", "delta_m", "degrees", "count",
+                 "dx_m", "dy_m", "distance_m"}
+    check("and offers no field that applies a number",
+          not (props & forbidden),
+          f"leaked: {sorted(props & forbidden)}" if props & forbidden else
+          "objective + constraints only")
+
+    check("the objective is a closed enum",
+          set(schema["properties"]["objective"]["enum"]) ==
+          {"reduce_flood", "reduce_runoff", "reduce_heat", "balanced"},
+          str(schema["properties"]["objective"]["enum"]))
+
+
+def test_a_recommendation_request_routes_to_the_fit_tool() -> None:
+    for text in ("make this building better for flood risk",
+                 "what should I do with this block",
+                 "optimise the western blocks for heat",
+                 "make it better for the environment"):
+        tools, forced = route_tools(text)
+        check(f"'{text[:38]}' routes to the fit tool",
+              forced == "assess_building_fit" and len(tools) == 1, forced)
+
+    # A stated number is a decision, not a question, and must keep going to the
+    # editing tool. Losing this is how "set it to 60 m" turns into "here are some
+    # options you did not ask for".
+    for text in ("set it to 60 m", "make the district 25% taller",
+                 "rotate the northern blocks 20 degrees"):
+        _tools, forced = route_tools(text)
+        check(f"'{text[:38]}' stays an edit", forced == "modify_massing", forced)
+
+
+def test_fit_constraints_default_to_conservative_and_parse_goals() -> None:
+    flood = parse_fit_intent("make this building better for flood risk")
+    check("flood risk reads as reduce_flood",
+          flood and flood["objective"] == "reduce_flood", str(flood))
+    heat = parse_fit_intent("optimise the western blocks for heat")
+    check("heat reads as reduce_heat",
+          heat and heat["objective"] == "reduce_heat", str(heat))
+    vague = parse_fit_intent("make it better for the environment")
+    check("an unstated objective becomes 'balanced', never a guess at one",
+          vague and vague["objective"] == "balanced", str(vague))
+
+    check("green is protected unless permission to trade it is explicit",
+          flood and flood["constraints"]["no_net_green_loss"] is True,
+          "a planner who did not mention green has not permitted losing it")
+    permitted = parse_fit_intent(
+        "make it better for flood risk even if it means losing some green")
+    check("explicit permission is honoured",
+          permitted and permitted["constraints"]["no_net_green_loss"] is False,
+          str(permitted))
+
+    check("height changes stay off unless asked for",
+          flood and flood["constraints"]["allow_height_change"] is False,
+          str(flood))
+    heights = parse_fit_intent("what height best reduces flood risk here")
+    check("and turn on when the instruction mentions height",
+          heights and heights["constraints"]["allow_height_change"] is True,
+          str(heights))
 
 
 if __name__ == "__main__":

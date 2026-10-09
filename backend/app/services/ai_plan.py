@@ -1239,6 +1239,69 @@ CHOOSE_TOOL = {
 }
 
 
+# The third tool, and the one that changes what the model is *for*.
+#
+# `modify_massing` asks the model for numbers: a multiplier, a height, a count.
+# Every one of those is a chance to be confidently wrong, and this project has
+# watched qwen2.5:3b-instruct get four of them wrong in one afternoon. This tool
+# asks the model for no numbers at all -- only an objective and the constraints
+# it must respect. The arithmetic is done by app/services/massing_fit.py, which
+# re-runs the project's own storage ledger for each candidate.
+#
+# The objective is an enum, and an unrecognised one is dropped rather than
+# approximated. "Reduce flood exposure" and "make it nicer" are not the same
+# request, and guessing which was meant would put a fabricated objective into a
+# decision.
+FIT_TOOL = {
+    "name": "assess_building_fit",
+    "description": (
+        "Ask which change would actually be best for a building, given the "
+        "ground it stands on. Provide the OBJECTIVE and the CONSTRAINTS only -- "
+        "never a number to apply, never a height, never an area. The system "
+        "enumerates the candidate changes, measures each one with its own "
+        "flood-storage ledger, and returns which wins and by how much. Use this "
+        "when the instruction asks what SHOULD be done, what the best option "
+        "is, or asks to optimise something. Use modify_massing instead when the "
+        "instruction states the change outright."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "objective": {
+                "type": "string",
+                "enum": ["reduce_flood", "reduce_runoff", "reduce_heat",
+                         "balanced"],
+                "description": "What to optimise for. Pick the one the "
+                               "instruction asks for; if it asks for several, "
+                               "use 'balanced'.",
+            },
+            "scope": {
+                "type": "string",
+                "description": "Region the building is in, if the instruction "
+                               "names one. Omit when it does not.",
+            },
+            "no_net_green_loss": {
+                "type": "boolean",
+                "description": "True unless the instruction permits removing "
+                               "green space. Defaults to true.",
+            },
+            "min_green_share_100m": {
+                "type": "number", "minimum": 0, "maximum": 1,
+                "description": "Refuse options that leave the site with less "
+                               "green than this fraction within 100 m.",
+            },
+            "allow_height_change": {
+                "type": "boolean",
+                "description": "True only if the instruction permits changing "
+                               "the building's height.",
+            },
+            "min_height_m": {"type": "number", "minimum": 1, "maximum": 400},
+            "max_height_m": {"type": "number", "minimum": 1, "maximum": 400},
+        },
+        "required": ["objective"],
+    },
+}
+
 MASSING_TOOL = {
     "name": "modify_massing",
     "description": (
@@ -1728,9 +1791,66 @@ def route_tools(instruction: str) -> tuple[list[dict], str]:
     That is strictly safer than either a prompt rule or a permissive
     ``tool_choice``, and it costs one regex.
     """
+    if parse_fit_intent(instruction):
+        return [FIT_TOOL], FIT_TOOL["name"]
     if parse_massing_intent(instruction):
         return [MASSING_TOOL], MASSING_TOOL["name"]
     return [CHOOSE_TOOL], CHOOSE_TOOL["name"]
+
+
+# "What should I do here?" is a different request from "make it 60 m". These are
+# the phrases that separate them. It is a phrase list rather than a model because
+# the separation has to be a guarantee, not a request -- see route_tools.
+FIT_PHRASES = re.compile(
+    r"\b(best|best[- ]fit|optimi[sz]e|which (?:option|change)|what should|"
+    r"recommend|improve|better|suit the environment|fit for|"
+    r"(?:flood|heat|runoff) (?:risk|exposure|impact)|reduce (?:the )?\w+ "
+    r"(?:risk|exposure))\b",
+    re.IGNORECASE,
+)
+
+# "improve this building" is a fit request; "make it 60 m" is an edit. The second
+# pattern below is the tie-break: a stated number wins, because a planner who says
+# "60 m" has already decided and wants it applied, not optimised.
+STATED_NUMBER = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:m\b|metres?|meters?|%|storeys?|floors?)", re.IGNORECASE
+)
+
+
+def parse_fit_intent(instruction: str) -> dict[str, Any] | None:
+    """Recognise a request for a recommendation, and read its constraints.
+
+    Returns None when the instruction states the change outright, because that is
+    an edit and `modify_massing` is the right tool. A number in the instruction
+    is the signal: "set it to 60 m" is a decision, "make it better for flooding"
+    is a question.
+    """
+    text = str(instruction or "").strip()
+    if not text or not FIT_PHRASES.search(text):
+        return None
+    if STATED_NUMBER.search(text) and not re.search(
+            r"\b(best|optimi[sz]e|recommend|which|what should)\b", text,
+            re.IGNORECASE):
+        return None
+
+    objective = "balanced"
+    if re.search(r"\b(flood|runoff|storage|water)\b", text, re.IGNORECASE):
+        objective = "reduce_flood"
+    if re.search(r"\bheat|hotter|heatwave|warm\b", text, re.IGNORECASE):
+        objective = "reduce_heat" if objective == "balanced" else "balanced"
+
+    return {
+        "objective": objective,
+        "constraints": {
+            # Permissive by instruction, conservative by default: a planner who
+            # did not mention green has not given permission to remove it.
+            "no_net_green_loss": not re.search(
+                r"\b(even if|regardless of|if it means losing|trade off)\b",
+                text, re.IGNORECASE),
+            "allow_height_change": bool(re.search(
+                r"\bheight|taller|shorter|storeys|floors\b", text, re.IGNORECASE)),
+        },
+    }
 
 
 def _post_json(url: str, api_key: str, payload: dict) -> dict:
