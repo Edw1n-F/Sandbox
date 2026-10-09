@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date
 from pathlib import Path
 
 import numpy as np
@@ -39,6 +40,7 @@ if str(BACKEND_DIR) not in sys.path:
 from app.config import settings  # noqa: E402
 from app.services.design_metrics import (  # noqa: E402
     HEAT_STATUS,
+    HEAT_SUMMER_DAY_OF_YEAR,
     blended_heat_field,
     footprints_from_geojson,
     heat_field_report,
@@ -140,8 +142,9 @@ def main() -> int:
         action="store_true",
         help="apply the heatwave display stretch (display only, not a scenario)",
     )
-    parser.add_argument("--day-of-year", type=int, default=355,
-                        help="solar day for the shadow term (default 355, mid-December)")
+    parser.add_argument("--day-of-year", type=int, default=HEAT_SUMMER_DAY_OF_YEAR,
+                        help="solar day for the shadow term (default 196, 15 July "
+                             "-- matches the July anchor)")
     parser.add_argument("--hour", type=float, default=14.0,
                         help="local solar hour for the shadow term (default 14)")
     parser.add_argument(
@@ -179,21 +182,19 @@ def main() -> int:
 
     meta = {
         "artefact": "heatmap",
-        "generated": "2026-10-06",
+        "generated": date.today().isoformat(),
         "status": HEAT_STATUS,
         "warning": (
             "This is a relative heat-exposure index on a 0-1 scale derived from "
             "land class, sky view and shade. It is NOT degrees Celsius and NOT a "
             "modelled air-temperature field. Do not present it as either."
         ),
-        # Anchoring: the mechanism ships now, but with no real LST/HKO calibration
-        # on disk it must report itself as unanchored rather than claim a range.
+        # The anchoring block is the canonical one: the same shape the API
+        # serves, and the only copy. The five top-level duplicates that used to
+        # repeat anchorSource/anchorRangeC/calibrationPath/quantity/heatIndexSource
+        # were removed -- two spellings of one value can drift, which is the
+        # failure mode this project keeps eliminating.
         "anchoring": anchoring,
-        "anchorSource": anchoring["anchorSource"],
-        "anchorRangeC": anchoring["anchorRangeC"],
-        "calibrationPath": anchoring["calibrationPath"],
-        "quantity": anchoring["quantity"],
-        "heatIndexSource": anchoring["heatIndexSource"],
         "blend": {
             "weights": report["weights"],
             "components": report["components"],

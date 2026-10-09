@@ -1,22 +1,20 @@
 {
   "artefact": "heatmap",
-  "generated": "2026-10-06",
+  "generated": "2026-10-09",
   "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
   "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
   "anchoring": {
-    "anchorSource": "none",
-    "anchorRangeC": null,
-    "calibrationPath": null,
-    "quantity": null,
+    "anchorSource": "hko_station",
+    "anchorRangeC": [
+      26.4,
+      32.7
+    ],
+    "calibrationPath": "reference/heat_anchor.json",
+    "quantity": "HKO_air",
     "heatIndexSource": "Hand-authored screening index; awaiting verification",
-    "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
-    "warning": "No real LST/HKO calibration is present; the scale is not anchored to observed data. Screening-level; relative, not absolute."
+    "status": "ANCHORED_TO_PUBLISHED_REFERENCE",
+    "warning": "Anchored to a cited air-temperature band: HKO Lau Fau Shan station, July 2015-2024 (HKO_air: 26.4-32.7 C). This is a stated band for a Hong Kong summer, not a measurement of this site -- the station is ~20 km away. The field remains a relative 0-1 index, never degrees Celsius. Screening-level; relative, not absolute."
   },
-  "anchorSource": "none",
-  "anchorRangeC": null,
-  "calibrationPath": null,
-  "quantity": null,
-  "heatIndexSource": "Hand-authored screening index; awaiting verification",
   "blend": {
     "weights": {
       "land": 0.5,
@@ -26,9 +24,9 @@
     "components": {
       "land": 0.8102,
       "svf": 0.2981,
-      "shadow": 0.2215
+      "shadow": 0.0645
     },
-    "meanHeatIndex": 0.7714,
+    "meanHeatIndex": 0.8028,
     "maxHeatIndex": 1.0,
     "svf": {
       "meanSvf": 0.2981,
@@ -44,7 +42,7 @@
       "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
       "warning": "Heat is not a temperature. This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade -- not degrees Celsius and not a modelled air-temperature field. Screening-level; relative, not absolute."
     },
-    "solarDayOfYear": 355,
+    "solarDayOfYear": 196,
     "solarHour": 14.0
   },
   "inputs": {
@@ -72,7 +70,7 @@
     "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
   },
   "results": {
-    "meanIndex": 0.7714,
+    "meanIndex": 0.8028,
     "maxIndex": 1.0,
     "cellCountByClass": {
       "water": 1185,

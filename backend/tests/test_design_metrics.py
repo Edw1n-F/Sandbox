@@ -418,13 +418,146 @@ def main() -> int:
               == "Hand-authored screening index; awaiting verification",
               anchor["heatIndexSource"])
     else:
-        check("a present calibration names its physical quantity",
-              anchor["anchorSource"] in ("landsat_lst", "hko_normals")
-              and anchor["anchorRangeC"] is not None,
-              str(anchor["anchorSource"]))
+        check("a present calibration is labelled from its quantity, not its product",
+              anchor["anchorSource"] == "hko_station"
+              and anchor["quantity"] == "HKO_air"
+              and anchor["anchorRangeC"] == [26.4, 32.7]
+              and anchor["calibrationPath"] == "reference/heat_anchor.json"
+              and anchor["status"] == "ANCHORED_TO_PUBLISHED_REFERENCE",
+              f"{anchor['anchorSource']} {anchor['anchorRangeC']} {anchor['status']}")
+        check("and the land index is still called hand-authored",
+              anchor["heatIndexSource"]
+              == "Hand-authored screening index; awaiting verification",
+              anchor["heatIndexSource"])
+        check("the anchored warning names the source, the band and the site caveat",
+              "Lau Fau Shan" in anchor["warning"]
+              and "26.4-32.7" in anchor["warning"]
+              and "not a measurement of this site" in anchor["warning"],
+              anchor["warning"])
     check("the heat warning carries both mandated phrases",
           "Heat is not a temperature" in report["warning"]
           and "Screening-level; relative, not absolute" in report["warning"], "")
+
+    # --- The anchor contract (design §8.2) --- #
+    #
+    # 1. The field is never a temperature. Scan the served report for a key that
+    #    looks like a Celsius field; the anchor legitimately carries a band, but
+    #    the *field* must not, on any path.
+    def _celsius_like_keys(obj, path=""):
+        hits = []
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if _re.search(r"(?i)(temp|temperature|lst).*c$", key) or \
+                        _re.search(r"(?i)(celsius|degreesc)", key):
+                    hits.append(f"{path}.{key}")
+                hits.extend(_celsius_like_keys(value, f"{path}.{key}"))
+        elif isinstance(obj, list):
+            for i, value in enumerate(obj):
+                hits.extend(_celsius_like_keys(value, f"{path}[{i}]"))
+        return hits
+
+    check("no key on the heat report looks like a Celsius temperature field",
+          not _celsius_like_keys(report), str(_celsius_like_keys(report)))
+    check("the mean and max index stay on the 0-1 scale",
+          0.0 <= report["meanHeatIndex"] <= 1.0 and report["maxHeatIndex"] <= 1.0,
+          f"{report['meanHeatIndex']} / {report['maxHeatIndex']}")
+    from _overlay_common import HEAT_INDEX as _HI
+    check("the hand-authored land-class index is pinned",
+          _HI == {"paved": 1.0, "bare": 0.85, "green": 0.40,
+                  "wetland": 0.20, "water": 0.05}, str(_HI))
+
+    # 2. Determinism / no runtime network on the *heat path*: neither the heat
+    #    service nor the heat route may import a network library, and nothing in
+    #    app/ may import the fetcher. (ai_plan.py uses urllib for the separate,
+    #    opt-in LLM provider -- a different path; this check is scoped to the heat
+    #    path so it cannot be defeated by an unrelated module.)
+    app_dir = BACKEND_DIR / "app"
+    heat_path = [app_dir / "services/design_metrics.py", app_dir / "routers/scenes.py"]
+    net_hits = []
+    for src in heat_path:
+        text = src.read_text()
+        if _re.search(r"^\s*(import|from)\s+(requests|urllib|httpx|socket)\b",
+                      text, _re.M):
+            net_hits.append(str(src.relative_to(BACKEND_DIR)))
+    check("no heat-path module imports a network library",
+          not net_hits, ", ".join(net_hits))
+    app_fetcher_hits = [str(src.relative_to(BACKEND_DIR))
+                        for src in app_dir.rglob("*.py")
+                        if "fetch_heat_anchor" in src.read_text()]
+    check("nothing under app/ imports the anchor fetcher",
+          not app_fetcher_hits, ", ".join(app_fetcher_hits))
+    check("load_heat_calibration reads only the committed calibration path",
+          "settings.data_dir / HEAT_CALIBRATION_PATH"
+          in (BACKEND_DIR / "app/services/design_metrics.py").read_text(), "")
+
+    # 3. The parser, offline: the HKO sentinel "***" must be dropped, never read
+    #    as 0 (which cools the band) or NaN (which poisons the mean). Includes the
+    #    exact sentinel row the PM observed live.
+    from fetch_heat_anchor import parse_window
+    fixture = {
+        "data": [
+            ["2023", "7", "1", "26.0", "C"],
+            ["2023", "7", "2", "27.0", "C"],
+            ["2023", "7", "3", "***", ""],       # sentinel: dropped, not 0
+            ["2024", "1", "14", "***", ""],      # the observed row, wrong month
+            ["2024", "7", "4", "28.0", "C"],
+            ["2010", "7", "5", "99.0", "C"],     # outside the window
+        ]
+    }
+    values, stats = parse_window(fixture, 7, 2015, 2024)
+    check("the parser drops the sentinel and counts it",
+          values == [26.0, 27.0, 28.0] and stats["dropped"] == 1
+          and stats["rows"] == 4,
+          f"values={values} stats={stats}")
+    check("the sentinel did not enter the mean as 0",
+          abs(sum(values) / len(values) - 27.0) < 1e-9,
+          f"mean {sum(values) / len(values):.4f}")
+
+    # 4. A malformed calibration must fall back to the honest unanchored path,
+    #    never a half-anchored block. Exercised on a temp dir, not the real file.
+    import tempfile
+    import unittest.mock as _mock
+    from app.config import settings as _settings
+    with tempfile.TemporaryDirectory() as _td:
+        _ref = Path(_td) / "reference"
+        _ref.mkdir()
+        _bad = [
+            {"quantity": "BOGUS", "rangeC": [1.0, 2.0], "mapsTo": "range"},
+            {"quantity": "HKO_air", "mapsTo": "range"},          # no rangeC
+            {"quantity": "HKO_air", "rangeC": [30.0, 20.0], "mapsTo": "range"},
+            {"quantity": "HKO_air", "rangeC": [20.0, 30.0], "mapsTo": "elsewhere"},
+        ]
+        _ok = True
+        for _doc in _bad:
+            (_ref / "heat_anchor.json").write_text(json.dumps(_doc))
+            with _mock.patch.object(_settings, "data_dir", Path(_td)):
+                _loaded = load_heat_calibration()
+                _blk = heat_field_report(land_flat, svf_flat, shad_flat,
+                                         calibration=_loaded)["anchoring"]
+            if _loaded is not None or _blk["anchorSource"] != "none":
+                _ok = False
+                break
+        check("a malformed calibration returns None -> anchorSource 'none'",
+              _ok, "the honest fallback, not a half-anchored block")
+
+    # 5/6. The committed sidecar: the anchoring block lives once (nested), and the
+    #      render day is the summer default. Two spellings of one value drift;
+    #      a winter render under a July band is the inconsistency a judge sees.
+    sidecar_path = _settings.rasters_dir / "heatmap_hsk.json"
+    if sidecar_path.exists():
+        sidecar = json.loads(sidecar_path.read_text())
+        dup = [k for k in ("anchorSource", "anchorRangeC", "calibrationPath",
+                           "quantity", "heatIndexSource") if k in sidecar]
+        check("the sidecar keeps the anchoring block once, nested",
+              not dup, str(dup))
+        check("the sidecar render day is the summer default (196)",
+              sidecar.get("blend", {}).get("solarDayOfYear") == 196,
+              str(sidecar.get("blend", {}).get("solarDayOfYear")))
+        check("the sidecar anchoring is anchored to the station",
+              sidecar.get("anchoring", {}).get("anchorSource") == "hko_station",
+              str(sidecar.get("anchoring", {}).get("anchorSource")))
+    else:
+        check("the heat sidecar is committed", False, f"missing {sidecar_path}")
 
     # --- Stage 5b: per-cell FAD mean preservation (the Q3 correctness check) --- #
     #

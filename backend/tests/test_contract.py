@@ -16,6 +16,7 @@ Run:  python -m pytest tests/ -q      (or: python tests/test_contract.py)
 
 from __future__ import annotations
 
+import re as _re
 import sys
 from pathlib import Path
 
@@ -389,10 +390,22 @@ def test_heat_field_endpoint_contract() -> None:
                       "anchoring", "status", "warning", "note"):
             assert field in body, f"missing {field}"
         assert body["svf"]["searchRadiusCells"] is not None
-        assert body["anchoring"]["anchorSource"] == "none"
-        assert body["anchoring"]["heatIndexSource"] == (
+        anchor = body["anchoring"]
+        assert anchor["anchorSource"] == "hko_station"
+        assert anchor["anchorRangeC"] == [26.4, 32.7]
+        assert anchor["quantity"] == "HKO_air"
+        assert anchor["calibrationPath"] == "reference/heat_anchor.json"
+        assert anchor["status"] == "ANCHORED_TO_PUBLISHED_REFERENCE"
+        assert anchor["heatIndexSource"] == (
             "Hand-authored screening index; awaiting verification")
+        assert "not a measurement of this site" in anchor["warning"]
         assert body["status"] == "RELATIVE_INDEX_NOT_A_TEMPERATURE"
+        # the field is never a temperature: no key looks like a Celsius field
+        assert not _celsius_like_keys(body), _celsius_like_keys(body)
+        # an explicit winter day is still honoured (only the *default* moved)
+        winter = client.get(f"/api/scenes/{scene_id}/heat-field",
+                            params={"day_of_year": 355})
+        assert winter.json()["solarInputs"]["dayOfYear"] == 355
         # out-of-range hours is refused, not silently clamped
         assert client.get(f"/api/scenes/{scene_id}/heat-field",
                           params={"hours": "99"}).status_code == 422
@@ -560,6 +573,27 @@ def _truthy_verdict_hits(node, path: str = "") -> list[str]:
     return hits
 
 
+def _celsius_like_keys(node, path: str = "") -> list[str]:
+    """Keys that look like a Celsius temperature field (the honesty scan).
+
+    The heat field is a relative 0-1 index; the anchor states a band it is read
+    against, but no response key may read as a temperature field. A key such as
+    ``tempC`` / ``lstC`` / ``degreesCelsius`` would be the hidden conversion this
+    guards against.
+    """
+    hits: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if _re.search(r"(?i)(temp|temperature|lst).*c$", key) or \
+                    _re.search(r"(?i)(celsius|degreesc)", key):
+                hits.append(f"{path}.{key}")
+            hits.extend(_celsius_like_keys(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            hits.extend(_celsius_like_keys(value, f"{path}[{i}]"))
+    return hits
+
+
 def test_no_new_response_carries_a_truthy_verdict() -> None:
     scene_id = _scene_with_model()
     try:
@@ -591,7 +625,7 @@ def test_query_param_spellings_both_take_effect() -> None:
         assert camel["solarInputs"]["dayOfYear"] == 172
         # and it is not merely the default being echoed
         default = client.get(f"/api/scenes/{scene_id}/heat-field").json()
-        assert default["solarInputs"]["dayOfYear"] == 355
+        assert default["solarInputs"]["dayOfYear"] == 196
 
         wet_snake = client.get(f"/api/scenes/{scene_id}/drainage/routed",
                                params={"rainfall_mm": 550}).json()

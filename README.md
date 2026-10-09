@@ -38,7 +38,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 
 | Capability | Status | Verified by |
 |---|---|---|
-| REST API — 10 endpoints (9 per spec §3, plus the reserved AI slot) | Working | 11 contract tests |
+| REST API — the spec's §3 surface, the reserved AI slot, and the analysis endpoints | Working | 23 contract tests |
 | Scene → plan → intervention cascade delete | Working | contract test |
 | camelCase wire contract with `sceneId`/`planId` aliases | Working | contract test |
 | Single error envelope (`detail` **and** `error`) | Working | contract test |
@@ -46,7 +46,8 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **Real elevation** (~90 m, Open-Meteo global model) | Working | control-point assertions on every fetch; resolution measured, not assumed |
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
-| Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
+| Heat-exposure overlay — land class **+ sky view + cast shadow**, a relative 0–1 index | Working, screening-grade | a lone thin tower reads SVF 0.9913; a uniform block reads 0.0 |
+| **Heat anchor** — the cited band that index is read against | Working | HKO Lau Fau Shan, July [26.4, 32.7] °C; reproducible via `fetch_heat_anchor.py --check` |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
 | **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 30 tests, incl. real-HTTP round trips |
 | **AI 3D placement** — new massing on real land cover | Working, screening-grade | 3 blocks × 60 m rendered, pixel-verified, selectable |
@@ -54,12 +55,20 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded; click-to-select + per-building height, browser-verified |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
+| **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |
+| **Wind: least-cost-path corridors** per direction (Dijkstra on a `1 + cellFAD` cost surface) | Working, **geometry not flow** | 8 directions in 0.70 s; corridor cost monotone in FAD |
+| **Wind: per-direction FAD ratio** | Working | `1.0` for identical schemes, `>1` where blockage rises |
+| **Drainage: D8 fill-and-spill routing + enforced mass balance + HAND** | Working, screening-grade | residual **6.5e-15** relative; a deliberately leaked cell makes the assertion **raise** |
+| **Scenario evaluation** — three axes at once, with **no combined score** | Working | raising the western blocks 40% taller gives more shade *and* more blockage |
+| **Scenario comparison** — ordering under **stated** weights | Working | refuses to rank without weights; the three axes stay visible; `combinedScore` stays `null` |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
 
-**Not working / not built:** PostGIS + MinIO store, a physics engine, flow
-routing, a validated Curve Number table, Hato flood validation, and the ability
-to *move* or *delete* an individual building — the AI can place blocks and change
-their height, density and orientation, not reposition them. See
+**Not working / not built:** PostGIS + MinIO store, a physics engine, a
+validated Curve Number table, Hato flood validation, and the ability to
+*delete* an individual building — the AI can place blocks and change their
+height, density and orientation, not remove them. Two drainage readings
+deliberately coexist: the routed cascade and the level-pool headline, which are
+not merged because they are different pictures of the same water. See
 [Limitations](#limitations--what-this-is-not).
 
 ## Tech stack
@@ -372,6 +381,16 @@ database; the backend never knows what Cesium is.
 | `PUT` | `/api/plans/{planId}` | Create or update a plan |
 | `GET` | `/api/plans/{planId}/interventions` | Interventions as a GeoJSON `FeatureCollection` |
 | `POST` | `/api/scenes/{sceneId}/ai-plan` | **Natural language → a draft plan** (the spec's reserved AI slot) |
+| `GET` | `/api/scenes/{sceneId}/ledger` | The buffer deficit, and what stored interventions do to it |
+| `GET` | `/api/scenes/{sceneId}/sea-level` | Official HKO 2100 projections run through the ledger |
+| `GET` | `/api/scenes/{sceneId}/scenarios` | Three published CEDD development programmes, encoded |
+| `GET` | `/api/scenes/{sceneId}/design-metrics` | Geometry metrics, each tied to a published AVA rule |
+| `GET` | `/api/scenes/{sceneId}/ventilation` | Frontal area density per wind direction |
+| `GET` | `/api/scenes/{sceneId}/ventilation/corridors` | Least-cost-path ventilation corridors, per direction |
+| `GET` | `/api/scenes/{sceneId}/heat-field` | The blended heat field, sky view, and the cited anchor band |
+| `GET` | `/api/scenes/{sceneId}/drainage/routed` | D8 fill-and-spill routing, mass balance and HAND |
+| `POST` | `/api/scenes/{sceneId}/scenario/evaluate` | Three separate axis deltas — and **no combined score** |
+| `POST` | `/api/scenes/{sceneId}/scenario/compare` | Order scenarios **only under stated weights**; refuses without them |
 
 ---
 
@@ -480,7 +499,38 @@ python scripts/fetch_landcover.py                  # → landclass_hsk.npy
 python scripts/fetch_dem.py                       # → dem_hsk.npy
 python scripts/make_wetgrid.py --rainfall 450      # → wetgrid_hsk.png
 python scripts/make_heatmap.py                     # → heatmap_hsk.png
+python scripts/fetch_heat_anchor.py                # → reference/heat_anchor.json
+python scripts/fetch_heat_anchor.py --check        # asserts the committed file still reproduces
 ```
+
+### 8. Three axes, never one score — and the tool refuses to grade
+
+The AVA policy behind Hong Kong's own guidance (Ng & Cheng, 2009) states that
+"whether the better design option meets a standard cannot be known", and TC 1/06
+§6 gives no absolute benchmark. So this tool **compares and never grades**:
+`verdict` is `null` on every response and nothing prints a pass or fail.
+
+The obvious thing to do with three axes — weight them and add them up — is the
+one thing refused, for three reasons. The units are incommensurable (a fraction
+of ground, a dimensionless blockage, cubic metres). The ventilation axis has no
+threshold to normalise against. And the axes **genuinely conflict**: making the
+western blocks 40% taller gives more shade *and* more wind blockage at the same
+time. A single number would settle that trade-off silently, in whichever
+direction the weights happened to lean.
+
+So `scenario/evaluate` returns three independent axes with their own units, and
+`scenario/compare` **refuses to rank without weights**. Given weights it will
+order — but it echoes them back, names the total `weightedFavourability` (never
+`score`), and keeps the three raw axes and their per-axis ranks on **every** row,
+so the cost of the weights is always visible. A default weight set would quietly
+become this project's opinion about which axis matters, which is the judgement
+the guidance says cannot be settled.
+
+Two more things the same instinct drives: the routed drainage cascade asserts
+`runoff in == stored + discharged` and **raises** rather than reporting a flag —
+a leak should be loud, not a field someone can ignore — and there is a second
+identity (`generation == local_retention + runoff_in`) so a double count cannot
+hide inside a balanced cascade.
 
 ---
 
@@ -757,6 +807,7 @@ The layer reports how many loaded, so a dead URL is visible rather than silent.
 | Elevation | [Open-Meteo elevation API](https://open-meteo.com/) | open | **~90 m** (measured) | Real |
 | Land cover | [ESA WorldCover 10 m v200](https://esa-worldcover.org/) (2021) | CC BY 4.0 | 10 m | Real |
 | Base imagery | OpenStreetMap standard tiles | ODbL | — | Real |
+| Heat anchor | [HKO open data — Lau Fau Shan station](https://data.weather.gov.hk/weatherAPI/opendata/opendata.php) (`CLMTEMP`/`CLMMAXT`/`CLMMINT`) | HKO open data (GovHK Terms of Use) | daily station record, ~20 km from the site | **Cited band** — *air* temperature, July 2015–2024; a stated band, not a site measurement |
 | Study-area extent | OSM place anchors (Nominatim) | ODbL | — | **Provisional** — see below |
 
 The study area was chosen over Deep Bay because HSK/HT has the stronger public
@@ -789,18 +840,49 @@ baseline storage ledger requires:
 Verified monotonic in rainfall: 0 / 200 / 450 / 800 mm gives
 0 / 8.7 / 17.0 / 27.2 % wet area.
 
-There is **no flow routing and no sink conditioning** — water is placed by
-level, not routed downhill. That is the difference between this and a flood
-model, and it is the main reason this is a screening view.
+The wet grid is a **level-pool** allocation: water is placed by water-surface
+level, not routed downhill, and the **headline deficit** (`bufferDeficitM3`,
+`wetgrid_hsk.npy`) comes from this path. A **separate** D8 fill-and-spill routing
+cascade now exists (`routed_depth_hsk.npy`,
+`GET /api/scenes/{id}/drainage/routed`, mass-balanced to 1e-15 relative) as an
+**additive screening surface** — it does **not** replace or correct the headline
+number, and it is not a flood prediction. The two are different pictures of the
+same water and are deliberately not merged.
 
 ### The heat overlay
 
-Land class → relative heat-exposure index on a 0–1 scale → RGBA ramp.
+**The final choice: real air temperature, cited, as a band the relative index is
+read against — not a temperature field.**
 
-It is **not degrees Celsius** and **not** a modelled air-temperature field. It
-needs no terrain, which is why it is the overlay that can honestly ship today.
-`--heatwave` is a *display* stretch, not a scenario, so a screenshot taken under
-the preset cannot be mistaken for different conditions.
+The field itself is unchanged: land class (hand-authored) + sky view + cast
+shadow → a **relative heat-exposure index on a 0–1 scale** → RGBA ramp. It is
+**not degrees Celsius** and **not** a modelled air-temperature field. What is new
+is that the scale now states the band it is read against, from committed, cited
+data (`backend/data/reference/heat_anchor.json`):
+
+- **Real, not synthesized.** Source: **HKO open data — Lau Fau Shan (LFS)
+  station daily air temperature**,
+  `https://data.weather.gov.hk/weatherAPI/opendata/opendata.php`
+  (`dataType=CLMTEMP|CLMMAXT|CLMMINT`, `station=LFS`), retrieved **2026-10-09**.
+- **Air temperature, not skin.** Every skin-temperature source (Landsat 8/9 C2 L2
+  ST, MODIS MOD11, ECOSTRESS) is credential-gated and was unreachable from this
+  host. Skin runs 10–20 °C above air on a hot paved surface and is **not**
+  claimed.
+- **The band: [26.4, 32.7] °C.** Index 0.0 ↔ 26.4 °C (a typical July night, the
+  mean daily minimum); index 1.0 ↔ 32.7 °C (a typical July afternoon, the mean
+  daily maximum). Mean of the daily min/max over **July 2015–2024**, missing
+  values excluded.
+- **Honest caveat.** This is a **stated band for a Hong Kong summer, not a
+  measurement of this site** — the LFS station is ~20 km away, and it is a 10-year
+  July climatology, not the site's air temperature on any day.
+- Cross-checked against the HKO 1991–2020 normals (HKO HQ, July 26.9 / 31.6) and
+  the Open-Meteo ERA5 archive at the site centroid (July mean-of-daily-max
+  30.99 °C). Neither is the anchor.
+
+The anchor is a **committed file, never fetched at request time** (deterministic);
+it is reproduced by `backend/scripts/fetch_heat_anchor.py`. The overlay is
+rendered at a **summer solar day (day 196, 15 July)** to match the July band.
+`--heatwave` is still a *display* stretch, not a scenario.
 
 ### Both scripts register themselves
 
@@ -815,11 +897,25 @@ frontend store only; re-running the script is a manual step. The panel says so.
 
 ## Testing
 
+There is no pytest in the venv — every suite is a plain script that prints
+`N/N passed` and exits non-zero on any failure, so a red suite fails a CI run:
+
 ```bash
 cd backend
-python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    # 18/18 — constants, DEM, raster/feature invariants
-python tests/test_ai_plan.py      # 30/30 — grounding, scope, placement, hostile responses
+for f in tests/test_*.py; do ./.venv/bin/python "$f"; done   # 404 checks, 11 suites
+
+# individually:
+python tests/test_design_metrics.py      #  79 — sky view, shadow, per-cell FAD
+python tests/test_scenario.py            #  54 — three axes, no combined score, compare()
+python tests/test_ai_plan.py             #  39 — grounding, scope, placement, hostile responses
+python tests/test_ventilation.py         #  40 — frontal area density, corridors, FAD ratio
+python tests/test_ledger.py              #  39 — the storage ledger and the routed cascade
+python tests/test_building_fit.py        #  32 — per-building candidate scoring
+python tests/test_published_scenarios.py #  28 — three CEDD programmes
+python tests/test_hydrology.py           #  26 — depressions, fill-and-spill, mass balance, HAND
+python tests/test_contract.py            #  23 — API contract
+python tests/test_constants.py           #  18 — constants, DEM, raster/feature invariants
+python tests/test_sea_level.py           #  15 — HKO projections
 cd ../frontend && npx tsc --noEmit
 ```
 
@@ -946,7 +1042,7 @@ T1/
 ### What is committed, and what is not
 
 `backend/data/` is committed, so a fresh clone runs without fetching anything.
-Twelve files, all of them meaningful:
+Every file below is meaningful — nothing here is a placeholder someone forgot:
 
 | File | What it is |
 |---|---|
@@ -955,6 +1051,10 @@ Twelve files, all of them meaningful:
 | `dem_hsk.npy`, `dem_terrain_rgb.png`, `dem_hsk.json` | real elevation + its manifest |
 | `landclass_hsk.npy`, `landcover_hsk.json` | real land cover + its manifest |
 | `rasters/wetgrid_hsk.*`, `rasters/heatmap_hsk.*` | the two overlays + manifests |
+| `rasters/flow_receiver_hsk.npy`, `flow_raw_elev_hsk.npy`, `flow_filled_hsk.npy` | the D8 routing graph, the raw surface, and the Priority-Flood surface the receiver was derived from |
+| `rasters/routed_depth_hsk.npy` | the routed fill-and-spill depth — a screening surface beside the level-pool headline, not a replacement |
+| `reference/heat_anchor.json` | the cited air-temperature band the heat index is read against |
+| `reference/hsk_ava_reference.json` | the published AVRG73 wind regime and velocity ratios (carried, never recomputed) |
 
 Not committed, and regenerated on demand:
 
@@ -972,11 +1072,13 @@ Not committed, and regenerated on demand:
 Stated plainly, because the specification asks for a tool that does not
 overclaim, and because a plausible wrong number is worse than no number.
 
-**Not a flood model.** The wet grid allocates water by level, not by routing. No
-flow accumulation, no sink conditioning, no drainage network, no tide
-boundary — the Hong Kong 0.146 m mCD↔mPD datum offset is a named constant with
-no tide series behind it yet. It shows *where water would collect over plausible
-topography*, nothing more.
+**Not a flood model.** The wet grid allocates water by level, not by routing, and
+that level-pool path still produces the headline deficit. A D8 fill-and-spill
+cascade and a HAND cross-check now exist as an **additive screening surface**,
+but they are screening-level, they do not replace the level-pool headline, and
+they are not a flood prediction. No tide boundary — the Hong Kong 0.146 m
+mCD↔mPD datum offset is a named constant with no tide series behind it yet. It
+shows *where water would collect over plausible topography*, nothing more.
 
 **The Curve Number table is unverified.** Hydrologic soil group D is *assumed*
 for HSK/HT and has not been independently checked. Runoff volume scales directly
@@ -985,7 +1087,9 @@ with CN, so this is the single assumption most worth attacking next.
 **The study-area extent is provisional.** A machine-derived operational
 rectangle, not the gazetted NDA boundary.
 
-**The heat overlay is a relative index, not a temperature.** And
+**The heat overlay is a relative index, not a temperature.** It is anchored to a
+cited air-temperature band (HKO Lau Fau Shan, July [26.4, 32.7] °C), but that is
+a stated band for a Hong Kong summer, not a measurement of this site.
 `--heatwave` is a display transform, not a scenario.
 
 **The land cover is a single 2021 epoch.** It does not show change since then,
@@ -1005,10 +1109,14 @@ and all named in the task plan.
 2. **Replace the study-area extent** with the OZP S/HSK/3 sheet extent.
 3. **Standardise the Python interpreter** — there are two, and only one runs the
    raster scripts.
-4. **Add flow routing and sink conditioning** to turn the wet grid from a
-   screening view into something defensible.
-5. **Stand up PostGIS + MinIO** and re-run the contract suite against it.
-6. **Validate against a Hato flood record**, which is what the task plan's
+4. **Reconcile the two drainage readings** — the routed fill-and-spill cascade
+   exists and balances, but the headline deficit still comes from the level-pool
+   path. Decide which is the headline, or show both.
+5. **Replace the ~20 km-away anchor** with a site-specific source (a nearby
+   station, or a Landsat/MODIS LST scene once credentials exist), and keep the
+   air-vs-skin distinction.
+6. **Stand up PostGIS + MinIO** and re-run the contract suite against it.
+7. **Validate against a Hato flood record**, which is what the task plan's
    comparison step assumes exists.
 
 ---
@@ -1020,5 +1128,12 @@ and all named in the task plan.
 - [ESA WorldCover](https://esa-worldcover.org/) — 10 m land cover, CC BY 4.0
 - [Open-Meteo](https://open-meteo.com/) + [SRTM](https://www2.jpl.nasa.gov/srtm/)
   — elevation
+- [Hong Kong Observatory](https://www.hko.gov.hk/) — open-data air-temperature
+  record for the heat anchor (Lau Fau Shan station), and the 2100 sea-level
+  projections; GovHK Terms of Use
 - [USDA NRCS TR-55](https://www.nrcs.usda.gov/) — the SCS-CN method
+- Ng & Cheng (2009), *Building and Environment* 44:1478–1488 — the AVA policy
+  behind the design rules every geometry metric cites
+- AVRG73 (Planning Department / CEDD) — the published HSK wind regime and velocity
+  ratios, carried as published and never recomputed
 - Specification: `docs/技术文档.docx`

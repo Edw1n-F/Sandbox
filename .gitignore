@@ -32,3 +32,9 @@ Thumbs.db
 # free. It records HOW the data was fetched, not the data, and it grows by one
 # small file per request. Safe to delete at any time; the fetcher rebuilds it.
 backend/data/dem_cache/
+
+# Transient HTTP cache for scripts/fetch_heat_anchor.py. Same contract: one file
+# per HKO request so an interrupted fetch resumes for free. The anchor itself is
+# committed under backend/data/reference/heat_anchor.json -- this is only the
+# fetch cache, and it is safe to delete at any time.
+backend/data/heat_cache/

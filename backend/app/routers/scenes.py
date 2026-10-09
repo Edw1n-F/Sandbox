@@ -21,6 +21,7 @@ from app.schemas.plan import (
 from app.schemas.scene import SceneCreate, SceneCreated, SceneRead, SceneUpdate
 from app.config import settings
 from app.services import scene_service
+from app.services.design_metrics import HEAT_SUMMER_DAY_OF_YEAR
 from app.services.massing_fit import height_options
 from app.services.sandbox_model import (
     DEFAULT_RAINFALL_MM,
@@ -865,18 +866,24 @@ def post_scenario_compare(scene_id: str, body: dict) -> dict:
 
 
 @router.get("/scenes/{scene_id}/heat-field")
-def get_heat_field(scene_id: str, day_of_year: int = 355, hours: str = "9,14",
+def get_heat_field(scene_id: str, day_of_year: int = HEAT_SUMMER_DAY_OF_YEAR,
+                   hours: str = "9,14",
                    dayOfYear: int | None = None) -> dict:  # noqa: N803
-    """GET /api/scenes/{sceneId}/heat-field?hours=9,14&day_of_year=355
+    """GET /api/scenes/{sceneId}/heat-field?hours=9,14&day_of_year=196
 
     The blended heat-exposure field for the current massing: the hand-authored
     land-class index combined with sky view (from the massing geometry) and the
     cast shadow at each requested hour.
 
     **Heat is not a temperature.** The field is a relative 0-1 screening index,
-    never degrees Celsius, and with no real Landsat LST or HKO calibration on disk
-    the anchoring block says so (`anchorSource: "none"`). The land-class table is
-    mapped through the single definition in ``_overlay_common`` -- not copied.
+    never degrees Celsius. It is anchored to a cited air-temperature band (HKO
+    Lau Fau Shan station, July 2015-2024) that the 0-1 scale is read against; the
+    anchor is a committed file, never fetched at request time. The land-class
+    table is mapped through the single definition in ``_overlay_common`` -- not
+    copied.
+
+    The default solar day is 196 (15 July) so the shadow geometry matches the
+    July anchor band; the design-metrics/shade surface keeps its own 355 default.
 
     Several hours are collapsed to a per-cell shaded *fraction* (the mean of the
     binary masks), so the shadow term reads as "shaded this fraction of the
