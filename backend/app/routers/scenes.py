@@ -325,3 +325,67 @@ def get_sea_level_scenarios(scene_id: str, rainfall_mm: float | None = None) -> 
         grids, rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM)
     report["sceneId"] = scene_id
     return report
+
+
+@router.get("/scenes/{scene_id}/scenarios")
+def get_published_scenarios(scene_id: str, rainfall_mm: float | None = None) -> dict:
+    """GET /api/scenes/{sceneId}/scenarios
+
+    Brief task 9: three *real published* development programmes, encoded and run.
+
+    The figures are CEDD's own published works areas -- First Phase about 19.6 ha,
+    Second Phase Stage 2 about 200 ha, and all six Second Phase main works
+    contracts totalling about 253.5 ha. CEDD publishes no land-use allocation and
+    no layout, so the split of that area between bare ground and green, and its
+    location on the grid, are this project's assumptions and are returned with the
+    result rather than buried.
+
+    `areaShortfallHa` matters: where it is non-zero the district did not have
+    enough land of those classes to convert, so the delta is capped and
+    understates the real effect. For the Second Phase that shortfall is most of
+    the programme.
+    """
+    from app.services.sandbox_model import (
+        apply_published_scenario,
+        load_grids,
+        load_published_scenarios,
+    )
+
+    scene_service.get_scene(scene_id)
+
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
+        )
+
+    published = load_published_scenarios()
+    if published is None:
+        raise HTTPException(status_code=422,
+                            detail="data/scenarios/hskht_published.json is missing")
+
+    runs = []
+    for scenario in published["scenarios"]:
+        outcome = apply_published_scenario(
+            grids, scenario,
+            rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM,
+        )
+        if "error" not in outcome:
+            runs.append(outcome)
+
+    return {
+        "sceneId": scene_id,
+        "source": published["source"],
+        "status": published["status"],
+        "why": published["why"],
+        "notPublished": published["notPublished"],
+        "milestones": published["milestones"],
+        "scenarios": runs,
+        "studyAreaHa": round(
+            grids.rows * grids.cols * grids.cell_area_m2 / 10_000.0, 1),
+        "note": ("Published works areas run through this project's storage "
+                 "ledger. A positive delta means worse than today under the "
+                 "same rainfall."),
+    }

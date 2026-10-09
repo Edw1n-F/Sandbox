@@ -832,3 +832,150 @@ def sea_level_report(grids: Grids,
         ),
         "rainfallMm": rainfall_mm,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Published scenarios (brief task 9)
+# --------------------------------------------------------------------------- #
+
+SCENARIOS_PATH = "scenarios/hskht_published.json"
+
+
+def load_published_scenarios() -> dict[str, Any] | None:
+    """The three published HSK/HT programmes, or None if the file is absent."""
+    path = settings.data_dir / SCENARIOS_PATH
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def apply_published_scenario(
+    grids: Grids,
+    scenario: dict[str, Any],
+    rainfall_mm: float = DEFAULT_RAINFALL_MM,
+) -> dict[str, Any]:
+    """Score one published programme: today's land use, with N ha formed.
+
+    The published figure is an **area of works**, and that is the only thing it
+    is used for. CEDD publishes hectares per contract; it publishes no land-use
+    allocation and no layout. So two assumptions are made here and both are
+    reported in the result:
+
+    1. *What the land becomes* -- ``assumedConversion`` splits the area between
+       bare ground and green. It is this project's assumption, per scenario.
+    2. *Where it goes* -- no layout is published, so the cells chosen are those of
+       the required class **nearest existing paved land**, which keeps development
+       contiguous instead of scattering it across the district. Deterministic,
+       and stated rather than implied.
+
+    A published area is therefore converted into a screening delta, and the delta
+    is only as good as those two assumptions. Returning the conversion count as
+    well as the volume means a reader can check whether the model actually had
+    enough land of that class to convert -- if it did not, the number is capped
+    and that has to be visible.
+    """
+    works_ha = float(scenario.get("worksAreaHa") or 0.0)
+    if works_ha <= 0:
+        return {"error": "scenario has no published works area"}
+
+    target_cells = int(round(works_ha * 10_000.0 / grids.cell_area_m2))
+    split = scenario.get("assumedConversion") or {}
+    bare_share = float(split.get("bare", 0.7))
+    green_share = float(split.get("green", 0.3))
+
+    bare_idx = LAND_CLASSES.index("bare")
+    green_idx = LAND_CLASSES.index("green")
+    paved_idx = LAND_CLASSES.index("paved")
+
+    base = storage_ledger(grids, grids.land_class, rainfall_mm)
+
+    trial = grids.land_class.copy()
+    converted = {"bare": 0, "green": 0}
+    # Which classes this run draws from, nearest-to-paved first.
+
+    # Rank candidate cells of each class by distance to the nearest paved cell,
+    # nearest first, so development grows out from what is already built.
+    paved_cells = np.argwhere(grids.land_class == paved_idx)
+    dist = _distance_to_nearest(grids, paved_cells)
+
+    wanted = {"bare": int(round(target_cells * bare_share)),
+              "green": int(round(target_cells * green_share))}
+    for name, idx in (("bare", bare_idx), ("green", green_idx)):
+        candidates = np.argwhere(grids.land_class == idx)
+        if len(candidates) == 0 or wanted[name] <= 0:
+            continue
+        keep = np.argsort(dist[candidates[:, 0], candidates[:, 1]],
+                          kind="stable")[:wanted[name]]
+        for r, c in candidates[keep]:
+            trial[r, c] = paved_idx
+            converted[name] += 1
+
+    scen = storage_ledger(grids, trial, rainfall_mm)
+    d_unstored = scen["unstoredM3"] - base["unstoredM3"]
+    shortfall = max(0, target_cells - sum(converted.values()))
+
+    return {
+        "scenarioId": scenario.get("id"),
+        "label": scenario.get("label"),
+        "source": scenario.get("source"),
+        "worksAreaHa": works_ha,
+        "components": scenario.get("components", []),
+        "assumptionNote": scenario.get("assumptionNote"),
+        "assumedConversion": split,
+        "rainfallMm": rainfall_mm,
+        "baseline": {k: round(v, 1) for k, v in base.items()},
+        "scenario": {k: round(v, 1) for k, v in scen.items()},
+        "bufferDeficitM3": round(base["unstoredM3"], 1),
+        "scenarioDeficitM3": round(scen["unstoredM3"], 1),
+        "deltaUnstoredM3": round(d_unstored, 1),
+        "deltaRunoffM3": round(scen["runoffM3"] - base["runoffM3"], 1),
+        "deltaGreenAreaM2": round(scen["greenAreaM2"] - base["greenAreaM2"], 1),
+        "worsens": d_unstored > 1.0,
+        "cellsConverted": converted,
+        "cellsConvertedTotal": sum(converted.values()),
+        "cellsWanted": target_cells,
+        "areaShortfallHa": round(shortfall * grids.cell_area_m2 / 10_000.0, 2),
+        "note": (
+            "The published figure is an area of works, not a land-use allocation. "
+            "The split of that area between bare ground and green, and its "
+            "location, are this project's assumptions and are listed above. If "
+            "areaShortfallHa is non-zero the district did not have enough land of "
+            "those classes to convert, so the delta is capped and understated."
+        ),
+    }
+
+
+def _distance_to_nearest(grids: Grids, sources: np.ndarray) -> np.ndarray:
+    """Cell distance from every cell to the nearest cell in ``sources``.
+
+    Iterative 4-neighbour dilation with a running minimum, which is entirely
+    vectorised. The obvious alternative -- a two-pass chamfer transform -- costs
+    two Python loops over 314,736 cells, and at roughly 4 million NumPy scalar
+    operations it dominated the whole request.
+
+    The metric is **city-block, not Euclidean**: a cell four streets away and a
+    cell four diagonals away both score 4. For the only thing this is used for --
+    ranking which undeveloped land sits closest to existing development -- that
+    is a street-grid distance, which is arguably the right one for Hong Kong, and
+    it is stated rather than passed off as Euclidean.
+    """
+    if len(sources) == 0:
+        return np.full(grids.land_class.shape, np.float32(np.inf), dtype=np.float32)
+
+    big = np.float32(1e9)
+    dist = np.full(grids.land_class.shape, big, dtype=np.float32)
+    dist[sources[:, 0], sources[:, 1]] = 0.0
+
+    for _ in range(int(grids.rows + grids.cols)):
+        nxt = dist.copy()
+        nxt[1:, :] = np.minimum(nxt[1:, :], dist[:-1, :] + np.float32(1.0))
+        nxt[:-1, :] = np.minimum(nxt[:-1, :], dist[1:, :] + np.float32(1.0))
+        nxt[:, 1:] = np.minimum(nxt[:, 1:], dist[:, :-1] + np.float32(1.0))
+        nxt[:, :-1] = np.minimum(nxt[:, :-1], dist[:, 1:] + np.float32(1.0))
+        if np.array_equal(nxt, dist):
+            break
+        dist = nxt
+    return dist
