@@ -2,6 +2,48 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-09 — Stage 5c at the response level, gap 8's one-view half, Stage 7 recorded
+
+Three things were overdue on the books: the corridors' NE/SW response no longer
+carries direction-blind readings, the two drainage readings are reconciled in one
+view, and Stage 7 — built and green in a previous increment — was still marked
+"not started" in the status page.
+
+### Added
+
+- **Stage 5c (response half): corridors carry the arrangement.** Each corridor
+  now carries `entryEdge` (the edge its wind enters from) and
+  `firstObstructionMeanM` (the mean first-hit height from the canonical
+  `directional_exposure` march in `design_metrics` — not a second march). On the
+  real district: NE enters north-east, first obstruction **30.2 m**; SW enters
+  south-west, first obstruction **44.9 m**. The paths are still the same 718
+  cells walked in opposite directions — that is exact geometry and stays
+  stated — but the two readings are no longer interchangeable. Re-weighting the
+  cost surface by the arrangement was deliberately **not** done: any such weight
+  is invented, and the limitation text says so. 5 new checks in
+  `test_ventilation` (45 total).
+- **Gap 8 (one-view half): a `reconciliation` block on
+  `GET /api/scenes/{id}/drainage/routed`.** The level-pool headline and the
+  routed cascade are two pictures of the same water and are never merged — but
+  they were also never shown together. The block puts both readings' volumes
+  side by side under the same rainfall, states their one shared identity
+  (`runoffInM3 == levelPool.unstoredM3`, verified at **3,170,180.3 m³** — the
+  published headline, conserved), names each half's source path, and explains
+  why they differ in plain language. Computed from the same grids, not restated,
+  so it can never drift from either reading. 6 new checks in `test_hydrology`
+  (32 total).
+
+### Fixed (status page)
+
+- **Stage 7 was marked "not started"; it is built, wired and green.**
+  `app/services/massing_fit.py`, `GET /api/scenes/{id}/buildings/{id}/fit` and
+  the `assess_building_fit` LLM tool shipped in commit `652085d` — the model
+  states an objective enum (`reduce_flood | reduce_runoff | reduce_heat |
+  balanced`) and constraints, the storage ledger does the arithmetic, 32 tests.
+  The stages table now says done, with the design's own one-line description:
+  neither half can silently corrupt the other.
+- **Backend test count: 404 → 416**, re-verified by running every suite.
+
 ## 2026-10-09 — status-page truth pass: Stage 4b anchored, gap 13 collapsed
 
 The repo's own documents had drifted behind its code: `STATUS.md`,

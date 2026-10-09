@@ -73,8 +73,10 @@ from app.services.design_metrics import (  # noqa: F401
     Footprint,
     _TRAVEL,
     cell_fad,
+    directional_exposure,
     frontal_area_density as design_frontal_area_density,
     projected_width_m,
+    rasterise_height,
 )
 
 # scipy is used for exactly one thing -- the least-cost-path corridors below. It
@@ -93,6 +95,19 @@ REFERENCE_PATH = "reference/hsk_ava_reference.json"
 
 # The eight principal wind directions the corridor endpoint defaults to.
 PRINCIPAL_DIRECTIONS: tuple[str, ...] = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+# Which grid edge a wind FROM each direction enters through (Stage 5c's
+# arrangement half). Meteorological naming: a north-easterly wind comes FROM the
+# north-east, so it crosses the district's north-eastern edge moving
+# south-westward. This table is presentation -- the entry edge is also derivable
+# from the path's first cell -- but stating it per direction keeps a NE reading
+# and a SW reading from being interchangeable in the response. ONE table, in the
+# same convention as ``_TRAVEL``; a second travel table elsewhere is exactly the
+# NE/SW-swap drift the canonical-table rule exists to prevent.
+ENTRY_EDGES: dict[str, str] = {
+    "N": "north", "NE": "north-east", "E": "east", "SE": "south-east",
+    "S": "south", "SW": "south-west", "W": "west", "NW": "north-west",
+}
 
 # Meteorological convention: the direction a wind comes FROM. Named explicitly
 # because "wind from the east" and "wind towards the east" differ by 180 degrees,
@@ -294,6 +309,17 @@ def least_cost_corridors(
     flat_cc = cc.reshape(-1)
 
     per_direction: dict[str, Any] = {}
+    # The arrangement half of Stage 5c. `cell_fad` is 180-degree periodic, so the
+    # NE and SW cost surfaces are bit-identical and their paths are the same
+    # cells walked in opposite directions -- exact geometry, not a bug. What IS
+    # direction-specific is the arrangement: which edge the wind enters from and
+    # the height of the first obstruction it meets there. `directional_exposure`
+    # (the canonical march, in design_metrics) already carries that, and its
+    # per-direction entries are attached to each corridor so a NE reading and a
+    # SW reading are no longer interchangeable. The path itself is NOT re-costed
+    # with arrangement information: any such cost would be an invented weight.
+    height = rasterise_height(footprints, grids)
+    exposure = directional_exposure(height)
     for name, bearing in dirs.items():
         fad = cell_fad(footprints, grids, bearing).reshape(-1).astype(np.float64)
         cost = 1.0 + fad
@@ -326,6 +352,8 @@ def least_cost_corridors(
             per_direction[name] = {
                 "corridorCells": 0, "pathLengthM": 0.0, "meanCost": None,
                 "blocked": True, "path": [],
+                "entryEdge": ENTRY_EDGES[name],
+                "firstObstructionMeanM": exposure.get(name, {}).get("meanFirstHitHeightM"),
             }
             continue
 
@@ -348,6 +376,12 @@ def least_cost_corridors(
             "meanCost": round(mean_cost, 4),
             "blocked": False,
             "path": path,
+            # Stage 5c: the arrangement half. Same path cells for opposite
+            # winds (exact geometry), but different entry edge and different
+            # first-obstruction height -- the two readings differ here, and
+            # the limitation below says exactly where the difference ends.
+            "entryEdge": ENTRY_EDGES[name],
+            "firstObstructionMeanM": exposure.get(name, {}).get("meanFirstHitHeightM"),
         }
 
     return {
@@ -362,11 +396,15 @@ def least_cost_corridors(
                     "wind speed."),
         "limitation": (
             "Geometry, not flow. No velocity, no turbulence, no pressure field. "
-            "Because the frontal-area surface is 180-degree periodic, the NE and "
-            "SW corridors traverse the SAME cells in opposite directions -- exact "
-            "geometry, not a bug -- so they differ only in which edge they enter "
-            "from. The corridor cannot distinguish a north-easterly from a "
-            "south-westerly any more than FAD can."
+            "The least-cost path is the SAME cells for opposite winds: the "
+            "frontal-area surface is 180-degree periodic, so the NE and SW "
+            "corridors are one path walked in opposite directions -- exact "
+            "geometry, not a bug. What IS direction-specific is now attached: "
+            "entryEdge (which side the wind enters from) and "
+            "firstObstructionMeanM (the arrangement, from the canonical "
+            "directional_exposure march). The path cost itself still cannot "
+            "tell a north-easterly from a south-westerly, and any cost that "
+            "claimed to would be an invented weight."
         ),
     }
 

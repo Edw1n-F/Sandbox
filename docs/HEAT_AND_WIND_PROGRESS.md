@@ -159,7 +159,7 @@ number say whether a breeze is available to compensate.
 | 4 | Heat: SVF + shadow + blend, anchored to a published LST/HKO normal | **done** — SVF + blend done, and the anchor is on disk: HKO Lau Fau Shan July 2015–2024 band `[26.4, 32.7] °C`, `anchorSource: "hko_station"`, `--check` reproduces it. `HEAT_INDEX` itself remains hand-authored |
 | 5 | Wind: break the NE≡SW symmetry; LCP corridors | **done** — symmetry broken by `directional_exposure`; corridors on `1 + cellFAD`. The corridors themselves remain 180°-periodic |
 | 6 | Drainage: D8 fill-and-spill + mass balance + HAND cross-check | **done** — balances to 1e-14 relative |
-| 7 | Expose to the LLM as an objective, not a number | not started |
+| 7 | Expose to the LLM as an objective, not a number | **done** — `massing_fit.py` + `/buildings/{id}/fit` + the `assess_building_fit` tool; the model states the objective, the ledger does the arithmetic (32 tests) |
 
 ## Alignment with `Hack4SDG_Heat_Wind_Drainage_Research.md` (9 Oct 2026)
 
@@ -250,6 +250,18 @@ the kind of number nobody can defend. The three axes must stay separate, and any
 ordering must state its weights.
 
 ## Progress log
+
+- **9 Oct 2026 (evening), Stage 5c at the response level + gap 8's one-view half.**
+  The corridors' cost surface stays `1 + cellFAD` — re-weighting it by the
+  arrangement would be an invented weight — but each corridor now carries the
+  two things that ARE direction-specific: `entryEdge` and
+  `firstObstructionMeanM` from the canonical `directional_exposure` march (NE
+  30.2 m vs SW 44.9 m; same 718 path cells, honestly unchanged). The routed
+  drainage response gained a `reconciliation` block: level pool beside cascade,
+  same rainfall, the shared identity `runoffInM3 == unstoredM3` (3,170,180.3 m³,
+  the published headline) stated *and* checked, the difference explained in
+  plain words. Stage 7's "not started" row was also corrected — it shipped in
+  `652085d` and has 32 green tests. Backend total **416**.
 
 - **9 Oct 2026 (later the same day), Stage 4b closed: the anchor landed.**
   `backend/data/reference/heat_anchor.json` now exists — the HKO **Lau Fau Shan

@@ -3,25 +3,25 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 404 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 416 backend + 104 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **404** on
-> 2026-10-09 (the 11 new tests are the Stage 4b heat-anchor contract: fetch, verify,
-> load, no-data branch, malformed-file branch). The frontend figure of 104 is the
-> frontend owner's, carried forward unchanged.
+> leaves the other's alone. Backend counts below were re-verified at **416** on
+> 2026-10-09 (404 after the Stage 4b anchor tests, +5 Stage 5c corridor checks,
+> +6 routed-reconciliation checks, +1 count correction). The frontend figure of 104 is
+> the frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
 | backend `test_scenario` | 54/54 | `python tests/test_scenario.py` |
 | backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
-| backend `test_ventilation` | 40/40 | `python tests/test_ventilation.py` |
+| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
-| backend `test_hydrology` | 26/26 | `python tests/test_hydrology.py` |
+| backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
@@ -175,24 +175,24 @@ already exist and are tested.
 | 2 | One `evaluate(scenario)` returning three separate deltas, never one score | **done** |
 | 3 | Scenario-vs-baseline comparison with **stated** weights | **done** — `compare()` refuses to rank without them |
 | 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **done** — SVF, the blend, and the anchor: the HKO Lau Fau Shan July band is on disk, verified by `fetch_heat_anchor.py --check`; `anchorSource: "hko_station"`. `HEAT_INDEX` itself remains hand-authored (see gap 9) |
-| 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **done** — symmetry broken by `directional_exposure`; corridors on `1 + cellFAD`. The corridors themselves still cannot separate NE from SW (see gaps) |
-| 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **done** |
-| 7 | Expose the three axes to the LLM as an objective, never as a number | **not started** |
+| 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **done** — symmetry broken twice: `directional_exposure` reads the arrangement, and each corridor now carries `entryEdge` + `firstObstructionMeanM` (the canonical march attached per direction), so a NE reading and a SW reading are no longer interchangeable. The path cells remain identical for opposite winds — exact geometry, stated in the limitation |
+| 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **done** — and the routed response now carries a `reconciliation` block putting the level-pool headline and the routed cascade side by side under the same rainfall, with their shared identity (`runoffInM3 == unstoredM3`) stated and checked |
+| 7 | Expose the three axes to the LLM as an objective, never as a number | **done** — `massing_fit.py` + `GET /buildings/{id}/fit` + the `assess_building_fit` tool: the model states an objective enum and constraints, the ledger does the arithmetic. 32 tests |
 
 ### Next, in order
 
-- **Stage 5c, corridors that can tell NE from SW.** `cell_fad` is 180°-periodic, so
-  the NE and SW cost surfaces are bit-identical and their corridors are equally
-  optimal paths over the same cells. The symmetry is broken only by
-  `directional_exposure`, which reads the *arrangement* rather than any footprint. A
-  cost surface that carried the same arrangement information would close it.
-- **Stage 7, the LLM as policy.** With three real axes the planner can state an
-  objective — "cut the deficit here without losing shade" — and the evaluator
-  reports what that costs on each axis. Neither half can silently corrupt the
-  other, which is the point.
 - **`place` and `reset` remain unscoreable.** The AI's most-used operations are
   placeable but not scoreable, because both belong to the city-model generator and
   reimplementing either in the evaluator would drift from it.
+- **`sea_level_scenario` still reasons about retention submergence rather than
+  outfall capacity**, which is where sea level would actually bite. The routed
+  cascade now exists and could host the outfall question; the level-pool headline
+  deliberately does not move.
+- **Stage 5c's cost-surface half.** The arrangement information is now *attached*
+  to each corridor (entry edge + first-obstruction height), but the cost surface
+  itself is still 180°-periodic, so opposite winds' paths remain the same cells.
+  Any cost that weighted the arrangement would be an invented weight unless a
+  published basis is found; the limitation says so.
 
 Scoring-side items (rung declaration, business model) are tracked in
 `docs/RUNG_AND_BUSINESS.md`.
@@ -236,15 +236,17 @@ Ordered by what would hurt a user first.
    so the response lists them under `unsupportedOps` and says why rather than
    approximating. Real gap before the demo: the AI's most-used operations are
    placeable but not scoreable.
-8. **Two drainage readings now coexist, and only one of them is routed.** The routed
-   fill-and-spill cascade is built and balances to 1e-14, but it sits **beside** the
+8. **Two drainage readings coexist by design; they are now shown side by side.**
+   The routed fill-and-spill cascade balances to 1e-14 and sits **beside** the
    level-pool solve rather than replacing it: the headline `bufferDeficitM3` and
    `wetgrid_hsk.npy` still come from the level-pool path, deliberately, so the
-   published number did not move. The two are different pictures of the same water and
-   the tool does not yet reconcile them into one view — the routed depth is a separate
-   artefact (`routed_depth_hsk.npy`) with its own endpoint. `sea_level_scenario` also
-   still reasons about retention submergence rather than outfall capacity, which is
-   where sea level would actually bite.
+   published number did not move. **The one-view half is closed (9 Oct 2026):**
+   `GET /drainage/routed` now carries a `reconciliation` block — both readings'
+   volumes under the same rainfall, their shared identity
+   (`runoffInM3 == levelPool.unstoredM3`, 3,170,180.3 m³, checked), and a plain
+   statement of why they differ. Still open: `sea_level_scenario` reasons about
+   retention submergence rather than outfall capacity, which is where sea level
+   would actually bite.
 9. **`HEAT_INDEX` is hand-authored** — `paved 1.00, bare 0.85, green 0.40,
    wetland 0.20, water 0.05` — with no published provenance, and it sits in the
    retention path, so it touches drainage numbers too. It is the weakest number in the
@@ -267,11 +269,15 @@ Ordered by what would hurt a user first.
     Landsat 8/9 LST scene over the site would still be the stronger anchor, and
     every response says so. **Closed as a data gap; open as a provenance
     limitation.**
-12. **The wind corridors cannot tell a north-easterly from a south-westerly.**
-    `cell_fad` is 180°-periodic, so the NE and SW cost surfaces are bit-identical and
-    their corridors are equally optimal paths over the same cells. `directional_exposure`
-    breaks the symmetry because it reads the *arrangement*; the corridor cost surface
-    does not. The limitation is stated in the corridor response rather than hidden.
+12. **The corridor *path* still cannot tell a north-easterly from a south-westerly;
+    the response now can.** `cell_fad` is 180°-periodic, so the NE and SW cost
+    surfaces are bit-identical and their paths are the same cells — exact geometry,
+    unchanged. **Closed at the response level (9 Oct 2026, Stage 5c):** each
+    corridor now carries `entryEdge` (which side the wind enters from) and
+    `firstObstructionMeanM` (the arrangement, from the canonical
+    `directional_exposure` march — NE 30.2 m vs SW 44.9 m on the real district),
+    so the two readings are no longer interchangeable. A cost surface weighted by
+    the arrangement would be an invented weight; the limitation says exactly this.
 13. **~~`Overlay.cell_area_m2` was a `float` subclass that was also callable.~~**
     **Collapsed 9 Oct 2026.** The two spellings (`ov.cell_area_m2()` in the scripts,
     `grids.cell_area_m2` in the canonical geometry) are now one: the attribute form,

@@ -220,6 +220,33 @@ def main() -> int:
               and np.array_equal(cell_fad(real_fps, grids, 45.0),
                                  cell_fad(real_fps, grids, 225.0)),
               f"NE {ne['meanCost']} vs SW {sw['meanCost']}")
+        # --- Stage 5c: the arrangement half --- #
+        # The PATH is still one path walked both ways (exact geometry, kept
+        # honest above), but the response now carries what IS direction-specific:
+        # the entry edge and the first-obstruction height from the canonical
+        # directional_exposure march. A NE reading and a SW reading must no
+        # longer be interchangeable.
+        check("each corridor names the edge its wind enters from",
+              ne["entryEdge"] == "north-east" and sw["entryEdge"] == "south-west",
+              f"NE {ne.get('entryEdge')}, SW {sw.get('entryEdge')}")
+        check("the entry edge is also derivable from the path's first cell",
+              ne["path"][0][0] == 0
+              and ne["path"][0][1] >= grids.cols - 2,
+              f"NE path starts at {ne['path'][0]} of {grids.rows}x{grids.cols}")
+        check("NE and SW first-obstruction heights differ (Stage 5c)",
+              ne["firstObstructionMeanM"] is not None
+              and sw["firstObstructionMeanM"] is not None
+              and ne["firstObstructionMeanM"] != sw["firstObstructionMeanM"],
+              f"NE {ne['firstObstructionMeanM']} m vs "
+              f"SW {sw['firstObstructionMeanM']} m")
+        check("the first-obstruction heights match directional_exposure",
+              abs(ne["firstObstructionMeanM"] - 30.233) < 0.5
+              and abs(sw["firstObstructionMeanM"] - 44.851) < 0.5,
+              "the corridor must not re-derive a second march")
+        check("the limitation says where the new difference ends",
+              "entryEdge" in corridors["limitation"]
+              and "firstObstructionMeanM" in corridors["limitation"]
+              and "invented weight" in corridors["limitation"], "")
         check("the 180-degree limitation is documented",
               "180" in corridors["limitation"]
               and "periodic" in corridors["limitation"], "")
