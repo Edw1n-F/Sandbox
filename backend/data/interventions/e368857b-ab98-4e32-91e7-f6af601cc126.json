@@ -1,0 +1,53 @@
+{
+  "id": "e368857b-ab98-4e32-91e7-f6af601cc126",
+  "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.9994283,
+          22.4543665
+        ],
+        [
+          113.9999137,
+          22.4543665
+        ],
+        [
+          113.9999137,
+          22.455
+        ],
+        [
+          113.9994283,
+          22.455
+        ],
+        [
+          113.9994283,
+          22.4543665
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "flood_storage",
+  "source": "manual",
+  "params": {
+    "basis": "deepest connected basin in the computed wet grid",
+    "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+    "geometry": "bounding box of the connected basin, capped at MAX_SITE_CELLS about the component centroid",
+    "areaHa": 0.3,
+    "wetCellsInBasin": 120,
+    "wetAreaHa": 0.3,
+    "boxToWetRatio": 1.17,
+    "maxDepthInBasinM": 1.43,
+    "provisional": true
+  },
+  "style": {
+    "color": "#1f6feb",
+    "opacity": 0.55,
+    "extrusionHeight": 12.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-09T04:22:23Z",
+  "updated_at": "2026-10-09T04:22:23Z"
+}

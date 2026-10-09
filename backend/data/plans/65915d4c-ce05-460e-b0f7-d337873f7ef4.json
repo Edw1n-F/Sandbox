@@ -1,5 +1,5 @@
 {
-  "id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+  "id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
   "scene_id": "51e03c37-5360-43b0-a094-fbaca38cd70b",
   "plan_type": "comprehensive",
   "label": "Screening interventions (derived)",
@@ -10,7 +10,7 @@
       "terrainSource": "open-meteo",
       "landcoverSource": "esa-worldcover",
       "depthSource": "wetgrid_hsk.npy (450.0 mm)",
-      "basinsFound": 8,
+      "basinsFound": 3,
       "greenPatchesFound": 60,
       "gridRows": 664,
       "gridCols": 474
@@ -19,32 +19,138 @@
   },
   "interventions": [
     {
-      "id": "8df42db4-6c96-40af-999b-dd6babedcc17",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "id": "a7120220-5625-4ae4-8027-3f1f56ff34ff",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
       "geometry_type": "Polygon",
       "geometry": {
         "type": "Polygon",
         "coordinates": [
           [
             [
-              113.9878256,
-              22.4351818
+              113.9932143,
+              22.443824
             ],
             [
-              114.0041373,
-              22.4351818
+              113.9969524,
+              22.443824
             ],
             [
-              114.0041373,
+              113.9969524,
+              22.447308
+            ],
+            [
+              113.9932143,
+              22.447308
+            ],
+            [
+              113.9932143,
+              22.443824
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "flood_storage",
+      "source": "manual",
+      "params": {
+        "basis": "deepest connected basin in the computed wet grid",
+        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+        "geometry": "bounding box of the connected basin, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 14.8,
+        "wetCellsInBasin": 70532,
+        "wetAreaHa": 14.8,
+        "boxToWetRatio": 1.0,
+        "maxDepthInBasinM": 2.54,
+        "provisional": true
+      },
+      "style": {
+        "color": "#1f6feb",
+        "opacity": 0.55,
+        "extrusionHeight": 12.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
+    },
+    {
+      "id": "5a0f8112-7313-4ad7-997b-3d0833ee47e5",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              114.0029236,
+              22.4374894
+            ],
+            [
+              114.0050111,
+              22.4374894
+            ],
+            [
+              114.0050111,
+              22.4409734
+            ],
+            [
+              114.0029236,
+              22.4409734
+            ],
+            [
+              114.0029236,
+              22.4374894
+            ]
+          ]
+        ]
+      },
+      "intervention_type": "flood_storage",
+      "source": "manual",
+      "params": {
+        "basis": "deepest connected basin in the computed wet grid",
+        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
+        "geometry": "bounding box of the connected basin, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 8.3,
+        "wetCellsInBasin": 4963,
+        "wetAreaHa": 8.3,
+        "boxToWetRatio": 1.0,
+        "maxDepthInBasinM": 3.52,
+        "provisional": true
+      },
+      "style": {
+        "color": "#1f6feb",
+        "opacity": 0.55,
+        "extrusionHeight": 12.0
+      },
+      "status": "draft",
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
+    },
+    {
+      "id": "e368857b-ab98-4e32-91e7-f6af601cc126",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
+      "geometry_type": "Polygon",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              113.9994283,
+              22.4543665
+            ],
+            [
+              113.9999137,
+              22.4543665
+            ],
+            [
+              113.9999137,
               22.455
             ],
             [
-              113.9878256,
+              113.9994283,
               22.455
             ],
             [
-              113.9878256,
-              22.4351818
+              113.9994283,
+              22.4543665
             ]
           ]
         ]
@@ -54,12 +160,12 @@
       "params": {
         "basis": "deepest connected basin in the computed wet grid",
         "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
-        "geometry": "bounding box of the connected basin",
-        "areaHa": 367.8,
-        "wetCellsInBasin": 62179,
-        "wetAreaHa": 155.4,
-        "boxToWetRatio": 2.37,
-        "maxDepthInBasinM": 6.1,
+        "geometry": "bounding box of the connected basin, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 0.3,
+        "wetCellsInBasin": 120,
+        "wetAreaHa": 0.3,
+        "boxToWetRatio": 1.17,
+        "maxDepthInBasinM": 1.43,
         "provisional": true
       },
       "style": {
@@ -68,118 +174,12 @@
         "extrusionHeight": 12.0
       },
       "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
     },
     {
-      "id": "2e3997ee-94a8-4931-817e-3bd1f89fad69",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
-      "geometry_type": "Polygon",
-      "geometry": {
-        "type": "Polygon",
-        "coordinates": [
-          [
-            [
-              114.0030693,
-              22.4367655
-            ],
-            [
-              114.0050111,
-              22.4367655
-            ],
-            [
-              114.0050111,
-              22.4427833
-            ],
-            [
-              114.0030693,
-              22.4427833
-            ],
-            [
-              114.0030693,
-              22.4367655
-            ]
-          ]
-        ]
-      },
-      "intervention_type": "flood_storage",
-      "source": "manual",
-      "params": {
-        "basis": "deepest connected basin in the computed wet grid",
-        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
-        "geometry": "bounding box of the connected basin",
-        "areaHa": 13.3,
-        "wetCellsInBasin": 3645,
-        "wetAreaHa": 9.1,
-        "boxToWetRatio": 1.46,
-        "maxDepthInBasinM": 3.22,
-        "provisional": true
-      },
-      "style": {
-        "color": "#1f6feb",
-        "opacity": 0.55,
-        "extrusionHeight": 12.0
-      },
-      "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
-    },
-    {
-      "id": "d10cac14-4aff-422a-9c7e-17d1302ed1cf",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
-      "geometry_type": "Polygon",
-      "geometry": {
-        "type": "Polygon",
-        "coordinates": [
-          [
-            [
-              114.003846,
-              22.4351818
-            ],
-            [
-              114.0050111,
-              22.4351818
-            ],
-            [
-              114.0050111,
-              22.4366297
-            ],
-            [
-              114.003846,
-              22.4366297
-            ],
-            [
-              114.003846,
-              22.4351818
-            ]
-          ]
-        ]
-      },
-      "intervention_type": "flood_storage",
-      "source": "manual",
-      "params": {
-        "basis": "deepest connected basin in the computed wet grid",
-        "evidenceRaster": "wetgrid_hsk.npy (450.0 mm)",
-        "geometry": "bounding box of the connected basin",
-        "areaHa": 1.9,
-        "wetCellsInBasin": 589,
-        "wetAreaHa": 1.5,
-        "boxToWetRatio": 1.3,
-        "maxDepthInBasinM": 1.23,
-        "provisional": true
-      },
-      "style": {
-        "color": "#1f6feb",
-        "opacity": 0.55,
-        "extrusionHeight": 12.0
-      },
-      "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
-    },
-    {
-      "id": "c7a14cd7-7811-4933-a3fe-7a3efb2bbeee",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "id": "6806d035-09e9-4556-968f-46c939291c90",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
       "geometry_type": "Polygon",
       "geometry": {
         "type": "Polygon",
@@ -187,23 +187,23 @@
           [
             [
               113.982,
-              22.428983
+              22.4373537
             ],
             [
               113.9855925,
-              22.428983
+              22.4373537
             ],
             [
               113.9855925,
-              22.4461316
+              22.4408377
             ],
             [
               113.982,
-              22.4461316
+              22.4408377
             ],
             [
               113.982,
-              22.428983
+              22.4373537
             ]
           ]
         ]
@@ -213,11 +213,11 @@
       "params": {
         "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
         "evidenceRaster": "landcover_hsk.npy",
-        "geometry": "bounding box of the contiguous vegetated block",
-        "areaHa": 70.1,
+        "geometry": "bounding box of the contiguous vegetated block, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 14.2,
         "greenCellsInBlock": 14954,
-        "greenAreaHa": 37.4,
-        "boxToGreenRatio": 1.88,
+        "greenAreaHa": 14.2,
+        "boxToGreenRatio": 1.0,
         "provisional": true
       },
       "style": {
@@ -226,36 +226,36 @@
         "extrusionHeight": 6.0
       },
       "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
     },
     {
-      "id": "304a5bd8-6909-4814-af09-ab347911e490",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "id": "da3c0026-ac6a-48c6-bcdd-e35768010af6",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
       "geometry_type": "Polygon",
       "geometry": {
         "type": "Polygon",
         "coordinates": [
           [
             [
-              113.9984088,
-              22.424956
+              114.001273,
+              22.4269468
             ],
             [
               114.0050111,
-              22.424956
+              22.4269468
             ],
             [
               114.0050111,
-              22.4352723
+              22.4304309
             ],
             [
-              113.9984088,
-              22.4352723
+              114.001273,
+              22.4304309
             ],
             [
-              113.9984088,
-              22.424956
+              114.001273,
+              22.4269468
             ]
           ]
         ]
@@ -265,11 +265,11 @@
       "params": {
         "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
         "evidenceRaster": "landcover_hsk.npy",
-        "geometry": "bounding box of the contiguous vegetated block",
-        "areaHa": 77.5,
+        "geometry": "bounding box of the contiguous vegetated block, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 14.8,
         "greenCellsInBlock": 13346,
-        "greenAreaHa": 33.4,
-        "boxToGreenRatio": 2.32,
+        "greenAreaHa": 14.8,
+        "boxToGreenRatio": 1.0,
         "provisional": true
       },
       "style": {
@@ -278,36 +278,36 @@
         "extrusionHeight": 6.0
       },
       "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
     },
     {
-      "id": "85dcd5c1-4807-4c2b-9b60-f9afc8d3a790",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "id": "0543358e-6563-4c70-b79e-d7979c5f9ff8",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
       "geometry_type": "Polygon",
       "geometry": {
         "type": "Polygon",
         "coordinates": [
           [
             [
-              113.9839419,
-              22.4288472
+              113.9860779,
+              22.4324217
             ],
             [
-              113.9922433,
-              22.4288472
+              113.989816,
+              22.4324217
             ],
             [
-              113.9922433,
-              22.4380324
+              113.989816,
+              22.4359058
             ],
             [
-              113.9839419,
-              22.4380324
+              113.9860779,
+              22.4359058
             ],
             [
-              113.9839419,
-              22.4288472
+              113.9860779,
+              22.4324217
             ]
           ]
         ]
@@ -317,11 +317,11 @@
       "params": {
         "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
         "evidenceRaster": "landcover_hsk.npy",
-        "geometry": "bounding box of the contiguous vegetated block",
-        "areaHa": 86.8,
+        "geometry": "bounding box of the contiguous vegetated block, capped at MAX_SITE_CELLS about the component centroid",
+        "areaHa": 14.8,
         "greenCellsInBlock": 12515,
-        "greenAreaHa": 31.3,
-        "boxToGreenRatio": 2.77,
+        "greenAreaHa": 14.8,
+        "boxToGreenRatio": 1.0,
         "provisional": true
       },
       "style": {
@@ -330,50 +330,58 @@
         "extrusionHeight": 6.0
       },
       "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
     },
     {
-      "id": "8be88d48-143e-489a-800a-fb77dc2e80a9",
-      "plan_id": "bf5d1b85-44f2-4d96-a05f-8669771871ef",
+      "id": "588adfbd-dd31-477f-8f68-94f83e7cd491",
+      "plan_id": "65915d4c-ce05-460e-b0f7-d337873f7ef4",
       "geometry_type": "LineString",
       "geometry": {
         "type": "LineString",
         "coordinates": [
           [
-            113.99518,
-            22.445656
-          ],
-          [
-            113.995132,
-            22.445702
-          ],
-          [
             113.995083,
-            22.445747
+            22.445566
           ],
           [
             113.995035,
-            22.445792
+            22.445611
           ],
           [
             113.994986,
-            22.445837
+            22.445656
           ],
           [
             113.994938,
-            22.445883
+            22.445702
           ],
           [
             113.994889,
-            22.445928
+            22.445747
           ],
           [
             113.994841,
-            22.445973
+            22.445792
           ],
           [
             113.994792,
+            22.445837
+          ],
+          [
+            113.994744,
+            22.445883
+          ],
+          [
+            113.994744,
+            22.445928
+          ],
+          [
+            113.994744,
+            22.445973
+          ],
+          [
+            113.994744,
             22.446018
           ],
           [
@@ -423,8 +431,8 @@
       "params": {
         "basis": "steepest-descent trace from the deepest basin centroid",
         "evidenceRaster": "dem_hsk.npy",
-        "vertices": 19,
-        "totalDropM": 1.0,
+        "vertices": 21,
+        "totalDropM": 1.3,
         "caveat": "Traced on a ~90 m DEM. A 90 m posting cannot resolve a drainage alignment, so this is a sketch of the fall line, not a design alignment."
       },
       "style": {
@@ -432,10 +440,10 @@
         "opacity": 0.95
       },
       "status": "draft",
-      "created_at": "2026-10-07T09:05:22Z",
-      "updated_at": "2026-10-07T09:05:22Z"
+      "created_at": "2026-10-09T04:22:23Z",
+      "updated_at": "2026-10-09T04:22:23Z"
     }
   ],
-  "created_at": "2026-10-07T09:05:22Z",
-  "updated_at": "2026-10-07T09:05:22Z"
+  "created_at": "2026-10-09T04:22:23Z",
+  "updated_at": "2026-10-09T04:22:23Z"
 }

@@ -520,10 +520,21 @@ def _polygon_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int
             j = i
         return hit
 
+    # Clamp to the grid before iterating.
+    #
+    # Without this the loop runs over whatever the ring's bounding box implies,
+    # including indices far outside the array, and `inside()` still returns True
+    # for them -- so a polygon extending past the study area reported coverage of
+    # 807%, 4,234% and even 27,036% of it. Those nonsense figures were then used to
+    # delete 21 legitimate intervention files before the clamp was found. A guard
+    # that cannot go above 100% is not a guard.
+    r_lo, r_hi = max(0, min(r0, r1)), min(grids.rows - 1, max(r0, r1))
+    c_lo, c_hi = max(0, min(c0, c1)), min(grids.cols - 1, max(c0, c1))
+
     out: list[tuple[int, int]] = []
-    for r in range(min(r0, r1), max(r0, r1) + 1):
+    for r in range(r_lo, r_hi + 1):
         lat = y1 - (r + 0.5) * cell_h
-        for c in range(min(c0, c1), max(c0, c1) + 1):
+        for c in range(c_lo, c_hi + 1):
             lon = x0 + (c + 0.5) * cell_w
             if inside(lon, lat):
                 out.append((r, c))
