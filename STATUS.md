@@ -3,7 +3,7 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 258 passing** — backend 167, frontend 91. Lint and typecheck are clean.
+**Tests: 271 passing** — backend 167, frontend 104. Lint and typecheck are clean.
 
 | Suite | Count | Command |
 |---|---|---|
@@ -14,9 +14,9 @@ suites on 2026-10-09; nothing here is a target.
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_contract` | 11/11 | `python tests/test_contract.py` |
-| frontend unit (`vitest`) | 37/37 | `npm test` |
+| frontend unit (`vitest`) | 46/46 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` |
-| frontend robustness (`verify-ux.mjs`) | 16/16 | `npm run verify:ux` |
+| frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` |
 
 The two frontend `verify-*` suites are **not** part of `npm test`: they need the dev
 server on `:5173` and the backend on `:8000`, and folding them in would let a missing
@@ -45,9 +45,12 @@ server read as a pass.
 
 Ordered by what would hurt a user first.
 
-1. **Failure modes are thinly covered.** A 500 from any endpoint, a slow network, a
-   scene with no terrain, and a plan with no interventions all go untested. The
-   unreachable-backend path *is* covered now.
+1. **A malformed payload used to render a blank white page, and the class is only
+   partly closed.** Two separate causes found on 2026-10-09 — an unreadable scene
+   record and a FeatureCollection with no `features`, both throwing inside a render and
+   unmounting the tree. Both are now fixed at the store boundary and an error boundary
+   catches the rest, and 5xx / malformed-payload / slow-network are covered. What is
+   *not* covered: a scene with no terrain, and a plan with no interventions.
 2. **No per-building development phase.** The 2,639 envelopes carry no build year, age
    or phase — `height_class` is a *height* class from a random draw and must not be
    relabelled as one. The government source exists and was verified: CSDI **"Building
@@ -59,9 +62,10 @@ Ordered by what would hurt a user first.
    cursor-anchored ground pan was implemented and measured at 39 m for a 2 km request —
    and it was disabled rather than left zooming. Left-drag pans. Zoom is on pinch,
    Cmd/Ctrl+scroll, the buttons and the keyboard.
-4. **Unit coverage is 37 tests** over the DEM sampler, the camera geometry, the
-   plan-scoping geometry (`pointInRing`, `rotateRing`, `translateRing`) and the store
-   reducers. The API client and the overlay layers are untested.
+4. **Unit coverage is 46 tests** over the DEM sampler, the camera geometry, the
+   plan-scoping geometry (`pointInRing`, `rotateRing`, `translateRing`), the store
+   reducers and the API error normaliser. The overlay layers and the online 3D assets
+   loader are untested.
 5. **Cesium's credit logo link has no accessible name.** Third-party attribution markup
    (`.cesium-credit-wrapper`); excluded from the accessibility check rather than stripped,
    because removing it would break Cesium's attribution terms.

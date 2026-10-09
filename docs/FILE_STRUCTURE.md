@@ -54,8 +54,8 @@ and `src/view/` must not be imported from state.
 
 ### Why `sampleAt`, `pointInRing` and friends are exported
 
-`demProvider.sampleAt`, `cityModel.pointInRing`, `ringCentroid`, `rotateRing` and
-`translateRing` are exported **for tests**. They are pure, and they are exactly where
+`demProvider.sampleAt`, `client.toApiError`, `cityModel.pointInRing`, `ringCentroid`,
+`rotateRing` and `translateRing` are exported **for tests**. They are pure, and they are exactly where
 silent damage happens: `sampleAt` once indexed a 256 px grid against a raster that is
 really 28 x 37 and reported "no terrain" for the whole district without throwing, and
 `pointInRing` decides which buildings a scoped plan touches. Neither was reachable from
@@ -70,6 +70,7 @@ a test while module-private.
 | `ViewModeSwitch.tsx` | survey/tactical switch **and the tactical legend** |
 | `CameraController.tsx` | framing buttons, orbit/zoom buttons, gesture captions |
 | `SliderField.tsx` | one labelled slider; shared so the a11y wiring exists once |
+| `AppErrorBoundary.tsx` | last-resort boundary: a render throw becomes a sentence, not a white page |
 | `ImpactPanel.tsx` | per-feature impact readout |
 
 Two components reach into `view/` on purpose, both for **actions**, never for state:
@@ -83,7 +84,7 @@ the tree.
 | File | Purpose |
 |---|---|
 | `verify-3d.mjs` | 38 checks: rendering, camera, materials. Asserts on pixels, not flags |
-| `verify-ux.mjs` | 16 checks: first paint, failure paths, phone, keyboard, a11y |
+| `verify-ux.mjs` | 20 checks: first paint, failure paths, phone, keyboard, a11y, reduced motion |
 | `dump-shader.mjs` | prints the generated GLSL for the building material |
 
 Both `verify-*` need the dev server on `:5173` **and** the backend on `:8000`. They are

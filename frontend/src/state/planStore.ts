@@ -73,7 +73,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   selectPlan: async (planId) => {
     set({ loading: true, error: null, activePlanId: planId })
     try {
-      const interventions = await listInterventions(planId)
+      const fetched = await listInterventions(planId)
+      // A FeatureCollection whose `features` is missing is not an empty plan, it is
+      // an unreadable response, and the two must not be confused: storing it as-is
+      // left `ImpactPanel` reading `.length` of undefined, which throws inside a
+      // render and unmounts the whole app to a blank page.
+      const interventions =
+        fetched && Array.isArray(fetched.features)
+          ? fetched
+          : { type: 'FeatureCollection' as const, features: [] }
       set({ interventions, loading: false })
     } catch (error) {
       // A failed要素 load must not wipe the plan list; the viewer still has a

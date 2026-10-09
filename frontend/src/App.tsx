@@ -17,6 +17,7 @@ import Divider from '@mui/material/Divider'
 import Drawer from '@mui/material/Drawer'
 import Typography from '@mui/material/Typography'
 
+import AppErrorBoundary from './components/AppErrorBoundary'
 import CameraController from './components/CameraController'
 import LayerToggle from './components/LayerToggle'
 import ScenePanel from './components/ScenePanel'
@@ -60,43 +61,45 @@ export default function App() {
   }, [panelOpen])
 
   return (
-    <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
-      <SandboxViewer />
+    <AppErrorBoundary>
+      <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
+        <SandboxViewer />
 
-      {/* Always mounted, so the toggle can sit in the panel header. */}
-      <Drawer
-        variant="permanent"
-        sx={{ display: panelOpen ? 'block' : 'none' }}
-        PaperProps={{ sx: { width: PANEL_WIDTH, bgcolor: 'background.paper' } }}
-      >
-        <Box sx={{ overflowY: 'auto' }}>
-          <ScenePanel />
-          <Divider />
-          <ViewModeSwitch />
-          <Divider />
-          <LayerToggle />
-          <CameraController />
-          <Box sx={{ p: 2, pt: 0 }}>
-            <Typography variant="caption" color="text.secondary">
-              Prototype — not engineering-grade. Base imagery (c) OpenStreetMap
-              contributors.
-            </Typography>
+        {/* Always mounted, so the toggle can sit in the panel header. */}
+        <Drawer
+          variant="permanent"
+            sx={{ display: panelOpen ? 'block' : 'none' }}
+            PaperProps={{ sx: { width: PANEL_WIDTH, bgcolor: 'background.paper' } }}
+          >
+            <Box sx={{ overflowY: 'auto' }}>
+            <ScenePanel />
+            <Divider />
+            <ViewModeSwitch />
+            <Divider />
+            <LayerToggle />
+            <CameraController />
+            <Box sx={{ p: 2, pt: 0 }}>
+              <Typography variant="caption" color="text.secondary">
+                Prototype — not engineering-grade. Base imagery (c) OpenStreetMap
+                contributors.
+              </Typography>
+            </Box>
           </Box>
-        </Box>
       </Drawer>
 
       {/* Floating, so it works identically whether the panel is open or closed, and it
           stays clear of the camera controls in the bottom-right. */}
-      <Fab
-        size="small"
-        color="primary"
-        aria-label={panelOpen ? 'Hide the control panel' : 'Show the control panel'}
-        aria-expanded={panelOpen}
-        onClick={() => setPanelOpen((open) => !open)}
-        sx={{ position: 'absolute', top: 12, left: 12, zIndex: 1300 }}
+        <Fab
+          size="small"
+          color="primary"
+          aria-label={panelOpen ? 'Hide the control panel' : 'Show the control panel'}
+          aria-expanded={panelOpen}
+          onClick={() => setPanelOpen((open) => !open)}
+          sx={{ position: 'absolute', top: 12, left: 12, zIndex: 1300 }}
       >
-        {panelOpen ? '\u2715' : '\u2630'}
-      </Fab>
-    </Box>
+          {panelOpen ? '\u2715' : '\u2630'}
+        </Fab>
+      </Box>
+    </AppErrorBoundary>
   )
 }

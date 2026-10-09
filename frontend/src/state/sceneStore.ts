@@ -17,6 +17,27 @@ import type {
   ViewMode,
 } from '@/api/types'
 
+/**
+ * The minimum a payload must carry to be treated as a scene.
+ *
+ * Deliberately shallow. The point is not to re-validate the whole contract -- that
+ * is the schema layer's job -- it is to stop an unreadable object reaching the panels,
+ * because a throw inside a React render unmounts the tree and the user gets a white
+ * page instead of a sentence.
+ */
+function isScene(value: unknown): value is Scene {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<Scene>
+  const centre = candidate.center?.coordinates
+  return (
+    Array.isArray(centre) &&
+    centre.length >= 2 &&
+    centre.every((n) => typeof n === 'number') &&
+    !!candidate.bbox &&
+    !!candidate.defaultCamera
+  )
+}
+
 export interface SceneState {
   sceneId: string
   scene: Scene | null
@@ -67,6 +88,22 @@ export const useSceneStore = create<SceneState>((set) => ({
       // viewer cannot initialise without both, and a half-loaded viewer is
       // worse than a slightly slower one.
       const [scene, terrain] = await Promise.all([getScene(sceneId), getTerrain(sceneId)])
+      // Refuse a payload that is not a scene, rather than storing it.
+      //
+      // Measured: a 200 whose body lacked the expected fields left the app with an
+      // empty `#root` — a completely blank page, no message, no console error worth
+      // reading. The panels then read `scene.center.coordinates` and the throw inside
+      // a render unmounts the whole tree. A proxy serving the wrong body, or a
+      // contract drift, would present to a user exactly like the app not loading.
+      if (!isScene(scene)) {
+        set({
+          error:
+            'The server returned a scene record this app cannot read (missing centre, ' +
+            'bbox or default camera). Check that the API and frontend versions match.',
+          loading: false,
+        })
+        return
+      }
       set({ scene, terrain, loading: false })
     } catch (error) {
       set({ error: errorMessage(error), loading: false })

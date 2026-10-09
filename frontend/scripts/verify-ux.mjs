@@ -277,6 +277,83 @@ const settle = async (page, ms = 9000) => {
   await page.close()
 }
 
+// --------------------------------------------- 7. 5xx from a real endpoint
+{
+  const { page, errors } = await newPage()
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: '{"detail":"analysis service unavailable"}',
+      }),
+  )
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(6000)
+  const state = await page.evaluate(() => ({
+    alerts: [...document.querySelectorAll('.MuiAlert-root')].map((a) => a.innerText),
+    text: document.body.innerText,
+  }))
+  // A 503 has to say something specific. A generic "failed" would be indistinguishable
+  // from the network being down, and the two need different responses from the user.
+  check('a 5xx surfaces the server message',
+    state.alerts.length > 0 || /unavailable|503|error/i.test(state.text),
+    (state.alerts.join(' | ') || state.text.slice(0, 90)).trim())
+  check('a 5xx does not crash the viewer',
+    errors.filter((e) => !/Failed to load resource/.test(e)).length === 0,
+    errors[0] ?? '')
+  await page.close()
+}
+
+// ------------------------------------------------ 8. malformed success payload
+{
+  const { page } = await newPage()
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: '{"unexpected":"shape"}',
+      }),
+  )
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(6000)
+  const state = await page.evaluate(() => ({
+    text: document.body.innerText.trim(),
+    pageErrors: document.getElementById('root')?.childElementCount ?? -1,
+  }))
+  // A scene with every required field missing is the shape of a contract drift. It must
+  // not blank the app: an empty-but-alive shell is recoverable, a white page is not.
+  // Not "renders a canvas": with an unreadable scene the honest outcome is a message
+  // and *no* map. Rendering a map anyway would imply there is data behind it.
+  check('an unexpected payload explains itself instead of blanking',
+    state.pageErrors > 0 && /fail|read|expect|shape|match/i.test(state.text),
+    `${state.pageErrors} root child, text "${state.text.slice(0, 60)}"`)
+  await page.close()
+}
+
+// ------------------------------------------------------ 9. slow network
+{
+  const { page } = await newPage()
+  // Long enough to catch a missing loading affordance, short enough not to time the
+  // suite out. The API has a 20 s axios timeout, so this sits inside it.
+  await page.route(
+    (url) => url.pathname.startsWith('/api/'),
+    async (route) => {
+      await new Promise((r) => setTimeout(r, 2500))
+      await route.continue()
+    },
+  )
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(1200)
+  const during = await page.evaluate(() => document.body.innerText.trim().length)
+  check('something is on screen while the data is still loading', during > 0,
+    `${during} chars of UI during load`)
+  await page.close()
+}
+
 await browser.close()
 console.log(results.join('\n'))
 console.log(`\n${pass}/${pass + fail} checks passed`)

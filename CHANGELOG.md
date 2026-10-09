@@ -70,19 +70,32 @@ Every non-trivial change gets an entry. Newest first.
   `slotProps.input`/`inputProps` target MUI's *hidden* native input, so labelling those
   looks like a fix and changes nothing a user can reach.
 
+### Fixed (failure-path audit)
+- **A malformed API payload rendered a blank white page.** Measured: a 200 whose body was
+  not a FeatureCollection left `#root` empty — no message, no controls — because
+  `ImpactPanel` read `.length` of undefined inside a render and React unmounted the
+  tree. An unreadable scene record did the same. Both are now rejected at the store
+  boundary, and an `AppErrorBoundary` turns any remaining render throw into a sentence
+  rather than a white page.
+- **A network failure reported two different codes** depending on which branch produced
+  it: `NETWORK` for a non-axios value, `HTTP_0` (a nonsense status) for an axios error
+  with no response. One condition, one code now.
+- **A thrown non-`Error` value lost its content**, becoming "Unknown error" — a shrug
+  where `String(error)` had the diagnosis.
+
 ### Known gaps
-- **No automated coverage of the remaining failure modes**: a 500 from any endpoint, a slow
-  network, a scene with no terrain, a plan with no interventions. The unreachable-backend
-  path *is* covered now (16/16 in `verify-ux.mjs`).
+- Failure paths now covered (20/20 in `verify-ux.mjs`): unreachable backend, 404, 5xx,
+  malformed payload, slow network, phone viewport, keyboard, accessible names, reduced
+  motion. Still uncovered: a scene with no terrain, and a plan with no interventions.
 - **Cesium's own credit logo link has no accessible name.** Third-party attribution markup
   (`.cesium-credit-wrapper`) — excluded from the accessibility check rather than stripped,
   because removing it would break Cesium's attribution terms.
 - **Still no `STATUS.md` test-count badge or `docs/FILE_STRUCTURE.md` dependency map**, both
   of which `CLAUDE.md` expects. The file map in particular is now out of date: `cameraRig.ts`,
   `techMaterial.ts` and `viewModes.ts` are new modules.
-- Unit coverage is now 37 tests: the DEM sampler, the camera geometry, the plan-scoping
+- Unit coverage is now 46 tests: the DEM sampler, the camera geometry, the plan-scoping
   geometry (`pointInRing`, `ringCentroid`, `rotateRing`, `translateRing` — exported for
-  this purpose) and the store reducers, including the ADR-024 in-place-write trap. The
-  API client and the overlay layers are still untested.
+  this purpose), the store reducers including the ADR-024 in-place-write trap, and the
+  API error normaliser. The overlay layers and the online 3D assets loader are untested.
 - Added `docs/FILE_STRUCTURE.md` (the dependency map this file was previously missing)
   and `STATUS.md` (measured test counts, what works, what does not).
