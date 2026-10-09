@@ -115,6 +115,7 @@ class Footprint:
     width_m: float
     depth_m: float
     height_m: float
+    bearing_deg: float = 0.0
 
     @property
     def area_m2(self) -> float:
@@ -241,18 +242,26 @@ def ground_level_void_fraction(footprints: list[Footprint]) -> float:
 
 
 def projected_width_m(west_east_m: float, north_south_m: float,
-                      bearing_deg: float) -> float:
+                      bearing_deg: float,
+                      footprint_bearing_deg: float = 0.0) -> float:
     """Width of a rectangle seen face-on to wind arriving from ``bearing_deg``.
 
-    For an axis-aligned rectangle of sides ``a`` (east-west) and ``b``
-    (north-south) the projected width is ``a·|sin φ| + b·|cos φ|``. Our footprints
-    are axis-aligned by construction -- they come from a raster grid -- so this
-    form is exact for them and the symmetry that implies is disclosed in the
-    report rather than papered over.
+    For a rectangle of sides ``a`` (east-west) and ``b`` (north-south) rotated by
+    ``footprint_bearing_deg``, the projected width normal to the wind is
+    ``a·|sin(φ − θ)| + b·|cos(φ − θ)|``.
+
+    **This cannot break the NE≡SW symmetry, for any orientation.** The absolute
+    value makes each footprint's contribution 180°-periodic, so wind from 45° and
+    wind from 225° always sum to the same total over any set of footprints. That is
+    exact geometry rather than an approximation error -- a convex body presents the
+    same face to wind from either side -- and it means the oriented closed form is
+    not a route to a directionally-sensitive screen. See
+    :func:`directional_exposure`, which marches rays over the height raster and is
+    sensitive to the *arrangement* rather than to any one footprint.
     """
-    phi = math.radians(bearing_deg)
-    return (west_east_m * abs(math.sin(phi))
-            + north_south_m * abs(math.cos(phi)))
+    rel = math.radians(bearing_deg - footprint_bearing_deg)
+    return (west_east_m * abs(math.sin(rel))
+            + north_south_m * abs(math.cos(rel)))
 
 
 def frontal_area_density(
@@ -266,7 +275,8 @@ def frontal_area_density(
         return {"error": "site area must be positive"}
     per_dir: dict[str, float] = {}
     for name, bearing in dirs.items():
-        frontal = sum(projected_width_m(f.width_m, f.depth_m, bearing) * f.height_m
+        frontal = sum(projected_width_m(f.width_m, f.depth_m, bearing,
+                                        f.bearing_deg) * f.height_m
                       for f in footprints)
         per_dir[name] = frontal / site_area_m2
     values = sorted(per_dir.values())
@@ -278,6 +288,10 @@ def frontal_area_density(
         "leastExposedDirection": min(per_dir, key=per_dir.get),
         "mostExposedDirection": max(per_dir, key=per_dir.get),
         "directionsComputed": len(per_dir),
+        "rotatedFootprints": sum(1 for f in footprints
+                                 if abs(f.bearing_deg) > 1e-9),
+        "neSwDifference": round(abs(per_dir.get("NE", 0.0)
+                                    - per_dir.get("SW", 0.0)), 6),
     }
 
 
@@ -459,6 +473,9 @@ def design_report(
     site_area = float(grids.rows * grids.cols * grids.cell_area_m2)
     fad = frontal_area_density(footprints, site_area)
 
+    exposure = (directional_exposure(rasterise_height(footprints, grids))
+                if grids is not None else {})
+
     shades = []
     for hour in sun_hours:
         r = shade_fraction(footprints, grids, lat_deg, lon_deg, day_of_year, hour)
@@ -516,12 +533,21 @@ def design_report(
             **fad,
             "rule": RULE_SOURCES["frontalAreaDensity"],
             "limitation": (
-                "Every footprint is an axis-aligned rectangle, so the projected "
-                "width depends only on |sin| and |cos| of the bearing and the "
-                "result is symmetric about the cardinal axes. NE, SE, SW and NW "
-                "score identically. It compares schemes and compares axes; it "
-                "cannot distinguish a north-easterly from a south-westerly."
+                "Frontal area density cannot distinguish a north-easterly from a "
+                "south-westerly, and no amount of footprint orientation will fix "
+                "it: a·|sin(φ−θ)| + b·|cos(φ−θ)| is even in (φ−θ), so wind from 45 "
+                "and wind from 225 always sum to the same total. That is exact "
+                "geometry -- a convex body presents the same face to either side. "
+                "See directionalExposure for a measure that can, because it is "
+                "sensitive to the arrangement rather than to any one footprint."
             ),
+        },
+        "directionalExposure": {
+            **(exposure if grids is not None else {}),
+            "rule": ("The published prevailing wind here is NE/ENE/E, together "
+                     "40.8% of the year (AVRG73). A screen that cannot tell a "
+                     "north-easterly from a south-westerly is blind along that "
+                     "axis, so first-hit height is measured per direction."),
         },
         "shade": {
             "instants": shades,
@@ -541,3 +567,137 @@ def design_report(
             "pass or fail here would invent a standard that does not exist."
         ),
     }
+
+
+# Travel direction (downwind) per principal wind direction, as (d_row, d_col).
+#
+# Grid convention, which the whole table depends on: **row index increases
+# southward, column index increases eastward.** A wind *from* the east therefore
+# travels toward decreasing columns.
+#
+# The first version of this table had E and W swapped and all four diagonals
+# mirrored, and the symptom was quiet rather than loud: a district with a tall
+# western edge reported a high first-hit height for the *easterly*, which is
+# exactly backwards. A convention error in a wind screen does not crash -- it just
+# quietly points the prevailing wind at the wrong side of the district, so it is
+# pinned by a test with a tall-north-and-west layout.
+_TRAVEL: dict[str, tuple[int, int]] = {
+    "N": (1, 0),    # from the north, travels south
+    "NE": (1, -1),  # from the north-east, travels south-west
+    "E": (0, -1),   # from the east, travels west
+    "SE": (-1, -1), # from the south-east, travels north-west
+    "S": (-1, 0),   # from the south, travels north
+    "SW": (-1, 1),  # from the south-west, travels north-east
+    "W": (0, 1),    # from the west, travels east
+    "NW": (1, 1),   # from the north-west, travels south-east
+}
+
+
+def rasterise_height(footprints: list[Footprint], grids: Any) -> np.ndarray:
+    """Massing as a height raster on the analysis grid. Max, not mean.
+
+    Overlapping envelopes take the taller value, because a ray-march asks how tall
+    the massing is here, not how many blocks average out.
+
+    This is the shared input for the directional exposure screen here and for the
+    sky-view factor Stage 4 of the roadmap needs, so it is built once.
+    """
+    h = np.zeros((grids.rows, grids.cols), dtype=np.float32)
+    side = float(grids.cell_area_m2) ** 0.5
+    for f in footprints:
+        if f.height_m <= 0:
+            continue
+        r0, c0 = grids.cell_of(f.lon, f.lat)
+        hr = max(0, int(round(f.depth_m / 2 / side)))
+        hc = max(0, int(round(f.width_m / 2 / side)))
+        ra, rb = max(0, r0 - hr), min(grids.rows, r0 + hr + 1)
+        ca, cb = max(0, c0 - hc), min(grids.cols, c0 + hc + 1)
+        if ra < rb and ca < cb:
+            block = h[ra:rb, ca:cb]
+            np.maximum(block, np.float32(f.height_m), out=block)
+    return h
+
+
+def directional_exposure(height: np.ndarray) -> dict[str, Any]:
+    """Mean height of the **first** building the wind meets, per direction.
+
+    This is the measure that breaks the NE≡SW symmetry the published prevailing
+    wind (NE/ENE/E, 40.8% of the year at Hung Shui Kiu, AVRG73) runs straight
+    into, and it does so for a reason worth stating: the obvious fix cannot.
+
+    The obvious fix is the oriented closed form ``a·|sin(φ−θ)| + b·|cos(φ−θ)|``.
+    It is **even in (φ−θ) for any orientation**, so a north-easterly and a
+    south-westerly wind always sum to the same total. Two rows of blocks rotated
+    +30° and −30° still score identically, and so does any arrangement. That is
+    exact geometry, not a coding error — a convex body presents the same face to
+    wind from either side.
+
+    What does break it is that wind from the north reaches a *different building
+    first* than wind from the south. That is a property of the arrangement, not of
+    any footprint, so it needs a raster and a march. For each direction this walks
+    the grid along the travel vector and records the height of the first non-empty
+    cell on each ray.
+
+    **Exposure, not flow.** No velocity, no turbulence, no separation, and not a
+    velocity ratio. What it captures is obstruction ordering, which is the part a
+    geometric screen can honestly carry.
+    """
+    rows, cols = height.shape
+    out: dict[str, Any] = {}
+    for name, (dr, dc) in _TRAVEL.items():
+        # A ray enters along one edge and marches with the travel vector. When
+        # dr != 0 the entry ROW is fixed (top or bottom) and each ray is told apart
+        # by its entry COLUMN; when dr == 0 it is the other way round. Deriving
+        # both index grids from one step vector keeps them broadcastable to the
+        # full ray-by-step matrix.
+        step = np.arange(max(rows, cols), dtype=np.int64)[:, None]
+        if dr != 0:
+            rr = (0 if dr > 0 else rows - 1) + dr * step
+            cc = np.arange(cols, dtype=np.int64)[None, :] + dc * step
+        else:
+            # Pure E/W travel: each ROW is a ray, so rr runs down the rows while
+            # cc must be a row vector too. Left as a column it broadcast against
+            # rr into a single ray, and the screen reported "E: 12.80 m, 1 ray
+            # considered" -- a number computed from one line of the district.
+            rr = np.arange(rows, dtype=np.int64)[:, None]
+            cc = ((0 if dc > 0 else cols - 1) + dc * step).T
+        ok = (rr >= 0) & (rr < rows) & (cc >= 0) & (cc < cols)
+        vals = np.where(ok, height[np.clip(rr, 0, rows - 1),
+                                    np.clip(cc, 0, cols - 1)], 0.0)
+        hit = (vals > 0) & ok
+        # Reduce along the *step* axis to leave one value per ray. Which axis that
+        # is depends on the branch: with dr != 0 the rays are columns, so steps run
+        # down axis 0; with dr == 0 (east and west) the rays are rows, so steps run
+        # along axis 1. Reducing over axis 0 unconditionally left E and W with one
+        # result per column instead of one per row, which is why they reported 370
+        # rays hit on a district where 518 rows contain a building.
+        axis = 0 if dr != 0 else 1
+        any_hit = hit.any(axis=axis)
+        first = np.argmax(hit, axis=axis)
+        if axis == 0:
+            first_h = np.where(any_hit, vals[first, np.arange(vals.shape[1])], 0.0)
+        else:
+            first_h = np.where(any_hit, vals[np.arange(vals.shape[0]), first], 0.0)
+        out[name] = {
+            "meanFirstHitHeightM": (round(float(first_h[any_hit].mean()), 3)
+                                    if any_hit.any() else 0.0),
+            "raysWithBuilding": int(any_hit.sum()),
+            "raysConsidered": int(any_hit.size),
+        }
+    ne = out["NE"]["meanFirstHitHeightM"]
+    sw = out["SW"]["meanFirstHitHeightM"]
+    out["symmetryBroken"] = abs(ne - sw) > 1e-6
+    out["neMinusSwM"] = round(ne - sw, 4)
+    out["method"] = (
+        "First-hit height along a ray marched over the massing height raster, per "
+        "principal direction. Breaks the NE/SW symmetry because wind from the north "
+        "meets a different building first than wind from the south -- a property of "
+        "the arrangement. The oriented closed form cannot do this: |sin| and |cos| "
+        "make every footprint 180-degree periodic."
+    )
+    out["limitation"] = (
+        "Obstruction ordering only. No velocity, no turbulence, no flow separation, "
+        "and not a velocity ratio. A high value means the wind meets a tall building "
+        "early, which is exposure, not necessarily stagnation."
+    )
+    return out

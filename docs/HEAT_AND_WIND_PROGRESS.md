@@ -153,11 +153,96 @@ number say whether a breeze is available to compensate.
 | Stage | What | State |
 |---|---|---|
 | 0 | Research, cited and recorded here | **done** |
-| 1 | `design_metrics.py` — geometry-derived, each metric tied to a published rule: height dispersion, ground-level permeability, site coverage, swept-shadow fraction | **done** |
-| 2 | One `evaluate(scenario)` returning heat + wind + drainage together, and no total | **done** |
-| 3 | Scenario comparison — the relative judgement the AVA document asks for | planned |
-| 4 | Replace the hand-authored heat index with a solar-access basis | needs a source |
-| 5 | Expose to the LLM as an objective, not a number | planned |
+| 1 | `design_metrics.py` — geometry metrics each tied to a published rule | **done** |
+| 2 | One `evaluate(scenario)` returning three separate deltas, and no total | **done** |
+| 3 | Scenario comparison — the relative judgement the AVA document asks for | next |
+| 4 | Heat: SVF + shadow + blend, anchored to a published LST/HKO normal | **part done** (shadow only) |
+| 5 | Wind: break the NE≡SW symmetry; LCP corridors | **part done** (symmetry broken; corridors need scipy) |
+| 6 | Drainage: D8 fill-and-spill + mass balance + HAND cross-check | not started |
+| 7 | Expose to the LLM as an objective, not a number | not started |
+
+## Alignment with `Hack4SDG_Heat_Wind_Drainage_Research.md` (9 Oct 2026)
+
+That document is the fuller design and this file is now its implementation log.
+Two of its six-stage plan matches what was built independently, and its Stage 5
+turns out to rest on a mathematical claim that does not hold.
+
+### What it confirms
+
+Its Chapter 4 conclusion — "one geometry read three ways" — is the same
+conclusion Stages 1–2 reached from the sources directly, and it cites the same
+Ng & Cheng (2009) sentence. Its §2.2 quotes TC 1/06 §6: the framework "does not
+provide an absolute benchmark standard" but enables "comparison of design
+options". Its Chapter 3 records the buffer deficit as **3,170,180 m³**, which is
+the number `storage_ledger` produces here to the cubic metre. Every file and
+symbol it names exists; the only thing it proposes that does not is
+`app/services/evaluate.py`, which is implemented here as `app/services/scenario.py`.
+
+### Where it is right and we were incomplete
+
+| Document | Status here |
+|---|---|
+| §1.6 solar position, shadow mask | **done** in Stage 1 |
+| §1.6 SVF by horizon search | **not done** |
+| §1.6 anchoring to Landsat LST / HKO normals | **not done** |
+| §2.4 rasterise footprints + heights to a 5 m grid | **done** (`rasterise_height`) |
+| §2.4 oriented projected width | **done, and it does not work** — see below |
+| §2.4 least-cost-path corridors | not done; scipy now installed for it |
+| §3.6 D8 fill-and-spill + mass balance | not done |
+| §5.2 make `design_metrics` the canonical FAD, retire the `ventilation` copy | **done** — `ventilation` now delegates |
+
+### Where the document's method cannot achieve its own acceptance test
+
+§2.4 Step (a) proposes breaking the NE≡SW symmetry by computing "the full
+oriented formula `a·|sin(θ−φ)| + b·|cos(θ−φ)|`", and §5.3 sets the acceptance
+criterion "a NE-oriented scheme must not score identical to a SW one".
+
+**That formula cannot satisfy that criterion, for any set of orientations.** The
+absolute value makes each footprint's contribution 180°-periodic, so
+
+    Σ a·|sin(φ−θᵢ)| + b·|cos(φ−θᵢ)|  is unchanged when φ → φ+180
+
+exactly. Verified directly: two rows of blocks rotated +30° and −30° still score
+identically to four decimal places. This is not an approximation error — a convex
+body presents the same face to wind from either side, so the closed form is
+*correct* and merely blind.
+
+What breaks the symmetry is the **arrangement**, not any footprint: wind from the
+north reaches a different building *first* than wind from the south. That needs a
+raster and a march, which is what §2.4 also describes ("rasterise the footprints
+… per-cell loop writing a height/width array then a direction-wise reduction").
+
+**Implemented as `directional_exposure()`** — mean first-hit height along a ray
+marched over the massing height raster, per principal direction. On the real
+district:
+
+| N | NE | E | SE | S | SW | W | NW |
+|---|---|---|---|---|---|---|---|
+| 33.1 m | 30.2 m | 39.1 m | 43.1 m | 41.2 m | **44.9 m** | 29.8 m | 35.1 m |
+
+NE − SW = **−14.62 m**. The screen now separates the prevailing axis from its
+opposite, which it could not before. It is exposure, not flow, and says so.
+
+### Three bugs found while doing it, all silent
+
+1. **The direction table was wrong.** `_TRAVEL` had east and west swapped and all
+   four diagonals mirrored. The symptom: a district with a tall *western* edge
+   reported a high first-hit height for the *easterly*. A convention error in a
+   wind screen does not crash; it quietly points the prevailing wind at the wrong
+   side of the district.
+2. **The reduction axis was hard-coded to 0.** For east and west the rays are
+   rows, so steps run along axis 1. Reducing over axis 0 reported one result per
+   column and claimed 370 rays hit on a district where **518 rows contain a
+   building** — an internal inconsistency that was visible in the output.
+3. **`rotate` inflated the bounding box instead of rotating.** A 30 × 30 m block
+   turned 20° came back as 37 × 37 m: the rotation vanished and the block merely
+   grew. Worse, the growth *raised* frontal area, so the screen reported a worse
+   wind outcome for a scheme whose orientation had actually improved it. Rotation
+   now sets the footprint's bearing and leaves its sides alone.
+
+All three are pinned by tests: a lone box must read the same from every
+direction, a tall-north-and-west layout must read tall to N and W and short to S
+and E, and the east ray count must equal the raster's occupied row count.
 
 Stage 2 is the one that matters most and the one easiest to get wrong: it invites
 a single "score", and a single score across heat, wind and drainage is exactly
@@ -242,29 +327,3 @@ ordering must state its weights.
 
   The report prints `verdict: null` and says why: the AVA policy states that
   whether a scheme meets a standard cannot be known, so there is nothing to pass.
-
-## What Stage 2 settled, and what is still open
-
-Stage 2 produced the finding the plan predicted: the axes conflict, and the
-conflict is the content. Raising heights shades more ground and blocks more wind;
-green space lowers the deficit and does nothing to shade or ventilation; a forcing
-change moves neither scheme axis. There is no ordering of these that is true
-without saying what you weight.
-
-**Still open, in the order I would do it:**
-
-- **Stage 3, comparison.** `compare()` must rank schemes with *stated* weights,
-  and must refuse to rank when the weights are not supplied. A default weight set
-  would quietly become the project's opinion about which axis matters, which is
-  the thing the AVA guidance says cannot be settled.
-- **Stage 4, the heat index.** `HEAT_INDEX` is still hand-authored with no
-  published provenance. It is now the weakest number in the project and it sits in
-  the drainage/retention path, so it should be sourced or replaced.
-- **Stage 5, the LLM as policy.** With three real axes, the planner can state an
-  objective — "cut the deficit here without losing shade" — and the evaluator can
-  report what that costs on each axis. That is a division of labour where neither
-  half can silently corrupt the other.
-- **`place` and `reset` cannot yet be scored.** Both need the city-model
-  generator, and reimplementing either in the evaluator would drift from it. The
-  evaluator says `unsupported` rather than approximating, which is the right
-  answer today and a real gap by the demo.

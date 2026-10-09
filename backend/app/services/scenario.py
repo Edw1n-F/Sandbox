@@ -193,13 +193,17 @@ def apply_massing(
         elif op.op == "rotate":
             deg = float(op.degrees or 0.0)
             if abs(deg) > 1e-9:
-                rad = math.radians(deg)
-                ca, sa = abs(math.cos(rad)), abs(math.sin(rad))
+                # Rotation sets the footprint's BEARING and leaves its sides alone.
+                # An earlier version instead rotated the axis-aligned bounding box,
+                # so a 30x30 block turned 20 degrees came back as a 37x37 block --
+                # the rotation vanished and the block merely grew. Worse, the growth
+                # raised frontal area, so the screen reported a *worse* wind outcome
+                # for a scheme whose orientation had actually improved it.
+                targets = set(idx)
                 out = [Footprint(
-                    f.lon, f.lat,
-                    f.width_m * ca + f.depth_m * sa,
-                    f.width_m * sa + f.depth_m * ca,
-                    f.height_m) if i in set(idx) else f
+                    f.lon, f.lat, f.width_m, f.depth_m, f.height_m,
+                    bearing_deg=(f.bearing_deg + deg) % 360.0)
+                    if i in targets else f
                     for i, f in enumerate(out)]
         elif op.op == "move":
             dlon = float(op.dx_m or 0.0) / (111_320.0 * math.cos(math.radians(f_lat)))

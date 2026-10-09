@@ -18,6 +18,15 @@ numpy>=1.26
 pillow>=10.0
 rasterio>=1.3
 
+# scipy is used for exactly one thing: `scipy.sparse.csgraph.dijkstra`, for the
+# least-cost-path ventilation corridors in Stage 5 of
+# docs/HEAT_AND_WIND_PROGRESS.md. A corridor is the cheapest through-route across
+# a cost surface, and a hand-rolled priority queue in numpy would be slower and
+# less trustworthy than the reference implementation. Nothing else in the project
+# imports scipy, so this is a narrow, replaceable dependency rather than a
+# numerical stack.
+scipy>=1.11
+
 # Test-only: powers fastapi.testclient in tests/test_contract.py (ADR-036).
 httpx>=0.27
 

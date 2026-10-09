@@ -213,12 +213,85 @@ def main() -> int:
           "cannot be known" in r["referenceBands"]["basis"], "")
     check("and the report prints NO verdict", r["verdict"] is None, str(r["verdict"]))
     check("with the reason stated", "cannot be known" in r["whyNoVerdict"], "")
-    check("the FAD symmetry limitation is disclosed",
-          "symmetric" in r["frontalAreaDensity"]["limitation"].lower(), "")
+    lim = r["frontalAreaDensity"]["limitation"].lower()
+    check("the FAD limitation explains why orientation cannot fix it",
+          "even in" in lim and "cannot distinguish" in lim, "")
+    check("and points at the measure that can",
+          "directionalexposure" in lim, "")
+    check("the report carries a measure that IS direction-sensitive",
+          r["directionalExposure"]["symmetryBroken"]
+          and "neMinusSwM" in r["directionalExposure"],
+          f"NE-SW {r['directionalExposure']['neMinusSwM']:+.2f} m")
     check("site coverage states which way its bias runs",
           "reads high" in r["siteCoverage"]["caveat"].lower(), "")
     check("the shade caveat names what is missing",
           "no surface energy balance" in r["shade"]["caveat"].lower(), "")
+
+    # --- the directional exposure screen: three bugs this block exists for --- #
+    import numpy as np
+    from app.services.design_metrics import (directional_exposure,
+                                             rasterise_height)
+
+    # (a) A lone box must be symmetric. A directional metric that reports 50 m for
+    #     north and 0 m for south is broken, not clever.
+    lone = np.zeros((40, 40), dtype=np.float32)
+    lone[18:22, 18:22] = 50.0
+    lo = directional_exposure(lone)
+    vals = {k: lo[k]["meanFirstHitHeightM"] for k in
+            ("N", "NE", "E", "SE", "S", "SW", "W", "NW")}
+    check("a lone box reads the same height from every direction",
+          all(v == 50.0 for v in vals.values()), str(sorted(set(vals.values()))))
+
+    # (b) The direction convention. Row index increases southward and column
+    #     eastward, so a wind FROM the east travels toward decreasing columns. The
+    #     first version of _TRAVEL had E and W swapped and all four diagonals
+    #     mirrored; the symptom was a tall western edge reporting a high
+    #     first-hit height for the *easterly*, which is backwards and silent.
+    tall = np.zeros((40, 40), dtype=np.float32)
+    tall[2:38, 2:38] = 15.0
+    tall[1:3, 2:38] = 60.0      # tall NORTH edge
+    tall[2:38, 1:3] = 60.0      # tall WEST edge
+    tr = directional_exposure(tall)
+    check("a wind from the north meets the tall northern edge",
+          tr["N"]["meanFirstHitHeightM"] == 60.0,
+          f"{tr['N']['meanFirstHitHeightM']:.2f} m")
+    check("a wind from the west meets the tall western edge",
+          tr["W"]["meanFirstHitHeightM"] == 60.0,
+          f"{tr['W']['meanFirstHitHeightM']:.2f} m")
+    check("a wind from the south meets only the low interior",
+          tr["S"]["meanFirstHitHeightM"] < 40.0,
+          f"{tr['S']['meanFirstHitHeightM']:.2f} m")
+    check("and likewise a wind from the east",
+          tr["E"]["meanFirstHitHeightM"] < 40.0,
+          f"{tr['E']['meanFirstHitHeightM']:.2f} m")
+    check("the north-east diagonal meets the tall corner",
+          tr["NE"]["meanFirstHitHeightM"] == 60.0,
+          f"{tr['NE']['meanFirstHitHeightM']:.2f} m")
+
+    # (c) The reduction axis. For E and W the rays are ROWS, so the step axis is
+    #     1, not 0. Reducing over axis 0 unconditionally reported one result per
+    #     column and claimed 370 rays hit on a district where 518 rows contain a
+    #     building -- an internal inconsistency that was visible in the output.
+    H = rasterise_height(fps, grids)
+    rows_with = int((H > 0).any(axis=1).sum())
+    ex = directional_exposure(H)
+    check("east and west count one ray per row, and that matches the raster",
+          ex["E"]["raysWithBuilding"] == rows_with,
+          f"E hit {ex['E']['raysWithBuilding']}, rows with a building {rows_with}")
+
+    check("the real district is NOT symmetric about NE and SW",
+          ex["symmetryBroken"],
+          f"NE {ex['NE']['meanFirstHitHeightM']:.2f} m vs "
+          f"SW {ex['SW']['meanFirstHitHeightM']:.2f} m")
+    check("and every direction reports a height in a plausible range",
+          all(0.0 < ex[k]["meanFirstHitHeightM"] < 200.0 for k in
+              ("N", "NE", "E", "SE", "S", "SW", "W", "NW")),
+          ", ".join(f"{k}:{ex[k]['meanFirstHitHeightM']:.1f}"
+                    for k in ("N", "NE", "E", "SE", "S", "SW", "W", "NW")))
+    check("the closed form cannot break the symmetry, and says so",
+          "cannot break the NE" in projected_width_m.__doc__
+          or "cannot** break" in projected_width_m.__doc__,
+          "documented limitation")
 
     print(f"\n{PASSED}/{PASSED + FAILED} passed")
     return 1 if FAILED else 0

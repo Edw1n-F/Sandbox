@@ -69,6 +69,7 @@ from app.services.design_metrics import (  # noqa: F401
     VR_CONGESTED_STREET,
     VR_OPEN_SPACE,
     Footprint,
+    frontal_area_density as design_frontal_area_density,
     projected_width_m,
 )
 
@@ -98,32 +99,30 @@ def frontal_area_density(
     site_area_m2: float,
     directions: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """FAD for each wind direction, plus a frequency-weighted prevailing figure.
+    """FAD per wind direction, from the canonical implementation.
 
-    ``footprints`` items need ``widthM``, ``depthM`` and ``heightM``.
+    ``footprints`` items need ``widthM``, ``depthM`` and ``heightM``, and may
+    carry ``bearingDeg``. This is now a **thin adapter** over
+    :func:`app.services.design_metrics.frontal_area_density`, which is the
+    canonical typed version.
+
+    It used to be a second, independent implementation of the same formula. Two
+    copies of one geometric calculation is how a screening starts disagreeing with
+    itself, and it had already drifted once: when footprints gained an orientation
+    the canonical version learned to use it and this one silently did not, so the
+    two endpoints would have reported different frontal areas for the same scheme.
+    One definition, one adapter.
     """
-    dirs = directions or CARDINALS
-    if site_area_m2 <= 0:
-        return {"error": "site area must be positive"}
-
-    per_direction: dict[str, float] = {}
-    for name, bearing in dirs.items():
-        frontal = 0.0
-        for fp in footprints:
-            frontal += projected_width_m(
-                float(fp["widthM"]), float(fp["depthM"]), bearing
-            ) * float(fp["heightM"])
-        per_direction[name] = frontal / site_area_m2
-
-    values = sorted(per_direction.values())
-    return {
-        "byDirection": {k: round(v, 4) for k, v in per_direction.items()},
-        "mean": round(sum(values) / len(values), 4) if values else 0.0,
-        "max": round(values[-1], 4) if values else 0.0,
-        "min": round(values[0], 4) if values else 0.0,
-        "leastExposedDirection": min(per_direction, key=per_direction.get),
-        "mostExposedDirection": max(per_direction, key=per_direction.get),
-    }
+    typed = [
+        Footprint(
+            0.0, 0.0,
+            float(fp["widthM"]), float(fp["depthM"]), float(fp["heightM"]),
+            bearing_deg=float(fp.get("bearingDeg", fp.get("bearing_deg", 0.0)) or 0.0),
+        )
+        for fp in footprints
+    ]
+    return design_frontal_area_density(typed, site_area_m2,
+                                       directions or CARDINALS)
 
 
 def ventilation_screening(
