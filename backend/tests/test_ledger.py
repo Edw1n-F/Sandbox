@@ -13,8 +13,10 @@ reduction in the deficit while looking entirely healthy.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -23,11 +25,16 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
         sys.path.insert(0, str(_extra))
 
 from app.services.sandbox_model import (  # noqa: E402
+    DEFAULT_RAINFALL_MM,
     INTERVENTION_EFFECTS,
+    LAND_CLASSES,
     MAX_INTERVENTION_COVERAGE,
     _polygon_cells,
+    _runoff_and_unstored,
     ledger_for_scenario,
     load_grids,
+    routed_ledger,
+    sea_level_report,
     storage_ledger,
 )
 
@@ -161,6 +168,86 @@ def main() -> int:
     check("the unmodified ledger is unchanged by any of it",
           abs(led["unstoredM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
           f"{led['unstoredM3']:,.1f}")
+
+    # --- Stage 6: the routed cascade, beside the level pool --- #
+    #
+    # The cascade consumes the per-cell unstored volume storage_ledger already
+    # sums, so its runoffInM3 must be the published headline rather than a
+    # re-derived one. Two identities are asserted, and the second is the one that
+    # catches an ADR-015 double count hiding inside a balanced cascade.
+    routed = routed_ledger(grids, grids.land_class)
+    check("the routed ledger is available",
+          routed.get("status") == "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
+          str(routed.get("status")))
+    mb = routed["massBalance"]
+    check("the routed cascade balances to relative tolerance",
+          mb["balanced"] is True and mb["relativeResidual"] < mb["tol"],
+          f"residual {mb['residualM3']:+.2e} m3, relative {mb['relativeResidual']:.2e}")
+    check("runoff_in equals stored plus discharged exactly",
+          abs(mb["runoffInM3"] - (mb["storedM3"] + mb["dischargedM3"])) < 1e-6,
+          f"{mb['runoffInM3']:.4f} vs {mb['storedM3'] + mb['dischargedM3']:.4f}")
+    check("routed runoffInM3 is the published unstored volume, not a re-derivation",
+          abs(routed["runoffInM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
+          f"{routed['runoffInM3']:,.1f} vs {sidecar['unstoredVolumeM3']:,.1f}")
+
+    gen_m, unstored_m = _runoff_and_unstored(grids.land_class, DEFAULT_RAINFALL_MM)
+    area = grids.cell_area_m2
+    generation = float(gen_m.sum() * area)
+    local_retention = float((gen_m - unstored_m).sum() * area)
+    runoff_in = float(unstored_m.sum() * area)
+    check("generation equals local retention plus runoff_in",
+          abs(generation - (local_retention + runoff_in))
+          <= 1e-9 * max(abs(generation), 1.0),
+          f"{generation:,.3f} = {local_retention:,.3f} + {runoff_in:,.3f}")
+    check("and a retention class generates no runoff of its own (ADR-015)",
+          bool((gen_m[grids.land_class == LAND_CLASSES.index("water")] == 0.0).all()),
+          "water cells generate nothing, so they are never counted twice")
+
+    wetter = routed_ledger(grids, grids.land_class, DEFAULT_RAINFALL_MM * 1.5)
+    check("more rainfall raises the routed runoff",
+          wetter["runoffInM3"] > routed["runoffInM3"],
+          f"{wetter['runoffInM3']:,.0f} > {routed['runoffInM3']:,.0f}")
+
+    check("the routed depth is reported beside HAND, never merged into it",
+          "handVsRouted" in routed
+          and "never merged" in routed["handVsRouted"]["note"], "")
+    check("the routed output carries the not-a-flood-prediction labels",
+          routed["status"] == "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION"
+          and "Not a flood prediction" in routed["warning"]
+          and "Not engineering-grade" in routed["warning"], "")
+
+    stripped = replace(grids, receiver=None, raw_elevation_5m=None)
+    unavailable = routed_ledger(stripped, stripped.land_class)
+    check("an absent receiver reports ROUTING_UNAVAILABLE, not a crash",
+          unavailable["status"] == "ROUTING_UNAVAILABLE"
+          and "reason" in unavailable and "warning" in unavailable, "")
+
+    # --- regression pins: these are the numbers that must not move --- #
+    #
+    # wetgrid_hsk.npy is the level-pool depth field the cascade sits BESIDE. If a
+    # refactor moved it, every published deficit would move with it silently.
+    wet_md5 = hashlib.md5(
+        (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.npy").read_bytes()).hexdigest()
+    check("the wet-grid depth artefact is byte-identical",
+          wet_md5 == "d7cc052a45af4a3f6aac59773568b2ee", wet_md5)
+    accum_md5 = hashlib.md5(
+        (BACKEND_DIR / "data" / "rasters" / "flow_accum_hsk.npy").read_bytes()).hexdigest()
+    check("the flow-accumulation artefact is unchanged",
+          accum_md5 == "4f9c4689bb0f6ef802c8b4dab836deec", accum_md5)
+
+    # The _runoff_and_unstored() refactor and the elevation_5m semantics change
+    # (it now holds the Priority-Flood FILLED surface, where it previously held
+    # the raw one) must not have moved the sea-level report's headline.
+    sea = sea_level_report(grids)
+    check("the sea-level ground range is still the physical range",
+          2.0 <= sea["groundElevationM"]["min"] <= 2.5
+          and abs(sea["groundElevationM"]["max"] - 141.0) < 1.0,
+          str(sea["groundElevationM"]))
+    check("and the sea-level headline deficit is unchanged",
+          abs(sea["bufferDeficitM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
+          f"{sea['bufferDeficitM3']:,.1f}")
+    check("no official projection moves the deficit at this site",
+          all(p["deltaUnstoredM3"] == 0.0 for p in sea["projections"]), "")
 
     print(f"\n{PASSED}/{PASSED + FAILED} passed")
     return 1 if FAILED else 0

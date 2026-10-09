@@ -293,6 +293,314 @@ def main() -> int:
           or "cannot** break" in projected_width_m.__doc__,
           "documented limitation")
 
+    # --- shade_mask extraction: shade_fraction must not have moved --- #
+    #
+    # shade_mask() was pulled out of shade_fraction(), which now delegates to it.
+    # A refactor like that can move a whole shadow edge without changing any
+    # ordering, so three published instants are pinned to 4 dp. Magnitude, not
+    # ordering, is the signal.
+    dec_morn = shade_fraction(fps, grids, 22.44, 114.01, 355, 9)
+    dec_noon = shade_fraction(fps, grids, 22.44, 114.01, 355, 14)
+    june_mean = design_report(fps, grids, day_of_year=172)["shade"]["meanShadeFraction"]
+    check("the December 09:00 shade is the pre-extraction value",
+          dec_morn["shadeFraction"] == 0.1625, f"{dec_morn['shadeFraction']}")
+    check("the December 14:00 shade is the pre-extraction value",
+          dec_noon["shadeFraction"] == 0.2215, f"{dec_noon['shadeFraction']}")
+    check("the June daily mean shade is the pre-extraction value",
+          june_mean == 0.1151, f"{june_mean}")
+    empty_shade = shade_fraction([], grids, 22.44, 114.01, 355, 14)
+    check("an empty footprint returns the un-capped 401-step sweep",
+          empty_shade["shadowSteps"] == 401 and empty_shade["shadowCapped"] is False,
+          f"steps {empty_shade['shadowSteps']}, capped {empty_shade['shadowCapped']}")
+
+    # --- Stage 4: sky-view factor --- #
+    #
+    # The lone-tower fixture is a THIN single-cell 50 m tower, deliberately. A
+    # 4x4-cell (20x20 m) 50 m block is a large obstruction and legitimately drops
+    # the open-field mean to ~0.957; using it as the "lone tower" would make the
+    # >0.98 acceptance pass for the wrong reason. The thin tower is what actually
+    # exercises the horizon search.
+    from app.services.design_metrics import (sky_view_factor,
+                                             sky_view_factor_raster)
+
+    thin = np.zeros((40, 40), dtype=np.float32)
+    thin[20, 20] = 50.0
+    svf_thin = sky_view_factor(thin, 5.0)
+    check("a thin single-cell tower leaves the open field above 0.98",
+          svf_thin["meanOpenFieldSvf"] > 0.98, f"{svf_thin['meanOpenFieldSvf']}")
+    check("and the tower cell itself sees no sky",
+          svf_thin["minSvf"] == 0.0, f"{svf_thin['minSvf']}")
+    check("the SVF grid is pinned to 16 azimuth bins",
+          svf_thin["azimuthBins"] == 16, f"{svf_thin['azimuthBins']}")
+    check("and to a 300 m horizon radius",
+          svf_thin["searchRadiusM"] == 300.0, f"{svf_thin['searchRadiusM']}")
+
+    block4 = np.zeros((40, 40), dtype=np.float32)
+    block4[18:22, 18:22] = 50.0
+    svf_block4 = sky_view_factor(block4, 5.0)
+    check("a 4x4-cell 50 m block is a large obstruction, not a lone tower",
+          svf_block4["meanOpenFieldSvf"] < 0.98,
+          f"{svf_block4['meanOpenFieldSvf']} -- so it must not be the lone-tower fixture")
+
+    uniform = np.full((40, 40), 50.0, dtype=np.float32)
+    check("a uniform tall block over the whole grid sees almost no sky",
+          sky_view_factor(uniform, 5.0)["meanSvf"] < 0.05,
+          f"{sky_view_factor(uniform, 5.0)['meanSvf']}")
+
+    ring_means = []
+    for h_ring in (5.0, 10.0, 20.0, 40.0, 80.0):
+        r = np.zeros((40, 40), dtype=np.float32)
+        r[:3, :] = r[-3:, :] = h_ring
+        r[:, :3] = r[:, -3:] = h_ring
+        ring_means.append(sky_view_factor(r, 5.0)["meanOpenFieldSvf"])
+    check("SVF falls monotonically as a surrounding ring rises",
+          all(a >= b for a, b in zip(ring_means, ring_means[1:])),
+          " > ".join(f"{v:.3f}" for v in ring_means))
+    check("the SVF raster is deterministic across two runs",
+          np.array_equal(sky_view_factor_raster(thin, 5.0),
+                         sky_view_factor_raster(thin, 5.0)), "")
+    import time as _time
+    _t0 = _time.time()
+    sky_view_factor(rasterise_height(fps, grids), 5.0)
+    _svf_seconds = _time.time() - _t0
+    check("a whole-district SVF completes inside one second",
+          _svf_seconds < 1.0, f"{_svf_seconds:.2f}s")
+    zero_svf = sky_view_factor(np.zeros((40, 40), dtype=np.float32), 5.0)
+    check("a zero-height raster is all sky, not a crash",
+          zero_svf["meanSvf"] == 1.0 and zero_svf["buildingCells"] == 0,
+          f"mean {zero_svf['meanSvf']}")
+
+    # --- Stage 4: the heat blend and its anchoring --- #
+    from app.services.design_metrics import (blended_heat_field,
+                                             heat_field_report,
+                                             load_heat_calibration)
+
+    land_flat = np.full((12, 12), 0.5, dtype=np.float32)
+    svf_flat = np.full((12, 12), 0.5, dtype=np.float32)
+    shad_flat = np.zeros((12, 12), dtype=bool)
+    base_field = blended_heat_field(land_flat, svf_flat, shad_flat)
+    greened = blended_heat_field(np.full((12, 12), 0.1, dtype=np.float32),
+                                 svf_flat, shad_flat)
+    massed = blended_heat_field(land_flat,
+                                np.full((12, 12), 0.2, dtype=np.float32),
+                                np.ones((12, 12), dtype=bool))
+    check("greening only lowers the mean heat field",
+          greened.mean() < base_field.mean(),
+          f"{greened.mean():.4f} < {base_field.mean():.4f}")
+    check("massing only lowers it too, via SVF and shadow",
+          massed.mean() < base_field.mean(),
+          f"{massed.mean():.4f} < {base_field.mean():.4f}")
+    check("the field stays in [0, 1]",
+          float(base_field.min()) >= 0.0 and float(base_field.max()) <= 1.0, "")
+
+    import re as _re
+    dm_src = (BACKEND_DIR / "app/services/design_metrics.py").read_text()
+    check("the HEAT_INDEX table is not duplicated in design_metrics",
+          not _re.search(r"HEAT_INDEX\s*=", dm_src)
+          and not _re.search(r"^\s*(from|import)\s+.*HEAT_INDEX", dm_src, _re.M),
+          "defined once in _overlay_common, as the design requires")
+
+    # No calibration file is on disk, and this test must NOT require one. The
+    # no-data branch is the honesty check: the mechanism ships unanchored.
+    calibration = load_heat_calibration()
+    report = heat_field_report(land_flat, svf_flat, shad_flat,
+                               calibration=calibration)
+    anchor = report["anchoring"]
+    if calibration is None:
+        check("with no calibration file the anchor source is 'none'",
+              anchor["anchorSource"] == "none", str(anchor["anchorSource"]))
+        check("and no range or path is invented",
+              anchor["anchorRangeC"] is None and anchor["calibrationPath"] is None, "")
+        check("the heat status is the relative-index label",
+              report["status"] == "RELATIVE_INDEX_NOT_A_TEMPERATURE", report["status"])
+        check("and the land index is still called hand-authored",
+              anchor["heatIndexSource"]
+              == "Hand-authored screening index; awaiting verification",
+              anchor["heatIndexSource"])
+    else:
+        check("a present calibration is labelled from its quantity, not its product",
+              anchor["anchorSource"] == "hko_station"
+              and anchor["quantity"] == "HKO_air"
+              and anchor["anchorRangeC"] == [26.4, 32.7]
+              and anchor["calibrationPath"] == "reference/heat_anchor.json"
+              and anchor["status"] == "ANCHORED_TO_PUBLISHED_REFERENCE",
+              f"{anchor['anchorSource']} {anchor['anchorRangeC']} {anchor['status']}")
+        check("and the land index is still called hand-authored",
+              anchor["heatIndexSource"]
+              == "Hand-authored screening index; awaiting verification",
+              anchor["heatIndexSource"])
+        check("the anchored warning names the source, the band and the site caveat",
+              "Lau Fau Shan" in anchor["warning"]
+              and "26.4-32.7" in anchor["warning"]
+              and "not a measurement of this site" in anchor["warning"],
+              anchor["warning"])
+    check("the heat warning carries both mandated phrases",
+          "Heat is not a temperature" in report["warning"]
+          and "Screening-level; relative, not absolute" in report["warning"], "")
+
+    # --- The anchor contract (design §8.2) --- #
+    #
+    # 1. The field is never a temperature. Scan the served report for a key that
+    #    looks like a Celsius field; the anchor legitimately carries a band, but
+    #    the *field* must not, on any path.
+    def _celsius_like_keys(obj, path=""):
+        hits = []
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                if _re.search(r"(?i)(temp|temperature|lst).*c$", key) or \
+                        _re.search(r"(?i)(celsius|degreesc)", key):
+                    hits.append(f"{path}.{key}")
+                hits.extend(_celsius_like_keys(value, f"{path}.{key}"))
+        elif isinstance(obj, list):
+            for i, value in enumerate(obj):
+                hits.extend(_celsius_like_keys(value, f"{path}[{i}]"))
+        return hits
+
+    check("no key on the heat report looks like a Celsius temperature field",
+          not _celsius_like_keys(report), str(_celsius_like_keys(report)))
+    check("the mean and max index stay on the 0-1 scale",
+          0.0 <= report["meanHeatIndex"] <= 1.0 and report["maxHeatIndex"] <= 1.0,
+          f"{report['meanHeatIndex']} / {report['maxHeatIndex']}")
+    from _overlay_common import HEAT_INDEX as _HI
+    check("the hand-authored land-class index is pinned",
+          _HI == {"paved": 1.0, "bare": 0.85, "green": 0.40,
+                  "wetland": 0.20, "water": 0.05}, str(_HI))
+
+    # 2. Determinism / no runtime network on the *heat path*: neither the heat
+    #    service nor the heat route may import a network library, and nothing in
+    #    app/ may import the fetcher. (ai_plan.py uses urllib for the separate,
+    #    opt-in LLM provider -- a different path; this check is scoped to the heat
+    #    path so it cannot be defeated by an unrelated module.)
+    app_dir = BACKEND_DIR / "app"
+    heat_path = [app_dir / "services/design_metrics.py", app_dir / "routers/scenes.py"]
+    net_hits = []
+    for src in heat_path:
+        text = src.read_text()
+        if _re.search(r"^\s*(import|from)\s+(requests|urllib|httpx|socket)\b",
+                      text, _re.M):
+            net_hits.append(str(src.relative_to(BACKEND_DIR)))
+    check("no heat-path module imports a network library",
+          not net_hits, ", ".join(net_hits))
+    app_fetcher_hits = [str(src.relative_to(BACKEND_DIR))
+                        for src in app_dir.rglob("*.py")
+                        if "fetch_heat_anchor" in src.read_text()]
+    check("nothing under app/ imports the anchor fetcher",
+          not app_fetcher_hits, ", ".join(app_fetcher_hits))
+    check("load_heat_calibration reads only the committed calibration path",
+          "settings.data_dir / HEAT_CALIBRATION_PATH"
+          in (BACKEND_DIR / "app/services/design_metrics.py").read_text(), "")
+
+    # 3. The parser, offline: the HKO sentinel "***" must be dropped, never read
+    #    as 0 (which cools the band) or NaN (which poisons the mean). Includes the
+    #    exact sentinel row the PM observed live.
+    from fetch_heat_anchor import parse_window
+    fixture = {
+        "data": [
+            ["2023", "7", "1", "26.0", "C"],
+            ["2023", "7", "2", "27.0", "C"],
+            ["2023", "7", "3", "***", ""],       # sentinel: dropped, not 0
+            ["2024", "1", "14", "***", ""],      # the observed row, wrong month
+            ["2024", "7", "4", "28.0", "C"],
+            ["2010", "7", "5", "99.0", "C"],     # outside the window
+        ]
+    }
+    values, stats = parse_window(fixture, 7, 2015, 2024)
+    check("the parser drops the sentinel and counts it",
+          values == [26.0, 27.0, 28.0] and stats["dropped"] == 1
+          and stats["rows"] == 4,
+          f"values={values} stats={stats}")
+    check("the sentinel did not enter the mean as 0",
+          abs(sum(values) / len(values) - 27.0) < 1e-9,
+          f"mean {sum(values) / len(values):.4f}")
+
+    # 4. A malformed calibration must fall back to the honest unanchored path,
+    #    never a half-anchored block. Exercised on a temp dir, not the real file.
+    import tempfile
+    import unittest.mock as _mock
+    from app.config import settings as _settings
+    with tempfile.TemporaryDirectory() as _td:
+        _ref = Path(_td) / "reference"
+        _ref.mkdir()
+        _bad = [
+            {"quantity": "BOGUS", "rangeC": [1.0, 2.0], "mapsTo": "range"},
+            {"quantity": "HKO_air", "mapsTo": "range"},          # no rangeC
+            {"quantity": "HKO_air", "rangeC": [30.0, 20.0], "mapsTo": "range"},
+            {"quantity": "HKO_air", "rangeC": [20.0, 30.0], "mapsTo": "elsewhere"},
+        ]
+        _ok = True
+        for _doc in _bad:
+            (_ref / "heat_anchor.json").write_text(json.dumps(_doc))
+            with _mock.patch.object(_settings, "data_dir", Path(_td)):
+                _loaded = load_heat_calibration()
+                _blk = heat_field_report(land_flat, svf_flat, shad_flat,
+                                         calibration=_loaded)["anchoring"]
+            if _loaded is not None or _blk["anchorSource"] != "none":
+                _ok = False
+                break
+        check("a malformed calibration returns None -> anchorSource 'none'",
+              _ok, "the honest fallback, not a half-anchored block")
+
+    # 5/6. The committed sidecar: the anchoring block lives once (nested), and the
+    #      render day is the summer default. Two spellings of one value drift;
+    #      a winter render under a July band is the inconsistency a judge sees.
+    sidecar_path = _settings.rasters_dir / "heatmap_hsk.json"
+    if sidecar_path.exists():
+        sidecar = json.loads(sidecar_path.read_text())
+        dup = [k for k in ("anchorSource", "anchorRangeC", "calibrationPath",
+                           "quantity", "heatIndexSource") if k in sidecar]
+        check("the sidecar keeps the anchoring block once, nested",
+              not dup, str(dup))
+        check("the sidecar render day is the summer default (196)",
+              sidecar.get("blend", {}).get("solarDayOfYear") == 196,
+              str(sidecar.get("blend", {}).get("solarDayOfYear")))
+        check("the sidecar anchoring is anchored to the station",
+              sidecar.get("anchoring", {}).get("anchorSource") == "hko_station",
+              str(sidecar.get("anchoring", {}).get("anchorSource")))
+    else:
+        check("the heat sidecar is committed", False, f"missing {sidecar_path}")
+
+    # --- Stage 5b: per-cell FAD mean preservation (the Q3 correctness check) --- #
+    #
+    # The area-weighted mean of cell_fad must equal the site-level FAD exactly.
+    # This is the assertion that catches a wrong denominator (site area instead
+    # of cell area) or a footprint stamped at full value on every cell it covers
+    # rather than spread. Both leave a plausible-looking cost surface.
+    from app.services.design_metrics import cell_fad
+
+    class _SynthGrid:
+        rows = 60
+        cols = 60
+        cell_area_m2 = 25.0
+
+        def cell_of(self, lon, lat):
+            return (int(lat), int(lon))
+
+    sg = _SynthGrid()
+    site = sg.rows * sg.cols * sg.cell_area_m2
+    synth = [Footprint(10.0, 10.0, 10.0, 10.0, 20.0),
+             Footprint(30.0, 30.0, 10.0, 10.0, 40.0),
+             Footprint(45.0, 15.0, 20.0, 10.0, 15.0)]
+    worst_rel, worst_abs = 0.0, 0.0
+    for name, bearing in (("N", 0.0), ("NE", 45.0), ("E", 90.0), ("SE", 135.0),
+                          ("S", 180.0), ("SW", 225.0), ("W", 270.0), ("NW", 315.0)):
+        fad_raster = cell_fad(synth, sg, bearing)
+        lhs = float((fad_raster * sg.cell_area_m2).sum() / site)
+        raw = sum(projected_width_m(f.width_m, f.depth_m, bearing,
+                                    f.bearing_deg) * f.height_m
+                  for f in synth) / site
+        worst_rel = max(worst_rel, abs(lhs - raw) / max(raw, 1e-12))
+        public = frontal_area_density(synth, site)["byDirection"][name]
+        worst_abs = max(worst_abs, abs(lhs - public))
+    check("the area-weighted mean of cell_fad equals the site-level FAD",
+          worst_rel < 1e-6,
+          f"worst relative error {worst_rel:.2e} over 8 directions "
+          f"(Q3: cell-area denominator, spread not stamped)")
+    # frontal_area_density rounds byDirection to 4 dp, so the public value can
+    # only be matched to that rounding -- 5e-5, not 1e-6. The 1e-6 identity above
+    # is against the unrounded canonical sum.
+    check("and the rounded public FAD agrees to its own 4-dp rounding",
+          worst_abs < 5e-5, f"worst absolute gap {worst_abs:.2e}")
+
     print(f"\n{PASSED}/{PASSED + FAILED} passed")
     return 1 if FAILED else 0
 

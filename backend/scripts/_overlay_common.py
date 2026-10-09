@@ -144,7 +144,35 @@ class Overlay:
     def class_mask(self, name: str) -> np.ndarray:
         return self.land_class == LAND_CLASSES.index(name)
 
+    def cell_of(self, lon: float, lat: float) -> tuple[int, int]:
+        """``(row, col)`` for a lon/lat, mirroring ``Grids.cell_of``.
+
+        Deliberately the *same* formula and the same clamping as
+        ``app/services/sandbox_model.py:Grids.cell_of`` -- ``col`` from the west
+        edge, ``row`` from the north edge, each clamped to ``[0, n-1]``. There is
+        one cell-centre map in this project and this is it, read from the overlay
+        side; a second copy in the scripts is exactly the drift the "one
+        definition of one geometry" rule forbids, and it is what let
+        ``make_heatmap.py`` carry its own ``_OverlayGrid`` shim.
+        """
+        x0, y0, x1, y1 = self.bounds
+        col = int((lon - x0) / (x1 - x0) * self.cols)
+        row = int((y1 - lat) / (y1 - y0) * self.rows)
+        return (max(0, min(self.rows - 1, row)),
+                max(0, min(self.cols - 1, col)))
+
+    @property
     def cell_area_m2(self) -> float:
+        """The cell area, as a plain float.
+
+        One spelling everywhere since 9 Oct 2026 (STATUS gap #13 closed): the
+        attribute form ``ov.cell_area_m2``. The earlier wart -- a ``float``
+        subclass that was also callable, bridging the scripts' method-call
+        spelling ``ov.cell_area_m2()`` against the canonical attribute spelling
+        in ``app/services/design_metrics.py`` -- was collapsed; every caller
+        now reads the attribute. It is a ``float`` in every arithmetic and
+        JSON sense, and nothing pretends otherwise.
+        """
         return float(self.grid["cell_width_m"] * self.grid["cell_height_m"])
 
 

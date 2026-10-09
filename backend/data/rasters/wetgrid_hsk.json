@@ -73,5 +73,27 @@
     "bare",
     "paved"
   ],
-  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0; see data/landcover_hsk.json"
+  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0; see data/landcover_hsk.json",
+  "routed": {
+    "status": "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
+    "warning": "Not a flood prediction. Not engineering-grade. Screening-level D8 fill-and-spill on a Priority-Flood conditioned 5 m surface.",
+    "runoffInM3": 3170180.3,
+    "storedM3": 372621.8,
+    "dischargedM3": 2797558.5,
+    "massBalance": {
+      "runoffInM3": 3170180.257322346,
+      "storedM3": 372621.78286803927,
+      "dischargedM3": 2797558.474454277,
+      "residualM3": 2.9336661100387573e-08,
+      "relativeResidual": 9.253941012542431e-15,
+      "tol": 1e-06,
+      "balanced": true
+    },
+    "wetCells": 32256,
+    "maxDepthM": 4.5263,
+    "depressions": {
+      "count": 37,
+      "maxDepthM": 5.7879
+    }
+  }
 }

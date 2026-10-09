@@ -37,7 +37,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app.config import settings  # noqa: E402
-from hydrology import condition as condition_dem  # noqa: E402
+from hydrology import condition as condition_dem, fill_and_spill  # noqa: E402
 from _overlay_common import (  # noqa: E402
     attach_to_scene,
     COUNTED_AS,
@@ -106,7 +106,7 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
     the model reports the range the assumption implies.
     """
     ov = load_overlay(resolution_m)
-    cell_area = ov.cell_area_m2()
+    cell_area = ov.cell_area_m2
 
     # --- terrain conditioning ---------------------------------------------
     # Priority-Flood before anything else touches the surface.
@@ -121,11 +121,18 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
     # pulled from richdem (which needs GDAL headers to build and cannot).
     raw_elevation = ov.elevation
     accumulation = None
+    receiver = None
     cells_raised = 0
     if sink_fill:
         result = condition_dem(raw_elevation)
         ov.elevation = result["filled"]
         accumulation = result["accumulation"]
+        # condition() reshapes the D8 receiver to the grid; the cascade needs the
+        # flat index space d8_flow_direction produced. Keep the grid-shaped form
+        # here and ravel it explicitly in main(), where it is written to disk and
+        # handed to fill_and_spill -- a silent reshape is the failure mode this
+        # project already hit once.
+        receiver = result["receiver"]
         cells_raised = int(result["cells_raised"])
     else:
         accumulation = np.zeros_like(raw_elevation)
@@ -175,6 +182,7 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
         "cn_scale": cn_scale,
         "raw_elevation": raw_elevation,
         "accumulation": accumulation,
+        "receiver": receiver,
         "cells_raised": cells_raised,
         "rainfall_mm": rainfall_mm,
         "runoff_m": runoff_m,
@@ -201,6 +209,44 @@ def to_rgba(depth_field: np.ndarray) -> np.ndarray:
     return np.dstack([red, green, blue, alpha])
 
 
+def routed_summary(cascade: dict | None) -> dict:
+    """The mass-balance block written into the sidecar (or why it is absent).
+
+    Reporting shape, not the enforcement: :func:`hydrology.mass_balance` has
+    already raised inside the cascade if the books did not balance, so a block
+    reaching here is a balanced one. ``None`` means conditioning was skipped, and
+    that is said plainly rather than left as a missing key.
+    """
+    if cascade is None:
+        return {
+            "status": "ROUTING_UNAVAILABLE",
+            "reason": "Priority-Flood conditioning was disabled (--no-sink-fill)",
+            "warning": (
+                "Run scripts/make_wetgrid.py without --no-sink-fill to generate "
+                "the receiver and raw surface. Not a flood prediction."
+            ),
+        }
+    dep = cascade["depressions"]
+    dep_max = max(dep["depthM"].values()) if dep["depthM"] else 0.0
+    return {
+        "status": "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
+        "warning": (
+            "Not a flood prediction. Not engineering-grade. Screening-level D8 "
+            "fill-and-spill on a Priority-Flood conditioned 5 m surface."
+        ),
+        "runoffInM3": round(float(cascade["runoffInM3"]), 1),
+        "storedM3": round(float(cascade["storedM3"]), 1),
+        "dischargedM3": round(float(cascade["dischargedM3"]), 1),
+        "massBalance": cascade["massBalance"],
+        "wetCells": int(cascade["wetCells"]),
+        "maxDepthM": round(float(cascade["maxDepthM"]), 4),
+        "depressions": {
+            "count": int(dep["count"]),
+            "maxDepthM": round(float(dep_max), 4),
+        },
+    }
+
+
 def _sensitivity(args) -> int:
     """How far does the answer move if the Curve Number table is wrong?
 
@@ -219,7 +265,7 @@ def _sensitivity(args) -> int:
         r = compute(args.rainfall, args.resolution,
                     sink_fill=not args.no_sink_fill, cn_scale=scale)
         ov = r["overlay"]
-        runoff = float(r["runoff_m"].sum() * ov.cell_area_m2())
+        runoff = float(r["runoff_m"].sum() * ov.cell_area_m2)
         rows.append((scale, runoff, r["volume_m3"], r["wet_area_ha"]))
         print(f"  {scale:>8.0%} {runoff:>14,.0f} {r['volume_m3']:>14,.0f} "
               f"{r['wet_area_ha']:>9,.1f} {100*r['wet_area_ha']/r['total_area_ha']:>6.1f}%")
@@ -281,6 +327,57 @@ def main() -> int:
         np.save(settings.rasters_dir / "flow_accum_hsk.npy",
                 result["accumulation"].astype(np.float32))
 
+    # ---- fill-and-spill cascade (Stages 3-6, additive) ---------------------
+    # The D8 receiver and the *raw* 5 m surface were computed but never saved:
+    # `compute()` kept only the accumulation, and Grids.elevation_5m is the
+    # Priority-Flood *filled* surface. Both are needed downstream -- the receiver
+    # is the routing graph and a cell's depression capacity is `filled - raw` --
+    # so they are written here, beside the accumulation. The level-pool depth
+    # field and every headline number above are untouched: the cascade runs on
+    # the unstored volume the ledger already produced, and mass_balance() raises
+    # if its books do not balance.
+    cascade = None
+    if args.out is None:
+        receiver = result["receiver"]
+        if receiver is not None:
+            # Flat, not grid-shaped: the cascade indexes cells by `row*cols+col`.
+            # Stored flat so the on-disk artefact and Grids.receiver share the
+            # same index space with no reshape in between.
+            receiver_flat = np.asarray(receiver).ravel().astype(np.int32)
+            np.save(settings.rasters_dir / "flow_receiver_hsk.npy", receiver_flat)
+            # The *filled* surface is persisted too, and it has to be.
+            #
+            # The design assumed Grids.elevation_5m already held the
+            # Priority-Flood filled surface because make_wetgrid mutates
+            # ov.elevation -- but that mutation is local, and load_grids() builds
+            # a fresh Overlay from the raw DEM, so elevation_5m was in fact the
+            # *raw* surface (verified: only 94.8% of D8 receivers point downhill
+            # on it). The cascade must process cells in the same order the
+            # receiver was built on, or water routed to an already-processed cell
+            # is lost -- the mass balance then fails loudly, which is how this was
+            # found. Saving the exact float64 surface the receiver was derived
+            # from removes the ambiguity; float64 (not float32) so the reload is
+            # bit-exact and the order cannot drift by a tie-break.
+            np.save(settings.rasters_dir / "flow_filled_hsk.npy",
+                    np.asarray(ov.elevation, dtype=np.float64))
+            # float64, not float32: the depression mask is `filled > raw + 1e-9`,
+            # and at these magnitudes float32 rounds by ~1e-5 m. A float32 raw
+            # surface turns thousands of cells that were never raised into
+            # apparent depressions (1748 components against 37 on the real grid)
+            # and inflates the capacity that is meant to be `filled - raw` for
+            # genuinely filled cells only.
+            np.save(settings.rasters_dir / "flow_raw_elev_hsk.npy",
+                    np.asarray(result["raw_elevation"], dtype=np.float64))
+            cascade = fill_and_spill(
+                filled=ov.elevation,
+                raw=result["raw_elevation"],
+                receiver=receiver_flat,
+                runoff_in_m3=result["unstored_m"] * ov.cell_area_m2,
+                cell_area_m2=ov.cell_area_m2,
+            )
+            np.save(settings.rasters_dir / "routed_depth_hsk.npy",
+                    cascade["depthField"].astype(np.float32))
+
     meta = {
         "artefact": "wetgrid",
         "generated": "2026-10-06",
@@ -321,7 +418,7 @@ def main() -> int:
             "rows": ov.rows,
             "cols": ov.cols,
             "bounds": list(ov.bounds),
-            "cell_area_m2": ov.cell_area_m2(),
+            "cell_area_m2": ov.cell_area_m2,
         },
         "assumptions": {
             "hydrologicSoilGroup": "D",
@@ -339,7 +436,7 @@ def main() -> int:
         },
         "results": {
             "runoffVolumeM3": round(
-                float(result["runoff_m"].sum() * ov.cell_area_m2()), 1
+                float(result["runoff_m"].sum() * ov.cell_area_m2), 1
             ),
             "unstoredVolumeM3": round(result["volume_m3"], 1),
             "wetCells": result["wet_cells"],
@@ -350,7 +447,7 @@ def main() -> int:
             ),
             "meanDepthInWetAreaM": round(
                 result["volume_m3"]
-                / max(result["wet_cells"] * ov.cell_area_m2(), 1e-9),
+                / max(result["wet_cells"] * ov.cell_area_m2, 1e-9),
                 4,
             ),
         },
@@ -366,6 +463,10 @@ def main() -> int:
             else "SYNTHETIC PLACEHOLDER; run scripts/fetch_landcover.py"
         ),
     }
+    # The routed mass-balance block is written only for the default output, where
+    # the receiver/raw/routed artefacts were actually produced beside it.
+    if args.out is None:
+        meta["routed"] = routed_summary(cascade)
     out.with_suffix(".json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
     rel = attach_to_scene("wet_grid_path", out)
@@ -384,8 +485,19 @@ def main() -> int:
         print(f"[wetgrid] Priority-Flood raised {result['cells_raised']} cells "
               f"({100*result['cells_raised']/(ov.rows*ov.cols):.1f}%) out of depressions")
     print(f"[wetgrid] max flow accumulation: {result['accumulation'].max():.0f} cells")
+    if cascade is not None:
+        mb = cascade["massBalance"]
+        print(f"[wetgrid] routed stored    {cascade['storedM3']:>12,.0f} m3")
+        print(f"[wetgrid] routed discharge {cascade['dischargedM3']:>12,.0f} m3")
+        print(f"[wetgrid] routed wet area  {cascade['wetCells'] * ov.cell_area_m2 / 10_000.0:>12,.1f} ha")
+        print(f"[wetgrid] mass balance residual {mb['residualM3']:+.3e} m3 "
+              f"(relative {mb['relativeResidual']:.2e}, tol {mb['tol']:.0e})")
+        print(f"[wetgrid] depressions: {cascade['depressions']['count']} "
+              f"({cascade['depressions']['depressionCells']} cells)")
     print(f"[wetgrid] terrain: {ov.terrain_source}   land cover: {ov.landcover_source}")
-    print("[wetgrid] screening view - terrain is Priority-Flood conditioned and D8\n          flow accumulation is reported, but runoff VOLUME is still placed by\n          water level, not routed downhill. Not a flood prediction.")
+    print("[wetgrid] screening view - the headline wet grid is a level-pool allocation;")
+    print("          the D8 fill-and-spill cascade is reported BESIDE it, additively.")
+    print("          Not a flood prediction.")
     return 0
 
 

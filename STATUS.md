@@ -3,26 +3,28 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 271 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 404 backend + 104 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **271** on
-> 2026-10-09 18:0x. The frontend figure of 104 is the frontend owner's, carried forward
-> unchanged — the two numbers happen to coincide at 271 and must not be read as one.
+> leaves the other's alone. Backend counts below were re-verified at **404** on
+> 2026-10-09 (the 11 new tests are the Stage 4b heat-anchor contract: fetch, verify,
+> load, no-data branch, malformed-file branch). The frontend figure of 104 is the
+> frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
-| backend `test_design_metrics` | 54/54 | `python tests/test_design_metrics.py` |
-| backend `test_scenario` | 27/27 | `python tests/test_scenario.py` |
+| backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
+| backend `test_scenario` | 54/54 | `python tests/test_scenario.py` |
 | backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
+| backend `test_ventilation` | 40/40 | `python tests/test_ventilation.py` |
+| backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
-| backend `test_ledger` | 24/24 | `python tests/test_ledger.py` |
-| backend `test_ventilation` | 23/23 | `python tests/test_ventilation.py` |
+| backend `test_hydrology` | 26/26 | `python tests/test_hydrology.py` |
+| backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
-| backend `test_contract` | 11/11 | `python tests/test_contract.py` |
 | frontend unit (`vitest`) | 46/46 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` |
 | frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` |
@@ -49,6 +51,52 @@ server read as a pass.
   (ADR-024: local only, not persisted).
 - **GenAI plans** — NL to a draft FeatureCollection, with a badge that distinguishes
   "LLM ready", "no LLM key" and "LLM status unknown".
+
+### The three simulations
+
+Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2, built 9 Oct 2026. Each
+new output carries a machine-readable `status` and a human `warning`.
+
+- **Heat: sky view and a blended field.** `sky_view_factor_raster` /
+  `sky_view_factor` run a 16-bin, 300 m horizon search over the massing height raster
+  (0.07 s over the district). A thin lone 50 m tower reads open-field mean **0.9913**;
+  a uniform block over the whole grid reads **0.0**. `blended_heat_field` combines the
+  land-class index, SVF and the cast shadow into one relative 0–1 raster, served by
+  `GET /api/scenes/{id}/heat-field`. It is a raster, deliberately **not** a fourth
+  axis — a fourth axis would break the three-axis "never a combined score" guard.
+- **Heat: anchored to a cited band at last.** `load_heat_calibration()` reads
+  `data/reference/heat_anchor.json` — now **on disk**, fetched by
+  `scripts/fetch_heat_anchor.py` from the HKO Lau Fau Shan (LFS) daily station
+  record (July 2015–2024: mean daily min **26.4 °C**, mean daily max **32.7 °C**),
+  with the HKO 1991–2020 normals and an Open-Meteo ERA5 cross-check recorded as
+  cross-checks, not the anchor. `anchorSource` is `"hko_station"`, the status is
+  `ANCHORED_TO_PUBLISHED_REFERENCE`, and `fetch_heat_anchor.py --check` is the
+  drift gate: it recomputes the band and fails if the committed file no longer
+  agrees. The anchor names the physical quantity (`HKO_air`, not `LST_skin`) so
+  the two cannot be conflated, and the field stays a relative 0–1 index — the band
+  is what the index is *read against*, never converted to. `HEAT_INDEX` remains
+  hand-authored; the anchor changes only the band.
+- **Wind: least-cost-path corridors.** `least_cost_corridors` on a `1 + cellFAD` cost
+  surface via `scipy.sparse.csgraph.dijkstra` (0.70 s for eight directions), plus
+  `fad_ratio()` for a per-direction baseline-vs-scenario comparison. A ratio is a
+  comparison, which the AVA framework authorises; it is not a velocity ratio.
+- **Wind: a per-cell frontal-area field.** `cell_fad` spreads each footprint's
+  oriented frontal area over the cells it covers and divides by the cell's own area,
+  so the area-weighted mean of the per-cell field equals the site-level FAD. That
+  identity is the check that catches a wrong denominator.
+- **Drainage: D8 fill-and-spill routing.** `label_depressions`, `fill_and_spill` and
+  `hand` in `scripts/hydrology.py`, on the Priority-Flood surface the project already
+  computed but never routed. Served by `GET /api/scenes/{id}/drainage/routed`.
+- **Drainage: a mass-balance assertion that is enforced, not reported.**
+  `mass_balance()` **raises** when `runoff in ≠ stored + discharged`. A second
+  identity, `generation == local_retention + runoff_in`, is asserted separately so an
+  ADR-015 double count cannot hide inside a balanced cascade.
+- **Stage 3: `compare()`.** `POST /api/scenes/{id}/scenario/compare`. With no
+  `weights` it **refuses** (`refused: true`, `ranked: null`, reason given) rather than
+  defaulting to a weight set, because a default would quietly become the project's
+  opinion about which axis matters. With weights, every ranked row still carries the
+  three raw axes and their per-axis ranks. The weighted total is named
+  `weightedFavourability`, never `score`, and `combinedScore` stays `null`.
 
 ## Design choices → heat, wind and drainage
 
@@ -81,6 +129,24 @@ ground-level permeability.
 - **Design metrics, each tied to a published rule** —
   `GET /api/scenes/{id}/design-metrics`: height dispersion, site coverage,
   ground-level void fraction, shade fraction, with the rule quoted in the output.
+- **Sky view and a blended heat field** — a 16-bin, 300 m horizon search over the
+  massing height raster, combined with the land-class index and the cast shadow into
+  one relative 0–1 raster at `GET /api/scenes/{id}/heat-field`. A thin lone 50 m
+  tower reads open-field mean **0.9913**; a uniform block over the whole grid reads
+  **0.0**.
+- **Least-cost-path wind corridors and a per-direction FAD ratio** —
+  `GET /api/scenes/{id}/ventilation/corridors`, on a `1 + cellFAD` cost surface via
+  `scipy.sparse.csgraph.dijkstra`. A ratio is a comparison; it is not a velocity
+  ratio and the response says so.
+- **Routed drainage with a mass-balance assertion** —
+  `GET /api/scenes/{id}/drainage/routed`. At 450 mm: **3,170,180 m³** in (equal to
+  the published deficit, so the headline is conserved rather than re-derived),
+  372,622 stored, 2,797,559 discharged, residual **9.3e-15** relative. 37
+  depressions over 32,500 cells; HAND mean 6.12 m, agreement with the routed depth
+  0.881 — reported as a stated relation, never merged into the routed depth.
+- **Scenario comparison under stated weights** —
+  `POST /api/scenes/{id}/scenario/compare`. Refuses without weights; with them,
+  every ranked row keeps the three raw axes beside the ordering.
 
 ### Deliberately absent, and why
 
@@ -107,36 +173,26 @@ already exist and are tested.
 | 0 | Research, cited and recorded | **done** |
 | 1 | `design_metrics.py` — geometry metrics each tied to a published rule | **done** |
 | 2 | One `evaluate(scenario)` returning three separate deltas, never one score | **done** |
-| 3 | Scenario-vs-baseline comparison with **stated** weights | **next** |
-| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **partial** — shadows done; SVF and anchoring outstanding |
-| 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **partial** — symmetry broken; corridors blocked on scipy, now installed |
-| 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **not started** |
+| 3 | Scenario-vs-baseline comparison with **stated** weights | **done** — `compare()` refuses to rank without them |
+| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **done** — SVF, the blend, and the anchor: the HKO Lau Fau Shan July band is on disk, verified by `fetch_heat_anchor.py --check`; `anchorSource: "hko_station"`. `HEAT_INDEX` itself remains hand-authored (see gap 9) |
+| 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **done** — symmetry broken by `directional_exposure`; corridors on `1 + cellFAD`. The corridors themselves still cannot separate NE from SW (see gaps) |
+| 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **done** |
 | 7 | Expose the three axes to the LLM as an objective, never as a number | **not started** |
 
 ### Next, in order
 
-- **Stage 3, comparison.** `compare()` must rank with *stated* weights and refuse
-  to rank without them. A default weight set would quietly become the project's
-  opinion about which axis matters, which is the judgement TC 1/06 says cannot be
-  settled. Cheap; unblocks the demo.
-- **Stage 4, sky-view factor.** The horizon search over the height raster is the
-  missing half of the heat axis, and `rasterise_height()` now provides its input.
-- **Stage 4b, anchoring.** `HEAT_INDEX` is still hand-authored with no published
-  provenance and is the weakest number in the project. It needs a real Landsat
-  8/9 LST scene or the HKO 1991–2020 normals to become defensible. Until then it
-  stays labelled as hand-authored.
-- **Stage 5b, corridors.** Least-cost-path ventilation corridors on an inverse-FAD
-  cost surface, via `scipy.sparse.csgraph.dijkstra`. scipy 1.18.1 is installed for
-  this one purpose and is recorded in `requirements.txt` with that scope stated.
-- **Stage 6, drainage.** Mostly **wiring**: `hydrology.py` already computes
-  Priority-Flood, D8 receivers and flow accumulation, and `flow_accum_hsk.npy` is
-  saved and then never used. Turn it into a fill-and-spill cascade guarded by a
-  mass-balance assertion — runoff in = stored + discharged — as a runtime check
-  and a unit test.
+- **Stage 5c, corridors that can tell NE from SW.** `cell_fad` is 180°-periodic, so
+  the NE and SW cost surfaces are bit-identical and their corridors are equally
+  optimal paths over the same cells. The symmetry is broken only by
+  `directional_exposure`, which reads the *arrangement* rather than any footprint. A
+  cost surface that carried the same arrangement information would close it.
 - **Stage 7, the LLM as policy.** With three real axes the planner can state an
   objective — "cut the deficit here without losing shade" — and the evaluator
   reports what that costs on each axis. Neither half can silently corrupt the
   other, which is the point.
+- **`place` and `reset` remain unscoreable.** The AI's most-used operations are
+  placeable but not scoreable, because both belong to the city-model generator and
+  reimplementing either in the evaluator would drift from it.
 
 Scoring-side items (rung declaration, business model) are tracked in
 `docs/RUNG_AND_BUSINESS.md`.
@@ -180,16 +236,22 @@ Ordered by what would hurt a user first.
    so the response lists them under `unsupportedOps` and says why rather than
    approximating. Real gap before the demo: the AI's most-used operations are
    placeable but not scoreable.
-8. **Drainage is a level-pool solve, not a routed cascade.** Unstored volume is placed
-   by solving for one water-surface elevation, which is a horizontal plane over the
-   basin and is **not routed downhill cell by cell**. `hydrology.py` already computes
-   Priority-Flood, D8 receivers and flow accumulation and `flow_accum_hsk.npy` is
-   written and never read. Stage 6.
+8. **Two drainage readings now coexist, and only one of them is routed.** The routed
+   fill-and-spill cascade is built and balances to 1e-14, but it sits **beside** the
+   level-pool solve rather than replacing it: the headline `bufferDeficitM3` and
+   `wetgrid_hsk.npy` still come from the level-pool path, deliberately, so the
+   published number did not move. The two are different pictures of the same water and
+   the tool does not yet reconcile them into one view — the routed depth is a separate
+   artefact (`routed_depth_hsk.npy`) with its own endpoint. `sea_level_scenario` also
+   still reasons about retention submergence rather than outfall capacity, which is
+   where sea level would actually bite.
 9. **`HEAT_INDEX` is hand-authored** — `paved 1.00, bare 0.85, green 0.40,
    wetland 0.20, water 0.05` — with no published provenance, and it sits in the
    retention path, so it touches drainage numbers too. It is the weakest number in the
    project and is honest about itself (`heatIndexSource: "Hand-authored screening
-   index; awaiting verification"`). Stage 4b.
+   index; awaiting verification"`). The Stage 4b anchor does **not** change this
+   table: it supplies the band the index is read against, not the index weights
+   themselves.
 10. **The massing model carries no orientation, so the *baseline* is still
     direction-blind.** `directional_exposure` breaks the NE≡SW symmetry on the real
     layout, and footprints can now be rotated, but every generated envelope is
@@ -197,6 +259,26 @@ Ordered by what would hurt a user first.
     introduce by design. Frontal area density additionally *cannot* be made
     direction-sensitive for any orientation; that is exact geometry, not a gap to be
     closed later.
+11. **The heat field is anchored to a *nearby* observation, not the site.** The
+    anchor band (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is now on
+    disk and served in every heat response, but the station is ~20 km from the
+    study area and the record is an *air*-temperature climatology, not skin
+    temperature and not a site measurement. The 0–1 field stays relative; a real
+    Landsat 8/9 LST scene over the site would still be the stronger anchor, and
+    every response says so. **Closed as a data gap; open as a provenance
+    limitation.**
+12. **The wind corridors cannot tell a north-easterly from a south-westerly.**
+    `cell_fad` is 180°-periodic, so the NE and SW cost surfaces are bit-identical and
+    their corridors are equally optimal paths over the same cells. `directional_exposure`
+    breaks the symmetry because it reads the *arrangement*; the corridor cost surface
+    does not. The limitation is stated in the corridor response rather than hidden.
+13. **~~`Overlay.cell_area_m2` was a `float` subclass that was also callable.~~**
+    **Collapsed 9 Oct 2026.** The two spellings (`ov.cell_area_m2()` in the scripts,
+    `grids.cell_area_m2` in the canonical geometry) are now one: the attribute form,
+    everywhere. The `_CellAreaM2` float-subclass bridge is deleted; every caller reads
+    the plain-float property. All 404 backend tests and both raster regeneration runs
+    are byte-identical before and after (`wetgrid_hsk.npy` md5 `d7cc052a…`
+    unchanged), so the collapse changed no number.
 
 ## Honesty constraints that must survive future work
 
@@ -219,3 +301,25 @@ Ordered by what would hurt a user first.
 - **Height does not change runoff.** A footprint is already impervious whatever its
   height, so a height-only scheme returns a drainage delta of exactly zero. That is
   arithmetic, not a bug, and the response says so in the axis limitation.
+- **`compare()`'s `weightedFavourability` is the caller's opinion, not a score.** It
+  exists only because the caller stated weights, it is echoed back beside the three raw
+  axes, and it is never named `score`. With no weights the call refuses. Removing the
+  refusal, or hiding the axes behind the ordering, would re-create the combined score
+  by another name.
+- **Every new output carries a machine-readable `status` and a human `warning`**, from
+  the closed set in `docs/drafts/DESIGN_stages_3_6.md` §6. `status` is never a verdict.
+- **The heat field is a relative index, not a temperature.** The anchor band now on
+  disk (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is what the 0–1 scale
+  is *read against*; the field itself is still not °C and never becomes °C. Do not
+  convert it, do not call the band a site measurement (the station is ~20 km away),
+  and do not conflate `HKO_air` with `LST_skin`.
+- **A FAD *ratio* is a comparison, not a velocity ratio.** `fad_ratio` compares two
+  schemes' geometry; it does not become a VR by being divided.
+- **The corridors are geometry, not flow, and they cannot separate NE from SW.**
+  `cell_fad` is 180°-periodic, so the two cost surfaces are identical. Say so; do not
+  present a corridor as a wind path with a direction.
+- **The routed depth is not the headline deficit.** `routed_depth_hsk.npy` and
+  `bufferDeficitM3` come from two different methods. Never present the routed depth as
+  a correction to the published deficit, or vice versa.
+- **`mass_balance` raises rather than reporting.** If it is ever changed to return a
+  flag, a leak becomes a field someone can ignore.

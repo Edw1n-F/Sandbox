@@ -81,6 +81,12 @@ from _overlay_common import (  # noqa: E402
     runoff_depth,
 )
 
+# The cascade and the HAND cross-check live in scripts/hydrology.py, beside the
+# conditioning that produces the receiver they consume. Imported, never
+# reimplemented: a second D8 cascade or a second HAND would be exactly the drift
+# this project's "one definition of one geometry" rule exists to prevent.
+from hydrology import fill_and_spill, hand  # noqa: E402
+
 # A building's effect on the cells it does not occupy: shade, and the surface it
 # presents to sun and rain. Both are linear in height, which is the crudest
 # defensible assumption available and is labelled wherever it surfaces.
@@ -120,6 +126,13 @@ class Grids:
     unstored_m3: float
     wet_area_ha: float
     dem_shape: tuple[int, int]
+    # Appended LAST with defaults so every existing construction site -- and every
+    # frozen-dataclass equality check in the tests -- keeps working unchanged.
+    # Both are None until scripts/make_wetgrid.py has been re-run with the
+    # cascade wired in; routed_ledger() reports ROUTING_UNAVAILABLE rather than
+    # raising when they are absent.
+    receiver: np.ndarray | None = None          # D8 receiver, flat index, -1 at outlets
+    raw_elevation_5m: np.ndarray | None = None  # pre-Priority-Flood 5 m surface
 
     def cell_of(self, lon: float, lat: float) -> tuple[int, int]:
         x0, y0, x1, y1 = self.bounds
@@ -200,16 +213,41 @@ def load_grids() -> Grids | None:
     dem = np.load(settings.data_dir / "dem_hsk.npy")
     depth = np.load(rasters / "wetgrid_hsk.npy")
 
+    # The routed cascade's three inputs, written together by make_wetgrid. Absent
+    # on a machine that has not re-run it since the cascade was wired in; all
+    # three are None then, so the feature reports itself unavailable instead of
+    # the API failing to boot.
+    #
+    # ``elevation_5m`` is the *Priority-Flood filled* surface, as its docstring
+    # always claimed. load_overlay() returns the raw DEM, so until these
+    # artefacts existed the field silently held the raw surface -- and the
+    # cascade, which must process cells in the order the receiver was built on,
+    # cannot use the raw surface (it loses water routed to already-processed
+    # cells, and the mass balance then fails). The exact float64 filled surface is
+    # loaded here when present; the raw DEM is the fallback so every existing
+    # caller still receives a surface.
+    filled_path = rasters / "flow_filled_hsk.npy"
+    raw_path = rasters / "flow_raw_elev_hsk.npy"
+    receiver_path = rasters / "flow_receiver_hsk.npy"
+    if filled_path.exists() and raw_path.exists() and receiver_path.exists():
+        elevation_5m = np.load(filled_path)
+        raw_elevation_5m = np.load(raw_path)
+        receiver = np.load(receiver_path)
+    else:
+        elevation_5m = ov.elevation
+        raw_elevation_5m = None
+        receiver = None
+
     return Grids(
         land_class=ov.land_class,
         depth_m=depth,
-        elevation_5m=ov.elevation,
+        elevation_5m=elevation_5m,
         accumulation=accumulation,
         elevation_coarse=dem,
         bounds=ov.bounds,
         rows=ov.rows,
         cols=ov.cols,
-        cell_area_m2=ov.cell_area_m2(),
+        cell_area_m2=ov.cell_area_m2,
         terrain_source=ov.terrain_source,
         landcover_source=ov.landcover_source,
         # Derived, not read: the sidecar records volumes and areas but not the
@@ -221,6 +259,8 @@ def load_grids() -> Grids | None:
         unstored_m3=float(results.get("unstoredVolumeM3") or 0.0),
         wet_area_ha=float(results.get("wetAreaHa") or 0.0),
         dem_shape=(int(dem.shape[0]), int(dem.shape[1])),
+        receiver=receiver,
+        raw_elevation_5m=raw_elevation_5m,
     )
 
 
@@ -384,21 +424,22 @@ def context_for(
     )
 
 
-def storage_ledger(
-    grids: Grids,
+def _runoff_and_unstored(
     land_class: np.ndarray,
-    rainfall_mm: float = DEFAULT_RAINFALL_MM,
-) -> dict[str, float]:
-    """Runoff, retention and the unstored volume for one land-class grid.
+    rainfall_mm: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Generation and the unstored volume, per cell, in metres.
 
-    The same arithmetic the wet-grid script performs, driven by the same TR-55
-    table and the same ``COUNTED_AS`` partition, so a delta computed here is a
-    delta the project would report if the overlay were regenerated.
+    The exact arithmetic :func:`storage_ledger` sums, factored out so the routed
+    cascade can consume the *same* per-cell array the ledger totals. Two copies
+    of the ADR-015 partition -- one for the headline number and one for the
+    cascade -- is precisely the double count this project has already shipped
+    once, so there is one definition and both callers read it.
 
-    The level-pool fill is deliberately not repeated: it is the expensive part,
-    it consumes the volume rather than producing it, and comparing candidates
-    needs volumes. So this returns volumes and the caller compares those. Depths
-    come from the already-solved field.
+    ``runoff_m`` is generation (mm -> m); a retention class is zeroed here, not
+    later. ``unstored_m`` is ``max(runoff - storage, 0)``: the water with nowhere
+    to go, which is what ``storage_ledger`` reports as ``unstoredM3`` and what the
+    cascade routes.
     """
     cn = np.zeros(land_class.shape, dtype=np.float32)
     for name, value in CURVE_NUMBER_HSG_D.items():
@@ -419,6 +460,26 @@ def storage_ledger(
             runoff_m[land_class == LAND_CLASSES.index(name)] = 0.0
 
     unstored_m = np.maximum(runoff_m - storage_m, 0.0)
+    return runoff_m, unstored_m
+
+
+def storage_ledger(
+    grids: Grids,
+    land_class: np.ndarray,
+    rainfall_mm: float = DEFAULT_RAINFALL_MM,
+) -> dict[str, float]:
+    """Runoff, retention and the unstored volume for one land-class grid.
+
+    The same arithmetic the wet-grid script performs, driven by the same TR-55
+    table and the same ``COUNTED_AS`` partition, so a delta computed here is a
+    delta the project would report if the overlay were regenerated.
+
+    The level-pool fill is deliberately not repeated: it is the expensive part,
+    it consumes the volume rather than producing it, and comparing candidates
+    needs volumes. So this returns volumes and the caller compares those. Depths
+    come from the already-solved field.
+    """
+    runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm)
     cell_area = grids.cell_area_m2
 
     heat = np.zeros(land_class.shape, dtype=np.float32)
@@ -434,6 +495,106 @@ def storage_ledger(
         "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
         "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Routed cascade: the fill-and-spill ledger, reported beside the level pool
+# --------------------------------------------------------------------------- #
+
+ROUTED_STATUS = "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION"
+ROUTED_WARNING = (
+    "Not a flood prediction. Not engineering-grade. Screening-level D8 "
+    "fill-and-spill on a Priority-Flood conditioned 5 m surface."
+)
+
+
+def routed_ledger(
+    grids: Grids,
+    land_class: np.ndarray,
+    rainfall_mm: float = DEFAULT_RAINFALL_MM,
+) -> dict[str, Any]:
+    """Route one land-class grid's unstored volume down the D8 receiver chain.
+
+    The cascade is additive: it consumes the per-cell unstored volume
+    :func:`storage_ledger` already sums to ``unstoredM3``, so the routed
+    ``runoffInM3`` equals the published headline rather than a re-derived one.
+    ``hydrology.fill_and_spill`` raises if the books do not balance, so a leak
+    surfaces here rather than as a quiet wrong number.
+
+    Returns ``ROUTING_UNAVAILABLE`` -- not an exception -- when the receiver or
+    raw surface is absent, matching ``load_grids()``'s "None rather than an
+    exception" pattern: a machine that has not run the wet-grid script should get
+    an absent feature, not a 500.
+
+    HAND is computed independently (accumulation threshold, never the land class)
+    and its relation to the routed depth is *reported*, never merged into it.
+    """
+    if grids.receiver is None or grids.raw_elevation_5m is None:
+        return {
+            "status": "ROUTING_UNAVAILABLE",
+            "reason": (
+                "flow_receiver_hsk.npy and flow_raw_elev_hsk.npy not found; "
+                "run scripts/make_wetgrid.py"
+            ),
+            "warning": (
+                "Run scripts/make_wetgrid.py to generate the receiver and raw "
+                "surface. Not a flood prediction."
+            ),
+        }
+
+    _, unstored_m = _runoff_and_unstored(land_class, rainfall_mm)
+    cascade = fill_and_spill(
+        filled=grids.elevation_5m,
+        raw=grids.raw_elevation_5m,
+        receiver=grids.receiver,
+        runoff_in_m3=unstored_m * grids.cell_area_m2,
+        cell_area_m2=grids.cell_area_m2,
+    )
+    hand_result = hand(grids.elevation_5m, grids.receiver, grids.accumulation)
+
+    wet_cells = int(cascade["wetCells"])
+    stored_m3 = float(cascade["storedM3"])
+    mean_depth = (stored_m3 / (wet_cells * grids.cell_area_m2)) if wet_cells else 0.0
+
+    dep = cascade["depressions"]
+    dep_max = max(dep["depthM"].values()) if dep["depthM"] else 0.0
+
+    # The cross-check is a stated relation, never a merge: the two fields agree
+    # where the HAND drainage network and the routed-wet set coincide. Reported
+    # as a fraction so a reader can see how strongly they track, not as a verdict.
+    routed_wet = cascade["depthField"] > 0
+    hand_drainage = hand_result["handM"] == 0
+    agreement = float((routed_wet == hand_drainage).mean())
+
+    return {
+        "runoffInM3": round(float(cascade["runoffInM3"]), 1),
+        "storedM3": round(stored_m3, 1),
+        "dischargedM3": round(float(cascade["dischargedM3"]), 1),
+        "massBalance": cascade["massBalance"],
+        "wetCells": wet_cells,
+        "maxDepthM": round(float(cascade["maxDepthM"]), 4),
+        "meanDepthInWetAreaM": round(mean_depth, 4),
+        "depressions": {
+            "count": int(dep["count"]),
+            "maxDepthM": round(float(dep_max), 4),
+        },
+        "hand": {
+            "drainageCells": int(hand_result["drainageCells"]),
+            "drainageThresholdCells": float(hand_result["drainageThresholdCells"]),
+            "meanHandM": round(float(hand_result["meanHandM"]), 4),
+        },
+        "handVsRouted": {
+            "agreementFraction": round(agreement, 4),
+            "note": (
+                "Reported as a stated relation between the HAND cross-check and "
+                "the routed depth; the two are never merged."
+            ),
+        },
+        "status": ROUTED_STATUS,
+        "warning": ROUTED_WARNING,
+        "rainfallMm": float(rainfall_mm),
+    }
+
 
 # --------------------------------------------------------------------------- #
 # Buffer deficit: the headline number, and what a scenario does to it

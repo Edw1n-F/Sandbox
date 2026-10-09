@@ -27,9 +27,11 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
 
 from app.services.sandbox_model import load_grids  # noqa: E402
 from app.services.scenario import (  # noqa: E402
+    AXIS_BETTER,
     AXIS_UP_MEANS,
     MassingOp,
     apply_massing,
+    compare,
     evaluate,
 )
 
@@ -190,6 +192,184 @@ def main() -> int:
     else:
         check("the frontend massing file is present to compare against", False,
               "cityModel.ts not found")
+
+    # --- Stage 3: compare() under stated weights --- #
+    #
+    # compare() is the only place an ordering is allowed, and only when the caller
+    # states what they value. The checks below defend the refusal, the weights
+    # echo, the polarity and the invariant to input order. All of them use
+    # synthetic evaluate()-shaped dicts so the numbers are controlled and the
+    # ordering is not a property of the real district.
+
+    def _scen(sid: str, shade: float, vent: float, drain: float) -> dict:
+        return {"scenarioId": sid,
+                "axes": {"shade": {"candidate": shade},
+                         "ventilation": {"candidate": vent},
+                         "drainage": {"candidate": drain}}}
+
+    three = [_scen("A", 0.20, 0.10, 100.0),
+             _scen("B", 0.30, 0.20, 200.0),
+             _scen("C", 0.10, 0.05, 50.0)]
+
+    refused = compare(three)
+    check("compare() without weights refuses to rank",
+          refused["refused"] is True and refused["ranked"] is None, "")
+    check("and states a non-empty reason",
+          isinstance(refused["reason"], str) and len(refused["reason"]) > 20, "")
+    check("and still emits no combined score",
+          refused["combinedScore"] is None and refused["verdict"] is None, "")
+
+    weights = {"shade": 1.0, "ventilation": 2.0, "drainage": 1.0}
+    ranked = compare(three, weights=weights)
+    check("with weights it produces an ordering",
+          ranked["refused"] is False and len(ranked["ranked"]) == 3, "")
+    check("weightsUsed sums to 1",
+          abs(sum(ranked["weightsUsed"].values()) - 1.0) < 1e-12,
+          str(ranked["weightsUsed"]))
+    check("and is proportional to the weights supplied",
+          all(abs(ranked["weightsUsed"][k] - v / sum(weights.values())) < 1e-12
+              for k, v in ranked["weightsAsSupplied"].items()), "")
+    check("every ranked row carries the three raw axes",
+          all(set(r["axes"]) == {"shade", "ventilation", "drainage"}
+              for r in ranked["ranked"]), "")
+    check("and every ranked row keeps its per-axis ranks",
+          all(set(r["perAxisRank"]) == {"shade", "ventilation", "drainage"}
+              for r in ranked["ranked"]), "")
+    reordered = compare(list(reversed(three)), weights=weights)
+    check("the ordering is invariant to input list order",
+          [r["scenarioId"] for r in ranked["ranked"]]
+          == [r["scenarioId"] for r in reordered["ranked"]],
+          str([r["scenarioId"] for r in ranked["ranked"]]))
+
+    # polarity: strictly worse ventilation, equal elsewhere, ventilation-only.
+    good, bad = _scen("GOOD", 0.2, 0.10, 100.0), _scen("BAD", 0.2, 0.30, 100.0)
+    order = [r["scenarioId"] for r in
+             compare([good, bad], weights={"ventilation": 1.0})["ranked"]]
+    check("a scheme worse only on ventilation ranks lower under a ventilation weight",
+          order.index("GOOD") < order.index("BAD"), str(order))
+
+    for label, bad_weights in (
+        ("an unknown axis", {"nonsense": 1.0}),
+        ("a negative weight", {"shade": -1.0}),
+        ("an all-zero weight vector",
+         {"shade": 0.0, "ventilation": 0.0, "drainage": 0.0}),
+    ):
+        try:
+            compare(three, weights=bad_weights)
+            check(f"compare() raises on {label}", False, "it was accepted")
+        except ValueError:
+            check(f"compare() raises on {label}", True, "")
+
+    try:
+        compare([])
+        check("compare() raises on an empty scenario list", False, "it was accepted")
+    except ValueError:
+        check("compare() raises on an empty scenario list", True, "")
+
+    duplicate = compare([_scen("X", 0.1, 0.1, 1.0), _scen("X", 0.2, 0.2, 2.0)],
+                        weights={"shade": 1.0})
+    check("duplicate scenarioIds do not crash the ranking",
+          len(duplicate["ranked"]) == 2, f"{len(duplicate['ranked'])} rows")
+
+    check("the polarity table is stated once and echoed",
+          AXIS_BETTER == {"shade": 1, "ventilation": -1, "drainage": -1}
+          and ranked["polarity"]["ventilation"] == "lower is better",
+          str(ranked["polarity"]))
+
+    # evaluate() itself still emits no scalar total; its ventilation axis gained a
+    # per-direction fadRatio so a massing change is visible directionally.
+    check("evaluate() still emits no combined score",
+          taller_west["combinedScore"] is None, "")
+    check("the ventilation axis carries a per-direction fadRatio",
+          set(taller_west["axes"]["ventilation"]["fadRatio"]) == {"NE", "ENE", "E"},
+          str(sorted(taller_west["axes"]["ventilation"]["fadRatio"])))
+
+    # --- determinism: no wall-clock, no RNG, one frozen scenario twice --- #
+    import re as _re
+    module_sources = {
+        "design_metrics": BACKEND_DIR / "app/services/design_metrics.py",
+        "ventilation": BACKEND_DIR / "app/services/ventilation.py",
+        "scenario": BACKEND_DIR / "app/services/scenario.py",
+        "sandbox_model": BACKEND_DIR / "app/services/sandbox_model.py",
+        "hydrology": BACKEND_DIR / "scripts/hydrology.py",
+    }
+    offenders = [name for name, path in module_sources.items()
+                 if _re.search(r"^\s*(import|from)\s+(time|random)\b",
+                               path.read_text(), _re.M)]
+    check("no new or changed module imports time or random",
+          not offenders, f"offenders: {offenders}" if offenders else "none")
+
+    frozen = [MassingOp("scale_all", multiplier=1.3, scope="west")]
+    import time as _time
+    _t0 = _time.time()
+    first = evaluate(grids, feats, ops=frozen)
+    _eval_seconds = _time.time() - _t0
+    second = evaluate(grids, feats, ops=frozen)
+    check("one frozen scenario reproduces identical numbers twice",
+          first["axes"] == second["axes"]
+          and first["tradeoffs"] == second["tradeoffs"]
+          and first["massing"] == second["massing"], "")
+    check("evaluate() stays inside its one-second budget",
+          _eval_seconds < 1.0, f"{_eval_seconds:.3f}s")
+    _t1 = _time.time()
+    compare([{**first, "scenarioId": "A"}, {**second, "scenarioId": "B"}],
+            weights={"shade": 1.0, "ventilation": 1.0, "drainage": 1.0})
+    check("evaluate() plus compare() stays inside one second",
+          (_time.time() - _t1) < 1.0, f"{_time.time() - _t1:.3f}s for compare")
+
+    # --- apply_massing regressions: two bugs that produced plausible wrong scores --- #
+    #
+    # (a) `move` referenced an undefined `f_lat` and raised NameError, so every
+    #     metric move op -- which the frontend applies -- was dead. A metric move
+    #     is lon/lat-dependent, so the factor cannot be hoisted out of the loop.
+    # (b) `scale_all` and `set_site` rebuilt the Footprint without carrying
+    #     `bearing_deg`, silently resetting an earlier `rotate` to 0.0. The
+    #     bearing is what `frontal_area_raster`/`cell_fad` read, so a rotated
+    #     scheme scored as if unrotated -- a wrong number that looks correct.
+    import math as _math
+    from app.services.design_metrics import Footprint
+
+    bounds = (113.9, 22.4, 114.1, 22.5)
+    start = [Footprint(114.0, 22.44, 10.0, 10.0, 20.0)]
+    try:
+        moved_east = apply_massing(start, [MassingOp("move", dx_m=100.0, dy_m=0.0)],
+                                   bounds)[0]
+        expected_dlon = 100.0 / (111_320.0 * _math.cos(_math.radians(22.44)))
+        check("a metric move does not raise, and shifts lon by dx/metre-per-degree",
+              abs((moved_east.lon - 114.0) - expected_dlon) < 1e-12
+              and moved_east.lat == 22.44,
+              f"dlon {moved_east.lon - 114.0:.9f} vs {expected_dlon:.9f}")
+        moved_north = apply_massing(start, [MassingOp("move", dx_m=0.0, dy_m=100.0)],
+                                    bounds)[0]
+        check("and shifts lat by dy/110540",
+              abs((moved_north.lat - 22.44) - 100.0 / 110_540.0) < 1e-12,
+              f"dlat {moved_north.lat - 22.44:.9f}")
+    except Exception as exc:  # noqa: BLE001
+        check("a metric move does not raise, and shifts lon by dx/metre-per-degree",
+              False, f"raised {type(exc).__name__}: {exc}")
+        check("and shifts lat by dy/110540", False, "not reached")
+
+    rotated_scaled = apply_massing(
+        start, [MassingOp("rotate", degrees=30.0),
+                MassingOp("scale_all", multiplier=1.4)], bounds)[0]
+    check("scale_all preserves the bearing a preceding rotate set",
+          rotated_scaled.bearing_deg == 30.0
+          and abs(rotated_scaled.height_m - 28.0) < 1e-9,
+          f"bearing {rotated_scaled.bearing_deg}, height {rotated_scaled.height_m}")
+
+    rotated_set = apply_massing(
+        start, [MassingOp("rotate", degrees=30.0),
+                MassingOp("set_site", height_m=50.0)], bounds)[0]
+    check("set_site preserves the bearing too",
+          rotated_set.bearing_deg == 30.0 and rotated_set.height_m == 50.0,
+          f"bearing {rotated_set.bearing_deg}, height {rotated_set.height_m}")
+
+    rotated_moved = apply_massing(
+        start, [MassingOp("rotate", degrees=30.0),
+                MassingOp("move", dx_m=50.0)], bounds)[0]
+    check("and a later move preserves the bearing",
+          rotated_moved.bearing_deg == 30.0,
+          f"bearing {rotated_moved.bearing_deg}")
 
     print(f"\n{PASSED}/{PASSED + FAILED} passed")
     return 1 if FAILED else 0

@@ -56,6 +56,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from app.config import settings
 
 # The geometry primitives are defined once, in design_metrics, and re-exported
@@ -69,11 +71,28 @@ from app.services.design_metrics import (  # noqa: F401
     VR_CONGESTED_STREET,
     VR_OPEN_SPACE,
     Footprint,
+    _TRAVEL,
+    cell_fad,
     frontal_area_density as design_frontal_area_density,
     projected_width_m,
 )
 
+# scipy is used for exactly one thing -- the least-cost-path corridors below. It
+# is imported defensively so that a host where `scipy.sparse` will not load (the
+# 1.15.3 `_propack`/dyld failure the requirements pin fixes) gets a loud
+# RuntimeError rather than a silently degraded corridor. A degraded corridor is a
+# wrong corridor, and this module would rather fail than draw one.
+try:  # pragma: no cover - exercised by the import-failure branch, not the happy path
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import dijkstra
+except Exception:  # noqa: BLE001
+    csr_matrix = None  # type: ignore[assignment]
+    dijkstra = None  # type: ignore[assignment]
+
 REFERENCE_PATH = "reference/hsk_ava_reference.json"
+
+# The eight principal wind directions the corridor endpoint defaults to.
+PRINCIPAL_DIRECTIONS: tuple[str, ...] = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 
 # Meteorological convention: the direction a wind comes FROM. Named explicitly
 # because "wind from the east" and "wind towards the east" differ by 180 degrees,
@@ -180,4 +199,197 @@ def ventilation_screening(
             "Technical Guide, which we have not extracted. Read it as a shape "
             "indicator for comparing schemes, never as an assessment."
         ),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Stage 5b -- least-cost-path wind corridors
+# --------------------------------------------------------------------------- #
+
+
+def _edge_arrays(grids: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """The 8-neighbour graph as ``(src, dst, step_cells, indptr)``, built once.
+
+    ``src``/``dst`` are flat cell indices, ``step_cells`` is the step length in
+    CELLS (1 for a cardinal neighbour, sqrt(2) for a diagonal), and ``indptr`` is
+    the CSR row pointer. The arrays are sorted by ``src`` so each direction's edge
+    weights drop straight into a CSR without re-sorting -- the "build the
+    structure once" the design asks for.
+    """
+    rows, cols = grids.rows, grids.cols
+    rr, cc = np.meshgrid(np.arange(rows, dtype=np.int64),
+                         np.arange(cols, dtype=np.int64), indexing="ij")
+    srcs, dsts, steps = [], [], []
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            r2, c2 = rr + dr, cc + dc
+            ok = (r2 >= 0) & (r2 < rows) & (c2 >= 0) & (c2 < cols)
+            srcs.append((rr[ok] * cols + cc[ok]).astype(np.int64))
+            dsts.append((r2[ok] * cols + c2[ok]).astype(np.int64))
+            steps.append(np.full(int(ok.sum()), math.hypot(dr, dc), dtype=np.float64))
+    src = np.concatenate(srcs)
+    dst = np.concatenate(dsts)
+    step_cells = np.concatenate(steps)
+    order = np.lexsort((dst, src))
+    src, dst, step_cells = src[order], dst[order], step_cells[order]
+    counts = np.bincount(src, minlength=rows * cols)
+    indptr = np.zeros(rows * cols + 1, dtype=np.int64)
+    np.cumsum(counts, out=indptr[1:])
+    return src, dst, step_cells, indptr
+
+
+def least_cost_corridors(
+    footprints: list[Footprint],
+    grids: Any,
+    directions: dict[str, float] | None = None,
+    *,
+    step_m: float | None = None,
+) -> dict[str, Any]:
+    """Per-direction least-cost corridor across the frontal-area cost surface.
+
+    The corridor is the cheapest 8-neighbour route from the edge the wind enters
+    to the edge it leaves. ``cell_fad`` gives the per-cell blockage; the cost of
+    standing in a cell is ``1 + cellFAD``, so the least-cost route runs through
+    the OPENEST ground -- which is what a ventilation corridor physically is.
+
+    **A note on the cost formula.** The design and PRD write the surface as
+    ``1/(1+FAD)``. Taken literally that INVERTS the selection: a least-cost path
+    minimises the sum of ``1/(1+FAD)``, which is smallest where FAD is largest, so
+    the corridor would route through the most blocked cells and the design's own
+    acceptance test -- "one low-FAD lane returns a corridor along the lane" --
+    would fail. The reciprocal is the physically meaningful form and is what ships;
+    it is recorded here because the difference is a sign, not a typo.
+
+    The graph is built once; per direction the edge weights are recomputed and
+    ``scipy.sparse.csgraph.dijkstra`` is run with every upwind-edge cell as a
+    multi-source. Deterministic: no RNG, no wall-clock. Uses
+    :func:`app.services.design_metrics.cell_fad` for the cost surface, so there is
+    no second geometry.
+
+    Raises ``RuntimeError('scipy.sparse.csgraph unavailable')`` if the import
+    failed, rather than silently degrading -- a degraded corridor is a wrong one.
+    """
+    if dijkstra is None or csr_matrix is None:  # pragma: no cover
+        raise RuntimeError("scipy.sparse.csgraph unavailable")
+
+    dirs = directions or {name: CARDINALS[name] for name in PRINCIPAL_DIRECTIONS}
+    for name in dirs:
+        if name not in CARDINALS or name not in _TRAVEL:
+            raise ValueError(
+                f"unknown wind direction {name!r}; known directions are "
+                f"{sorted(CARDINALS)}")
+
+    rows, cols = grids.rows, grids.cols
+    n = rows * cols
+    if step_m is None:
+        step_m = float(grids.cell_area_m2) ** 0.5
+    step_m = float(step_m)
+
+    src, dst, step_cells, indptr = _edge_arrays(grids)
+    rr, cc = np.meshgrid(np.arange(rows, dtype=np.int64),
+                         np.arange(cols, dtype=np.int64), indexing="ij")
+    flat_rr = rr.reshape(-1)
+    flat_cc = cc.reshape(-1)
+
+    per_direction: dict[str, Any] = {}
+    for name, bearing in dirs.items():
+        fad = cell_fad(footprints, grids, bearing).reshape(-1).astype(np.float64)
+        cost = 1.0 + fad
+        weights = 0.5 * (cost[src] + cost[dst]) * step_cells * step_m
+        graph = csr_matrix((weights, dst, indptr), shape=(n, n))
+
+        # The travel vector (wind FROM this direction) is the canonical table in
+        # design_metrics -- not re-derived here, because a re-derived direction
+        # table is exactly how NE and SW get swapped.
+        dr, dc = _TRAVEL[name]
+        # The upwind edge is the set of cells the wind reaches FIRST: those with
+        # the minimum projection onto the travel vector. The downwind edge is the
+        # maximum. For a cardinal wind that is a whole row or column (a band of
+        # sources, exactly the "all upwind-edge cells as multi-source" the design
+        # asks for); for a diagonal it is the single leading corner, which is what
+        # forces the corridor to span the district instead of hopping from the top
+        # edge to the adjacent left edge one step in -- the degenerate 2-cell NE
+        # corridor the first version reported.
+        projection = flat_rr * dr + flat_cc * dc
+        up_idx = np.flatnonzero(projection == projection.min())
+        down_idx = np.flatnonzero(projection == projection.max())
+
+        dist, pred, _nearest = dijkstra(
+            graph, directed=True, indices=up_idx,
+            return_predecessors=True, min_only=True)
+
+        exit_dist = dist[down_idx]
+        finite = np.isfinite(exit_dist)
+        if not finite.any():
+            per_direction[name] = {
+                "corridorCells": 0, "pathLengthM": 0.0, "meanCost": None,
+                "blocked": True, "path": [],
+            }
+            continue
+
+        node = int(down_idx[int(np.argmin(exit_dist))])
+        chain: list[int] = []
+        while node >= 0 and len(chain) <= n:
+            chain.append(node)
+            node = int(pred[node])
+        chain.reverse()
+        path = [[int(v // cols), int(v % cols)] for v in chain]
+
+        length = 0.0
+        for (r0, c0), (r1, c1) in zip(path, path[1:]):
+            length += step_m * math.hypot(r1 - r0, c1 - c0)
+        mean_cost = float(np.mean([cost[r * cols + c] for r, c in path]))
+
+        per_direction[name] = {
+            "corridorCells": len(path),
+            "pathLengthM": round(length, 2),
+            "meanCost": round(mean_cost, 4),
+            "blocked": False,
+            "path": path,
+        }
+
+    return {
+        "metric": "least-cost-path ventilation corridors",
+        "costSurface": ("1 + cellFAD (frontal-area resistance; the least-cost "
+                        "path avoids blockage)"),
+        "resolutionM": round(step_m, 4),
+        "directions": per_direction,
+        "status": "FAD_IS_NOT_A_VELOCITY_RATIO",
+        "warning": ("FAD is not a velocity ratio. The corridor is geometry, not "
+                    "flow: it shows the openest through-route, not a measured "
+                    "wind speed."),
+        "limitation": (
+            "Geometry, not flow. No velocity, no turbulence, no pressure field. "
+            "Because the frontal-area surface is 180-degree periodic, the NE and "
+            "SW corridors traverse the SAME cells in opposite directions -- exact "
+            "geometry, not a bug -- so they differ only in which edge they enter "
+            "from. The corridor cannot distinguish a north-easterly from a "
+            "south-westerly any more than FAD can."
+        ),
+    }
+
+
+def fad_ratio(baseline_fad: float, scenario_fad: float,
+              direction: str) -> dict[str, Any]:
+    """``scenario / baseline`` frontal area density, for one direction.
+
+    ``ratio`` is ``None`` with ``defined=False`` when the baseline is zero: a ratio
+    with a zero denominator is undefined, not infinite. This is a comparison and
+    never a velocity ratio.
+    """
+    baseline = float(baseline_fad)
+    scenario = float(scenario_fad)
+    defined = baseline > 0.0
+    return {
+        "direction": direction,
+        "baselineFad": baseline,
+        "scenarioFad": scenario,
+        "ratio": (round(scenario / baseline, 6) if defined else None),
+        "defined": defined,
+        "note": ("scenario frontal area density / baseline, for one direction. A "
+                 "ratio is a comparison, not an absolute velocity ratio."),
+        "status": "RELATIVE_COMPARISON_NOT_A_VELOCITY_RATIO",
+        "warning": "A ratio is a comparison, not an absolute VR.",
     }

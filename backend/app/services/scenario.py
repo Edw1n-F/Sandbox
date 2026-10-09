@@ -70,6 +70,7 @@ from app.services.sandbox_model import (
     Grids,
     storage_ledger,
 )
+from app.services.ventilation import fad_ratio
 
 # The three axes and the direction that means "more of the thing". Deliberately
 # not a weight: nothing here is normalised, because the units are incompatible.
@@ -179,14 +180,22 @@ def apply_massing(
 
         if op.op == "scale_all":
             m = float(op.multiplier or 1.0)
-            out = [Footprint(f.lon, f.lat, f.width_m, f.depth_m, f.height_m * m)
+            # bearing_deg is carried through on every rebuild below. Dropping it
+            # let Footprint's default 0.0 silently erase the orientation a
+            # preceding `rotate` set, so `[rotate, scale_all]` scored as if
+            # unrotated -- a plausible wrong number, and the geometry in
+            # frontal_area_raster / cell_fad reads exactly this field. Only
+            # `rotate` may ever change the bearing.
+            out = [Footprint(f.lon, f.lat, f.width_m, f.depth_m, f.height_m * m,
+                             bearing_deg=f.bearing_deg)
                    if i in set(idx) else f for i, f in enumerate(out)]
         elif op.op == "set_site":
             out = [
                 Footprint(f.lon, f.lat, f.width_m, f.depth_m,
                           (max(1.0, f.height_m + float(op.delta_m))
                            if op.delta_m is not None
-                           else float(op.height_m or f.height_m)))
+                           else float(op.height_m or f.height_m)),
+                          bearing_deg=f.bearing_deg)
                 if i in set(idx) else f
                 for i, f in enumerate(out)
             ]
@@ -206,12 +215,24 @@ def apply_massing(
                     if i in targets else f
                     for i, f in enumerate(out)]
         elif op.op == "move":
-            dlon = float(op.dx_m or 0.0) / (111_320.0 * math.cos(math.radians(f_lat)))
-            dlat = float(op.dy_m or 0.0) / 110_540.0
-            if abs(float(op.dx_m or 0.0)) > 1e-9 or abs(float(op.dy_m or 0.0)) > 1e-9:
-                out = [Footprint(f.lon + dlon, f.lat + dlat, f.width_m, f.depth_m,
-                                 f.height_m) if i in set(idx) else f
-                       for i, f in enumerate(out)]
+            dx = float(op.dx_m or 0.0)
+            dy = float(op.dy_m or 0.0)
+            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                # The metres-per-degree-longitude factor depends on each
+                # footprint's OWN latitude, so it cannot be hoisted out of the
+                # loop. Hoisting it referenced an undefined `f_lat` and raised
+                # NameError; a single shared factor would also be wrong, because
+                # a move is metric while the degree scale shrinks with latitude.
+                targets = set(idx)
+                out = [
+                    Footprint(
+                        f.lon + dx / (111_320.0 * math.cos(math.radians(f.lat))),
+                        f.lat + dy / 110_540.0,
+                        f.width_m, f.depth_m, f.height_m,
+                        bearing_deg=f.bearing_deg,
+                    ) if i in targets else f
+                    for i, f in enumerate(out)
+                ]
         # `place` and `reset` are deliberately not implemented here. Placing new
         # blocks means generating footprints on unbuilt paved land, and resetting
         # means regenerating the seeded heights; both belong to the city-model
@@ -361,6 +382,13 @@ def evaluate(
             **_axis("ventilation", fad_b["mean"], fad_c["mean"]),
             "baselineByDirection": fad_b["byDirection"],
             "candidateByDirection": fad_c["byDirection"],
+            # Per prevailing direction (AVRG73: NE/ENE/E are 40.8% of the year),
+            # so a massing change is visible directionally rather than only as a
+            # mean. A ratio is a comparison, never a velocity ratio.
+            "fadRatio": {
+                d: fad_ratio(fad_b["byDirection"][d], fad_c["byDirection"][d], d)
+                for d in ("NE", "ENE", "E")
+            },
             "method": ("Frontal area density over the AVA method's sixteen wind "
                        "directions, the mean across all of them."),
             "limitation": (
@@ -449,3 +477,242 @@ def _fmt(v: float) -> str:
 
 def _signed(v: float) -> str:
     return f"{v:+,.4g}"
+
+
+# --------------------------------------------------------------------------- #
+# Stage 3 -- comparison under stated weights
+# --------------------------------------------------------------------------- #
+
+# The direction of a higher FAVOURABILITY score, per axis. Shade is the heat
+# axis's solar lever (more shade = less solar gain = the better direction for
+# heat); ventilation FAD and drainage unstored volume are lower-is-better. Stated
+# once, echoed in every compare() response, so a reader can disagree with the
+# convention explicitly rather than inferring it.
+#
+# An earlier version of the equivalent table elsewhere in this project had the
+# ventilation case inverted -- it read a *rise* in frontal area density as "less
+# blockage". The direction is stated once, here, and never re-derived.
+AXIS_BETTER: dict[str, int] = {"shade": +1, "ventilation": -1, "drainage": -1}
+
+_AXIS_POLARITY: dict[str, str] = {
+    "shade": "higher is better",
+    "ventilation": "lower is better",
+    "drainage": "lower is better",
+}
+
+COMPARE_STATUS = "RELATIVE_RANKING_NOT_A_PASS_FAIL"
+COMPARE_WARNING = (
+    "The weights are the caller's, not the project's. This is a relative "
+    "ordering, not a pass/fail verdict."
+)
+_COMPARE_NORMALISATION = (
+    "min-max within the compared set, oriented by polarity; the set is the "
+    "caller's, so adding a scheme can move the normalisation"
+)
+_COMPARE_WHY_NO_VERDICT = (
+    "The AVA policy behind Hong Kong's guidance states that whether the better "
+    "design option meets a standard cannot be known, so an ordering is the "
+    "strongest claim this tool can make. It is relative to the compared set and "
+    "to the weights the caller chose."
+)
+
+
+def _normalise_weights(
+    weights: dict[str, float],
+) -> tuple[dict[str, float], dict[str, float]]:
+    """``(as_supplied, normalised_by_sum)``. Validates, never widens.
+
+    Rejects an unknown axis name, a negative weight and an all-zero vector with
+    ``ValueError`` -- mirroring the :func:`_region_fraction` scope-refusal
+    precedent. Weights need not sum to 1; they are normalised by their sum, and
+    BOTH vectors are returned so "the weights are the caller's" is checkable. A
+    zero-weight axis stays in the normalised vector (as 0.0) so it remains visible
+    on every row while influencing nothing.
+    """
+    if not isinstance(weights, dict) or not weights:
+        raise ValueError("weights must be a non-empty mapping of axis -> number")
+    as_supplied: dict[str, float] = {}
+    for axis, raw in weights.items():
+        if axis not in AXIS_UNITS:
+            raise ValueError(
+                f"unknown axis {axis!r}; known axes are {sorted(AXIS_UNITS)}")
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"weight for {axis!r} is not a number: {raw!r}")
+        if value < 0.0:
+            raise ValueError(
+                f"negative weight {value} for axis {axis!r}; weights must be "
+                "non-negative")
+        as_supplied[axis] = value
+    total = float(sum(as_supplied.values()))
+    if total <= 0.0:
+        raise ValueError("all weights are zero; there is nothing to order by")
+    normalised = {axis: value / total for axis, value in as_supplied.items()}
+    return as_supplied, normalised
+
+
+def _read_scenarios(
+    scenarios: list[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, float]]]:
+    """Validate and pull ``(ids, per-axis candidate values)`` out of the inputs.
+
+    Each item is an ``evaluate()`` result carrying an id (``scenarioId`` or
+    ``id``) and ``axes`` with a per-axis ``candidate``. A missing id or a missing
+    candidate is fatal rather than skipped: ranking a scenario whose axes are
+    absent would silently drop it from the comparison.
+    """
+    if not scenarios:
+        raise ValueError("compare() needs at least one scenario")
+    ids: list[str] = []
+    values: list[dict[str, float]] = []
+    for item in scenarios:
+        if not isinstance(item, dict):
+            raise ValueError("every scenario must be a dict")
+        sid = item.get("scenarioId") or item.get("id")
+        if sid is None:
+            raise ValueError("every scenario needs a scenarioId (or id)")
+        axes = item.get("axes")
+        if not isinstance(axes, dict) or not axes:
+            raise ValueError(f"scenario {sid!r} has no axes")
+        row: dict[str, float] = {}
+        for axis in AXIS_UNITS:
+            block = axes.get(axis)
+            if not isinstance(block, dict) or "candidate" not in block:
+                raise ValueError(
+                    f"scenario {sid!r} is missing axes[{axis!r}]['candidate']")
+            row[axis] = float(block["candidate"])
+        ids.append(str(sid))
+        values.append(row)
+    return ids, values
+
+
+def _min_max_favourability(
+    values: list[dict[str, float]],
+) -> dict[str, list[float]]:
+    """Per-axis 0-1 favourability, min-max within the set, oriented by polarity.
+
+    When every scenario has the same value on an axis the range is zero, so there
+    is nothing to discriminate: every scenario gets 1.0, which leaves the ordering
+    unchanged (a constant contribution). This is stated rather than left to a
+    division by zero.
+    """
+    fav: dict[str, list[float]] = {axis: [] for axis in AXIS_UNITS}
+    for axis in AXIS_UNITS:
+        col = [row[axis] for row in values]
+        lo, hi = min(col), max(col)
+        span = hi - lo
+        for value in col:
+            if span <= 1e-12:
+                fav[axis].append(1.0)
+                continue
+            raw = (value - lo) / span
+            fav[axis].append(raw if AXIS_BETTER[axis] > 0 else 1.0 - raw)
+    return fav
+
+
+def compare(
+    scenarios: list[dict[str, Any]],
+    weights: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """Rank scenarios against each other. Refuses to rank without weights.
+
+    Each item of ``scenarios`` is an ``evaluate()`` result dict carrying an id
+    (``scenarioId`` or ``id``) and ``axes`` with a per-axis ``candidate`` value.
+    All scenarios MUST share one baseline (the endpoint guarantees this by
+    evaluating them all against the same city model); this is a stated
+    precondition, echoed as ``sharedBaseline``.
+
+    ``weights=None`` returns ``refused: True`` and ranks nothing. With weights,
+    returns ``ranked`` rows (each carrying the three raw axes, the per-axis
+    favourabilities, the contributions and the weighted favourability), a full
+    per-axis ``byAxis`` ordering, and both weight vectors echoed.
+
+    ``combinedScore`` is ``None`` on every path and there is no ``verdict``: the
+    axes stay three, and the weighted total is named ``weightedFavourability``,
+    never a score.
+
+    Raises ``ValueError`` on an unknown axis name, a negative weight, an all-zero
+    weight vector, or a scenario missing an id or ``axes``.
+    """
+    ids, values = _read_scenarios(scenarios)
+    echoed = [
+        {"scenarioId": sid, "axes": {axis: values[i][axis] for axis in AXIS_UNITS}}
+        for i, sid in enumerate(ids)
+    ]
+
+    if weights is None:
+        return {
+            "refused": True,
+            "ranked": None,
+            "byAxis": None,
+            "reason": (
+                "No weights supplied. Ranking three axes with incompatible units "
+                "requires the caller to state what they value; without that, any "
+                "ordering would be a statement about the weights the tool invented, "
+                "not about the schemes."
+            ),
+            "scenarios": echoed,
+            "combinedScore": None,
+            "verdict": None,
+            "whyNoVerdict": _COMPARE_WHY_NO_VERDICT,
+            "status": COMPARE_STATUS,
+            "warning": COMPARE_WARNING,
+        }
+
+    as_supplied, used = _normalise_weights(weights)
+    fav = _min_max_favourability(values)
+
+    # Per-axis ordering, best -> worst. Ties break on scenarioId so the order does
+    # not depend on the caller's list order.
+    by_axis: dict[str, list[str]] = {}
+    per_axis_rank: dict[str, dict[str, int]] = {axis: {} for axis in AXIS_UNITS}
+    for axis in AXIS_UNITS:
+        order = sorted(range(len(ids)),
+                       key=lambda i: (-fav[axis][i], ids[i]))
+        by_axis[axis] = [ids[i] for i in order]
+        for rank, i in enumerate(order, start=1):
+            per_axis_rank[axis][ids[i]] = rank
+
+    rows: list[dict[str, Any]] = []
+    for i, sid in enumerate(ids):
+        contributions = {axis: used.get(axis, 0.0) * fav[axis][i]
+                         for axis in AXIS_UNITS}
+        weighted = sum(contributions.values())
+        rows.append({
+            "scenarioId": sid,
+            "axes": {axis: values[i][axis] for axis in AXIS_UNITS},
+            "favourability": {axis: round(fav[axis][i], 6) for axis in AXIS_UNITS},
+            "contributions": {axis: round(contributions[axis], 6)
+                              for axis in AXIS_UNITS},
+            "weightedFavourability": round(weighted, 6),
+            "perAxisRank": {axis: per_axis_rank[axis][sid] for axis in AXIS_UNITS},
+        })
+    rows.sort(key=lambda r: (-r["weightedFavourability"], r["scenarioId"]))
+    for rank, row in enumerate(rows, start=1):
+        row["rank"] = rank
+
+    return {
+        "refused": False,
+        "reason": (
+            "Ranked by a weighted favourability computed from each axis min-max "
+            "normalised within this set. The total is the caller's opinion, named "
+            "weightedFavourability and never a score; the three raw axes stay "
+            "visible on every row."
+        ),
+        "weightsAsSupplied": as_supplied,
+        "weightsUsed": used,
+        "weightsNormalisedBySum": True,
+        "weightsAreCallersOpinion": True,
+        "polarity": dict(_AXIS_POLARITY),
+        "normalisation": _COMPARE_NORMALISATION,
+        "sharedBaseline": True,
+        "scenarioCount": len(ids),
+        "ranked": rows,
+        "byAxis": by_axis,
+        "combinedScore": None,
+        "verdict": None,
+        "whyNoVerdict": _COMPARE_WHY_NO_VERDICT,
+        "status": COMPARE_STATUS,
+        "warning": COMPARE_WARNING,
+    }

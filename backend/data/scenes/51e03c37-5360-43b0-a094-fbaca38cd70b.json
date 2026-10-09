@@ -50,7 +50,7 @@
   "wet_grid_path": "rasters/wetgrid_hsk.png",
   "heatmap_path": "rasters/heatmap_hsk.png",
   "created_at": "2026-10-06T11:01:42Z",
-  "updated_at": "2026-10-08T14:49:48Z",
+  "updated_at": "2026-10-09T11:45:55Z",
   "study_area": "hsk-ht-nda",
   "working_grid": {
     "bounds": [

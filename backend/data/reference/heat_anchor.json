@@ -1,0 +1,63 @@
+{
+  "artefact": "heat_anchor",
+  "generated": "2026-10-09",
+  "status": "PUBLISHED_STATION_RECORD_NOT_A_MEASUREMENT_OF_THIS_SITE",
+  "quantity": "HKO_air",
+  "rangeC": [
+    26.4,
+    32.7
+  ],
+  "mapsTo": "range",
+  "mapsToSemantics": "index 0.0 -> 26.4 C (a typical July night: the mean daily minimum); index 1.0 -> 32.7 C (a typical July afternoon: the mean daily maximum). A display band the relative index is read against, not a site measurement.",
+  "source": {
+    "name": "Hong Kong Observatory open data - Lau Fau Shan (LFS) daily air-temperature record",
+    "publisher": "Hong Kong Observatory",
+    "station": "LFS",
+    "stationName": "Lau Fau Shan",
+    "url": "https://data.weather.gov.hk/weatherAPI/opendata/opendata.php",
+    "dataTypes": [
+      "CLMTEMP",
+      "CLMMAXT",
+      "CLMMINT"
+    ],
+    "queryExample": "https://data.weather.gov.hk/weatherAPI/opendata/opendata.php?dataType=CLMMINT&lang=en&rformat=json&station=LFS",
+    "licence": "Hong Kong Observatory open data (GovHK Terms of Use); free, no key",
+    "retrieved": "2026-10-09",
+    "window": "July 2015-2024",
+    "stationDistanceFromSiteKm": 20,
+    "values": {
+      "meanDailyMinC": 26.4,
+      "meanC": 28.96,
+      "meanDailyMaxC": 32.7,
+      "hottestDailyMaxC": 37.0,
+      "coolestDailyMinC": 23.3
+    },
+    "method": "Mean of the daily minimum and daily maximum air temperature over July of 2015-2024, from the LFS daily station record. Missing values use the HKO sentinel '***' and are excluded, never coerced to 0. rangeC = [mean(daily min), mean(daily max)]."
+  },
+  "crossChecks": [
+    {
+      "name": "HKO 1991-2020 climate normals (HKO Headquarters)",
+      "url": "https://www.hko.gov.hk/en/cis/normal/1991_2020/normals.htm",
+      "julyMeanDailyMinC": 26.9,
+      "julyMeanC": 28.9,
+      "julyMeanDailyMaxC": 31.6,
+      "note": "A different product (a 30-year normal at HKO HQ), used only to show the LFS July band is ordinary for Hong Kong. NOT the anchor."
+    },
+    {
+      "name": "Open-Meteo ERA5 archive (reanalysis) at the site centroid",
+      "url": "https://archive-api.open-meteo.com/v1/archive",
+      "latitude": 22.44,
+      "longitude": 113.994,
+      "julyMeanOfDailyMaxC": 30.99,
+      "julyHottestDailyMaxC": 36.0,
+      "note": "An independent reanalysis cross-check, within 1.8 C of the LFS band maximum. NOT the anchor."
+    }
+  ],
+  "whatThisIsNot": [
+    "This is a stated air-temperature band for a Hong Kong summer, NOT a measurement of the Hung Shui Kiu / Ha Tsuen site. The LFS station is ~20 km away and this is a 10-year July climatology, not the site's air temperature on any day.",
+    "This is AIR temperature, not skin (surface) temperature. Landsat/MODIS/ECOSTRESS LST runs 10-20 C above air on a hot paved surface and was unreachable (credential-gated) from this host. The two quantities are never conflated.",
+    "The heat field stays a relative 0-1 index. This band is what the index is READ AGAINST; the field is never converted to degrees Celsius.",
+    "The HEAT_INDEX land-class table remains hand-authored and unverified; the anchor does not change it.",
+    "No comfort index (UTCI/PET/SET) is claimed."
+  ]
+}
