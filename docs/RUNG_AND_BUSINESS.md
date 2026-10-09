@@ -28,7 +28,7 @@ and specifies none. So these are ours, written against the brief's own task list
 |---|---|
 | **A** | Everything in the task list: baseline storage ledger, InVEST runoff, three real published plans, typhoon surge with jacking, HAND, a trained perception encoder, a generative emulator with a reported ensemble, and kappa validation against recorded flooding |
 | **B** | A, but with **ready-made HAND tiles instead of a derived bare-earth DTM**, and a **documented disagreement** against whatever validation data exists |
-| **C** ★ | The interactive sandbox, real terrain and land cover, the storage ledger and wet grid, the heat index, grounded AI interventions, and **AI-driven 3D placement and alteration scored against the ledger**. Sea-level scenarios. Validation by monotonicity and unit tests. **This is us.** |
+| **C** ★ | The interactive sandbox, real terrain and land cover, the storage ledger and wet grid, the heat index, grounded AI interventions, **AI-driven 3D placement and alteration scored against the ledger**, the **buffer deficit as a served headline number**, **sea-level scenarios run against the official HKO projections**, and **three published CEDD programmes encoded as scenarios**. Validation by monotonicity and unit tests. **This is us.** |
 | **D** | A static map with two toggles and a number. The minimum that still demonstrates the idea. |
 
 ### What rung C deliberately leaves out, and why
@@ -39,6 +39,7 @@ Each omission is a decision, not an overrun. Saying so is the point.
 |---|---|
 | **Typhoon surge + jacking effect** (task 12) | Needs an Hato tide series and an outfall network we do not have. This is the honest reason the brief itself gives for the whole project being at risk: the two things that "can still break it" are LiDAR access and 2017 validation data |
 | **Perception encoder** (task 16) | Requires a trained segmentation model. We use **ESA WorldCover 10 m v200**, an existing pretrained global product, and say so rather than implying we trained anything. This is the rung B/C boundary |
+| **Jacking effect, as a drainage model** (task 12) | The sea-level scenarios implement the *submergence* half of jacking, and report that it is inert at this site. The half that matters — a submerged outfall — needs pipe and outfall capacity we do not have. Claiming it would require inventing that network |
 | **Generative emulator** (task 17) | A surrogate needs training pairs from a slow simulator. Our ledger runs in **0.9 s**, so there is nothing to make faster — the premise of an emulator does not apply at this scale |
 | **Kappa vs recorded flood zones** (task 15) | No 2017 validation dataset is available. The brief accepts this: *"Validate with the ladder and report the disagreement."* We report the ladder |
 | **InVEST** (task 8) | We implemented SCS-CN directly from USDA TR-55 Table 2-2 rather than installing InVEST. Deviation noted below |
@@ -48,8 +49,24 @@ Each omission is a decision, not an overrun. Saying so is the point.
 
 The AI 3D work. Placing massing on real land cover, altering it by scope, and
 scoring every candidate change against the storage ledger — with the language
-model stating the objective and the code doing the arithmetic. That is the part
-that is ours rather than assembled, and it is why this is C and not B.
+model stating the objective and the code doing the arithmetic.
+
+And now the numbers that make the sandbox mean something rather than demo
+something:
+
+- **The buffer deficit, served.** 3,170,180 m³ — today's unstored water, pinned
+  by test to what `make_wetgrid.py` already produced. `GET .../ledger` adds the
+  delta a scenario makes to it.
+- **Three published CEDD programmes**, from the official Development Blueprint:
+  First Phase ~19.6 ha, Second Phase Stage 2 ~200 ha, and all six Second Phase
+  contracts ~253.5 ha. Which produced the most useful finding we have: **the
+  published Second Phase does not fit the land available.** Within our 786 ha
+  study area it is larger than the non-paved land remaining, and bare ground runs
+  out after 127 ha. That falls straight out of using CEDD's number instead of an
+  invented one.
+- **Sea-level scenarios against the official projections** — HKO's SSP2-4.5
+  37–82 cm and SSP5-8.5 57–108 cm ranges, cited and retrieved, with the honest
+  result that none of them changes the deficit at this site and the reason why.
 
 ---
 
