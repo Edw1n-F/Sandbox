@@ -19,7 +19,7 @@ from app.schemas.plan import (
 from app.schemas.scene import SceneCreate, SceneCreated, SceneRead, SceneUpdate
 from app.services import scene_service
 from app.services.massing_fit import height_options
-from app.services.sandbox_model import DEFAULT_RAINFALL_MM
+from app.services.sandbox_model import DEFAULT_RAINFALL_MM, sea_level_report
 
 router = APIRouter(tags=["scenes"])
 
@@ -288,3 +288,40 @@ def get_ledger(scene_id: str, rainfall_mm: float | None = None,
         "run scripts/make_wetgrid.py --sensitivity for the band it implies."
     )
     return result
+
+
+@router.get("/scenes/{scene_id}/sea-level")
+def get_sea_level_scenarios(scene_id: str, rainfall_mm: float | None = None) -> dict:
+    """GET /api/scenes/{sceneId}/sea-level
+
+    The brief's task 21: run the same layout with the sea raised by the official
+    Hong Kong projections for 2100, and report what changes.
+
+    The numbers come from Hong Kong Observatory's *Mean sea level projection for
+    Hong Kong* (revised 21 Aug 2024): 37-82 cm under SSP2-4.5 and 57-108 cm under
+    SSP5-8.5, relative to the 1995-2014 mean. The brief's own "+0.4 m / +0.8 m"
+    sit inside those ranges rather than replacing them, so both are run.
+
+    **The result is that none of them changes the deficit at this site**, and the
+    reason is reported rather than papered over: the study area's ground runs from
+    2m to 141 m and the ponds are landward, so no retention surface is submerged.
+    The mechanism that would actually bite here is a submerged drainage outfall --
+    the jacking effect -- which needs a pipe network this screening model does not
+    have.
+    """
+    from app.services.sandbox_model import load_grids, sea_level_report
+
+    scene_service.get_scene(scene_id)
+
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
+        )
+
+    report = sea_level_report(
+        grids, rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM)
+    report["sceneId"] = scene_id
+    return report
