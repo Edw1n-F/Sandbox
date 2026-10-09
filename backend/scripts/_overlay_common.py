@@ -110,6 +110,22 @@ COUNTED_AS: dict[str, str] = {
     "water": "retention",
 }
 
+# Depth (m) a water or wetland cell is assumed to already hold, plus the
+# allowance for land that is neither pond nor wetland.
+#
+# This is the "available storage" term and it is an ASSUMPTION, not a
+# measurement: the HSK EIA deliberately does not publish retention volumes for
+# the flood storage lakes. DEPRESSION_STORAGE_M is water held in
+# micro-topography before runoff leaves a generation cell.
+#
+# Moved here from make_wetgrid.py on 9 Oct 2026, when the API needed to re-run
+# the same retention arithmetic to score a candidate intervention. The service
+# and the script have to agree exactly -- a second copy of this table would be a
+# silent way to produce a delta the project would not report -- so there is now
+# one definition and both import it.
+STORAGE_DEPTH_M: dict[str, float] = {"water": 1.50, "wetland": 0.60}
+DEPRESSION_STORAGE_M = 0.02
+
 
 @dataclass
 class Overlay:

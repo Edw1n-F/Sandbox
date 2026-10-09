@@ -707,15 +707,22 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     count = _pick(edit, "count")
     dx = _pick(edit, "dx_m", "dxM")
     dy = _pick(edit, "dy_m", "dyM")
-    # A direction word outranks the model's own trigonometry.
+    # A direction word outranks the model's own trigonometry -- **for a move only**.
     #
     # `qwen2.5:3b-instruct` asked to move blocks "40 m north" returned
     # `dx_m: 40, dy_m: 0` -- north and east transposed, a plausible pair of
     # numbers and completely the wrong direction. Copying the word out of the
-    # instruction cannot transpose an axis; doing the conversion can. So when a
-    # direction is named it wins, and dx/dy are only the fallback.
+    # instruction cannot transpose an axis; doing the conversion can.
+    #
+    # The `op == "move"` guard is not decoration. A small model fills in the whole
+    # schema, so a `place` op arrived carrying `direction: "north"` and
+    # `distance_m: 0` -- fields meaningless for placing -- and this block rejected
+    # the whole operation over them. That is the identical failure to the
+    # `height_m: 0` case fixed above, reintroduced six lines away, and it silently
+    # cost every placement the model got otherwise right. The rule holds: only the
+    # fields an operation actually uses may invalidate it.
     direction = str(edit.get("direction") or "").strip().lower().replace("-", " ")
-    if direction in DIRECTIONS:
+    if op == "move" and direction in DIRECTIONS:
         distance = _pick(edit, "distance_m", "distanceM")
         if distance is None and (dx or dy):
             try:
@@ -1239,6 +1246,69 @@ CHOOSE_TOOL = {
 }
 
 
+# The third tool, and the one that changes what the model is *for*.
+#
+# `modify_massing` asks the model for numbers: a multiplier, a height, a count.
+# Every one of those is a chance to be confidently wrong, and this project has
+# watched qwen2.5:3b-instruct get four of them wrong in one afternoon. This tool
+# asks the model for no numbers at all -- only an objective and the constraints
+# it must respect. The arithmetic is done by app/services/massing_fit.py, which
+# re-runs the project's own storage ledger for each candidate.
+#
+# The objective is an enum, and an unrecognised one is dropped rather than
+# approximated. "Reduce flood exposure" and "make it nicer" are not the same
+# request, and guessing which was meant would put a fabricated objective into a
+# decision.
+FIT_TOOL = {
+    "name": "assess_building_fit",
+    "description": (
+        "Ask which change would actually be best for a building, given the "
+        "ground it stands on. Provide the OBJECTIVE and the CONSTRAINTS only -- "
+        "never a number to apply, never a height, never an area. The system "
+        "enumerates the candidate changes, measures each one with its own "
+        "flood-storage ledger, and returns which wins and by how much. Use this "
+        "when the instruction asks what SHOULD be done, what the best option "
+        "is, or asks to optimise something. Use modify_massing instead when the "
+        "instruction states the change outright."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "objective": {
+                "type": "string",
+                "enum": ["reduce_flood", "reduce_runoff", "reduce_heat",
+                         "balanced"],
+                "description": "What to optimise for. Pick the one the "
+                               "instruction asks for; if it asks for several, "
+                               "use 'balanced'.",
+            },
+            "scope": {
+                "type": "string",
+                "description": "Region the building is in, if the instruction "
+                               "names one. Omit when it does not.",
+            },
+            "no_net_green_loss": {
+                "type": "boolean",
+                "description": "True unless the instruction permits removing "
+                               "green space. Defaults to true.",
+            },
+            "min_green_share_100m": {
+                "type": "number", "minimum": 0, "maximum": 1,
+                "description": "Refuse options that leave the site with less "
+                               "green than this fraction within 100 m.",
+            },
+            "allow_height_change": {
+                "type": "boolean",
+                "description": "True only if the instruction permits changing "
+                               "the building's height.",
+            },
+            "min_height_m": {"type": "number", "minimum": 1, "maximum": 400},
+            "max_height_m": {"type": "number", "minimum": 1, "maximum": 400},
+        },
+        "required": ["objective"],
+    },
+}
+
 MASSING_TOOL = {
     "name": "modify_massing",
     "description": (
@@ -1364,17 +1434,34 @@ MASSING_STYLE = {"color": "#ff8f3f", "opacity": 0.0}
 
 
 def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict]]:
-    """Render the candidate sites as a compact, citable menu."""
+    """Render the candidate sites as a compact, citable menu.
+
+    The catalogue is sent **only when the routed tool can actually use it.** A
+    bisect on 9 Oct 2026 found that the 4,431-character site catalogue combined
+    with the system prompt was enough to stop ``qwen2.5:3b-instruct`` emitting any
+    tool call at all: 18 completion tokens, empty content, ``finish_reason:
+    stop``. The same call with the instruction alone, or the catalogue alone, or a
+    short JSON payload all returned a correct tool call. And `modify_massing`
+    never selects sites -- it places and reshapes buildings -- so the catalogue was
+    4 KB of irrelevant text on the exact calls it broke.
+
+    So the payload is built for the tool that was routed, not for every tool.
+    Smaller, faster, and it fixes the failure rather than documenting it.
+    """
+    _tools, forced = route_tools(instruction)
+    wants_catalogue = forced == CHOOSE_TOOL["name"]
+
     catalogue = []
-    for kind, pool in POOL_FOR_KIND.items():
-        for i, site in enumerate(getattr(grounding, pool, [])):
-            catalogue.append({
-                "site_id": f"{kind}#{i}",
-                "intervention_type": kind,
-                "area_ha": site["areaHa"],
-                "evidence": site["evidence"],
-                "metrics": site["metrics"],
-            })
+    if wants_catalogue:
+        for kind, pool in POOL_FOR_KIND.items():
+            for i, site in enumerate(getattr(grounding, pool, [])):
+                catalogue.append({
+                    "site_id": f"{kind}#{i}",
+                    "intervention_type": kind,
+                    "area_ha": site["areaHa"],
+                    "evidence": site["evidence"],
+                    "metrics": site["metrics"],
+                })
     system = (
         "You are a flood-risk planner for a Hong Kong new development area. "
         "You select intervention sites from a fixed candidate list derived from "
@@ -1391,11 +1478,13 @@ def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict
         "instruction about one part of the district is applied to that part only. "
         "Omitting scope means the whole study area."
     )
-    user = json.dumps({
-        "instruction": instruction,
-        "candidate_sites": catalogue,
-        "grounding_notes": grounding.notes,
-    }, ensure_ascii=False, indent=2)
+    payload: dict[str, Any] = {"instruction": instruction}
+    if wants_catalogue:
+        payload["candidate_sites"] = catalogue
+    payload["grounding_notes"] = grounding.notes
+    # Compact, not indent=2. Pretty-printing doubled the payload for no benefit to
+    # a model reading JSON, and the model is the constraint here, not the reader.
+    user = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     return system, user
 
 
@@ -1728,9 +1817,66 @@ def route_tools(instruction: str) -> tuple[list[dict], str]:
     That is strictly safer than either a prompt rule or a permissive
     ``tool_choice``, and it costs one regex.
     """
+    if parse_fit_intent(instruction):
+        return [FIT_TOOL], FIT_TOOL["name"]
     if parse_massing_intent(instruction):
         return [MASSING_TOOL], MASSING_TOOL["name"]
     return [CHOOSE_TOOL], CHOOSE_TOOL["name"]
+
+
+# "What should I do here?" is a different request from "make it 60 m". These are
+# the phrases that separate them. It is a phrase list rather than a model because
+# the separation has to be a guarantee, not a request -- see route_tools.
+FIT_PHRASES = re.compile(
+    r"\b(best|best[- ]fit|optimi[sz]e|which (?:option|change)|what should|"
+    r"recommend|improve|better|suit the environment|fit for|"
+    r"(?:flood|heat|runoff) (?:risk|exposure|impact)|reduce (?:the )?\w+ "
+    r"(?:risk|exposure))\b",
+    re.IGNORECASE,
+)
+
+# "improve this building" is a fit request; "make it 60 m" is an edit. The second
+# pattern below is the tie-break: a stated number wins, because a planner who says
+# "60 m" has already decided and wants it applied, not optimised.
+STATED_NUMBER = re.compile(
+    r"\b\d+(?:\.\d+)?\s*(?:m\b|metres?|meters?|%|storeys?|floors?)", re.IGNORECASE
+)
+
+
+def parse_fit_intent(instruction: str) -> dict[str, Any] | None:
+    """Recognise a request for a recommendation, and read its constraints.
+
+    Returns None when the instruction states the change outright, because that is
+    an edit and `modify_massing` is the right tool. A number in the instruction
+    is the signal: "set it to 60 m" is a decision, "make it better for flooding"
+    is a question.
+    """
+    text = str(instruction or "").strip()
+    if not text or not FIT_PHRASES.search(text):
+        return None
+    if STATED_NUMBER.search(text) and not re.search(
+            r"\b(best|optimi[sz]e|recommend|which|what should)\b", text,
+            re.IGNORECASE):
+        return None
+
+    objective = "balanced"
+    if re.search(r"\b(flood|runoff|storage|water)\b", text, re.IGNORECASE):
+        objective = "reduce_flood"
+    if re.search(r"\bheat|hotter|heatwave|warm\b", text, re.IGNORECASE):
+        objective = "reduce_heat" if objective == "balanced" else "balanced"
+
+    return {
+        "objective": objective,
+        "constraints": {
+            # Permissive by instruction, conservative by default: a planner who
+            # did not mention green has not given permission to remove it.
+            "no_net_green_loss": not re.search(
+                r"\b(even if|regardless of|if it means losing|trade off)\b",
+                text, re.IGNORECASE),
+            "allow_height_change": bool(re.search(
+                r"\bheight|taller|shorter|storeys|floors\b", text, re.IGNORECASE)),
+        },
+    }
 
 
 def _post_json(url: str, api_key: str, payload: dict) -> dict:
@@ -1864,15 +2010,44 @@ def generate_plan(
         )
 
     features = provider.propose(instruction, grounding)[:max_features]
+    used_provider = getattr(provider, "name", "unknown")
+
+    # A provider that returns nothing has FAILED, and that is not the same thing as
+    # the user having asked for nothing.
+    #
+    # On 9 Oct 2026 `qwen2.5:3b-instruct` was asked -- with `tool_choice` forcing
+    # `modify_massing` -- to place six towers, and returned no tool call at all.
+    # The structured retry then failed too, so `propose()` returned an empty list
+    # and this function reported "The instruction named no recognised intervention
+    # type". That was false. The instruction was recognised; the model had simply
+    # not answered, and the user was told their own sentence was the problem.
+    #
+    # So: fall back to the deterministic parser, which handles massing
+    # instructions too, and name in the response which provider actually produced
+    # the result. A demo must not die because a 3B model declined to emit JSON.
+    fallback_note = ""
+    if not features and not isinstance(provider, HeuristicProvider):
+        heuristic = HeuristicProvider()
+        rescued = heuristic.propose(instruction, grounding)[:max_features]
+        if rescued:
+            features = rescued
+            fallback_note = (
+                f" {used_provider} returned no usable answer for this "
+                f"instruction, so the deterministic parser answered instead "
+                f"({len(rescued)} feature(s)). That is a fallback, not the "
+                f"GenAI path."
+            )
+            used_provider = f"heuristic (after {used_provider} returned nothing)"
+
     if not features:
         return {
             "planId": None,
             "features": 0,
-            "provider": getattr(provider, "name", "unknown"),
+            "provider": used_provider,
             "groundingNotes": grounding.notes,
             "message": (
-                "The instruction named no recognised intervention type, so no "
-                "sites were selected. Nothing was invented."
+                "Nothing could be placed: no provider returned a usable answer "
+                "for this instruction. Nothing was invented."
             ),
         }
 
@@ -1902,7 +2077,10 @@ def generate_plan(
     return {
         "planId": created.plan_id,
         "features": created.intervention_count,
-        "provider": getattr(provider, "name", "unknown"),
+        # used_provider, not provider: after a fallback these differ, and the
+        # response has to name whichever one actually produced the features.
+        "provider": used_provider,
         "types": sorted({f["intervention_type"] for f in features}),
         "groundingNotes": grounding.notes,
+        "fallbackNote": fallback_note or None,
     }

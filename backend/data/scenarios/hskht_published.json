@@ -1,0 +1,72 @@
+{
+  "artefact": "published_scenarios",
+  "generated": "2026-10-09",
+  "status": "PUBLISHED_WORKS_AREAS_PROXY_FOR_LAND_USE",
+  "source": {
+    "name": "HSK/HT NDA official project website, Development Blueprint",
+    "publisher": "CEDD West Development Office",
+    "url": "https://www.hskhtnda.hk/en/development-blueprint/",
+    "retrieved": "2026-10-09"
+  },
+  "why": [
+    "Brief task 9 asks for three real published plans encoded as scenarios, so we are testing real plans rather than something we invented.",
+    "CEDD publishes works areas as hectares per contract. It does NOT publish a land-use allocation, a developable-area total, or any flood-storage volume; the HSK EIA deliberately defers retention volumes.",
+    "So the published number is a works footprint and is used as exactly that: an area of land being formed. What that land becomes is not published, so the land-cover conversion is an explicit assumption of this project, labelled per scenario, and the spatial layout is assumed contiguous with existing development because no layout is published."
+  ],
+  "scenarios": [
+    {
+      "id": "first_phase",
+      "label": "First Phase as published",
+      "source": "Development Blueprint: Advance Works Phases 1 & 2 (about 3 ha and about 2.6 ha) plus Stage 1 Works (about 14 ha)",
+      "worksAreaHa": 19.6,
+      "components": [
+        {"name": "Advance Works Phase 1", "areaHa": 3.0, "contract": null},
+        {"name": "Advance Works Phase 2", "areaHa": 2.6, "contract": "YL/2019/02"},
+        {"name": "Stage 1 Works", "areaHa": 14.0, "contract": null}
+      ],
+      "assumedConversion": {"bare": 0.80, "green": 0.20},
+      "assumptionNote": "Site formation for a first phase of public and private housing with community facilities. The 80/20 split is this project's assumption; CEDD publishes no land-use allocation."
+    },
+    {
+      "id": "second_phase_stage2",
+      "label": "Second Phase Stage 2 Works as published",
+      "source": "Development Blueprint: Second Phase Stage 2 Works, about 200 ha",
+      "worksAreaHa": 200.0,
+      "components": [
+        {"name": "Stage 2 Works", "areaHa": 200.0, "contract": null}
+      ],
+      "assumedConversion": {"bare": 0.70, "green": 0.30},
+      "assumptionNote": "The largest single published works area, about 200 ha. The 70/30 split is this project's assumption and is greener than the first phase because the Second Phase is larger and includes a Green Transit Corridor."
+    },
+    {
+      "id": "second_phase_all_contracts",
+      "label": "Second Phase, all six main works contracts",
+      "source": "Development Blueprint: YL/2023/01 (about 30 ha), /02 (about 8.5 ha, fresh-water service reservoir), /03 (about 50 ha), /04 (about 43 ha), /05 (about 60 ha), /06 (about 62 ha)",
+      "worksAreaHa": 253.5,
+      "components": [
+        {"name": "YL/2023/01", "areaHa": 30.0, "contract": "YL/2023/01"},
+        {"name": "YL/2023/02 fresh-water service reservoir", "areaHa": 8.5, "contract": "YL/2023/02"},
+        {"name": "YL/2023/03", "areaHa": 50.0, "contract": "YL/2023/03"},
+        {"name": "YL/2023/04", "areaHa": 43.0, "contract": "YL/2023/04"},
+        {"name": "YL/2023/05", "areaHa": 60.0, "contract": "YL/2023/05"},
+        {"name": "YL/2023/06", "areaHa": 62.0, "contract": "YL/2023/06"}
+      ],
+      "assumedConversion": {"bare": 0.70, "green": 0.30},
+      "assumptionNote": "The six Second Phase main works contracts as listed. The components may overlap in extent -- CEDD publishes no reconciliation -- so the total is the sum of the published contract areas and is an upper bound on distinct land."
+    }
+  ],
+  "milestones": [
+    {"date": "2018-10", "event": "Outline Zoning Plan S/HSK/3 approved"},
+    {"date": "2020-07", "event": "First Phase works commence"},
+    {"date": "2024-01", "event": "CE in Council authorises proposed Second Phase road and sewerage works"},
+    {"date": "2024", "event": "First population intake"},
+    {"date": "2030", "event": "Second Phase population intake starts in phases"}
+  ],
+  "notPublished": [
+    "developable area total",
+    "land-use allocation percentages",
+    "housing unit or population numbers on the blueprint page",
+    "flood storage capacity or detention pond volume",
+    "drainage design capacity"
+  ]
+}

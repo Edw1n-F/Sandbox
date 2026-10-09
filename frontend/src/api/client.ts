@@ -35,20 +35,42 @@ export class ApiError extends Error {
   }
 }
 
-function toApiError(error: unknown): ApiError {
+/**
+ * Exported for tests.
+ *
+ * This is the single place the two mandated error envelopes -- a FastAPI `detail`
+ * and `{ error: { code, message, details } }` -- collapse into one `ApiError`. Every
+ * error the panel can show passes through here, so an untested change to it is an
+ * untested change to everything.
+ */
+export function toApiError(error: unknown): ApiError {
   if (!(error instanceof AxiosError)) {
+    // `String(error)` rather than a flat 'Unknown error': something can be thrown
+    // that is not an Error, and losing its content turns a diagnosable failure into
+    // a shrug. `errorMessage` already stringifies the non-ApiError case, so this is
+    // the second place that needs to.
     return new ApiError(
-      error instanceof Error ? error.message : 'Unknown error',
+      error instanceof Error ? error.message : String(error),
       0,
       'NETWORK',
     )
   }
 
-  const status = error.response?.status ?? 0
   const data = error.response?.data as
     | { detail?: string; error?: { code?: string; message?: string; details?: unknown } }
     | undefined
 
+  // No response at all means the request never reached the server: the backend is
+  // down, DNS failed, or the request was aborted. Reporting that as `HTTP_0` -- which
+  // is what `HTTP_${status}` produced with a status of 0 -- is a nonsense status that
+  // reads like a malformed one, and it disagreed with the non-Axios branch below,
+  // which has always called the same condition NETWORK. Both now say NETWORK, so
+  // there is one code for "the server was never reached".
+  if (!error.response) {
+    return new ApiError(error.message || 'Network Error', 0, 'NETWORK')
+  }
+
+  const status = error.response.status
   return new ApiError(
     data?.error?.message ?? data?.detail ?? error.message,
     status,

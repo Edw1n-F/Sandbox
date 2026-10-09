@@ -19,6 +19,7 @@ harmless -- rather than a parent scene pointing at nothing.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from app import db
@@ -367,6 +368,23 @@ def get_terrain(scene_id: str) -> TerrainRead:
         city_model_url=_resolve_overlay_url(doc, "city_model_path"),
         city_model_meta=_city_model_meta(),
     )
+
+
+def city_model_path(scene_id: str) -> Path | None:
+    """Absolute path to a scene's massing model, or None if it has no file.
+
+    Distinct from the URL helper on purpose. The viewer wants a URL; a service
+    that has to read the GeoJSON wants the file, and handing it a "/static/..."
+    string would be a small lie that only fails later.
+    """
+    doc = db.read_doc(db.scene_path(scene_id))
+    if doc is None:
+        return None
+    rel = doc.get("city_model_path")
+    if not rel:
+        return None
+    absolute = settings.data_dir / rel
+    return absolute if absolute.exists() else None
 
 
 def _city_model_meta() -> dict[str, Any] | None:

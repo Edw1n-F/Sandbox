@@ -1,0 +1,270 @@
+{
+  "id": "ca2deb52-a230-411d-bc5b-6ef0944a608d",
+  "plan_id": "02f1bec6-f414-4095-ad92-71d7af4e5d1c",
+  "geometry_type": "Polygon",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [
+      [
+        [
+          113.982,
+          22.425
+        ],
+        [
+          114.005,
+          22.425
+        ],
+        [
+          114.005,
+          22.455
+        ],
+        [
+          113.982,
+          22.455
+        ],
+        [
+          113.982,
+          22.425
+        ]
+      ]
+    ]
+  },
+  "intervention_type": "massing_height",
+  "source": "ai",
+  "params": {
+    "op": "place",
+    "scope": {
+      "kind": "all",
+      "region": "all",
+      "siteId": null,
+      "label": "the whole study area",
+      "evidence": "all of the locked study-area bbox",
+      "ring": [
+        [
+          113.982,
+          22.425
+        ],
+        [
+          114.005,
+          22.425
+        ],
+        [
+          114.005,
+          22.455
+        ],
+        [
+          113.982,
+          22.455
+        ],
+        [
+          113.982,
+          22.425
+        ]
+      ]
+    },
+    "siteId": null,
+    "basis": "new massing on paved land (existing envelopes excluded where possible) within the whole study area",
+    "rationale": "matched a massing phrasing in the instruction (place)",
+    "instruction": "add six 90 m towers",
+    "provider": "heuristic",
+    "status": "draft_pending_human_review",
+    "multiplier": null,
+    "heightM": 90.0,
+    "deltaM": null,
+    "degrees": null,
+    "dxM": null,
+    "dyM": null,
+    "count": 6,
+    "requestedCount": 6,
+    "note": "Adds real, editable footprints on land the analysis classifies as built up. Footprints are generated from ESA WorldCover, not surveyed; the height is as instructed.",
+    "placements": [
+      {
+        "id": "ai-bldg-00",
+        "ring": [
+          [
+            113.9859323,
+            22.4547285
+          ],
+          [
+            113.9862236,
+            22.4547285
+          ],
+          [
+            113.9862236,
+            22.455
+          ],
+          [
+            113.9859323,
+            22.455
+          ],
+          [
+            113.9859323,
+            22.4547285
+          ]
+        ],
+        "storeys": 13,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      },
+      {
+        "id": "ai-bldg-01",
+        "ring": [
+          [
+            113.9968553,
+            22.4502491
+          ],
+          [
+            113.9971466,
+            22.4502491
+          ],
+          [
+            113.9971466,
+            22.4505205
+          ],
+          [
+            113.9968553,
+            22.4505205
+          ],
+          [
+            113.9968553,
+            22.4502491
+          ]
+        ],
+        "storeys": 4,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      },
+      {
+        "id": "ai-bldg-02",
+        "ring": [
+          [
+            113.9903015,
+            22.4461768
+          ],
+          [
+            113.9905928,
+            22.4461768
+          ],
+          [
+            113.9905928,
+            22.4464483
+          ],
+          [
+            113.9903015,
+            22.4464483
+          ],
+          [
+            113.9903015,
+            22.4461768
+          ]
+        ],
+        "storeys": 23,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      },
+      {
+        "id": "ai-bldg-03",
+        "ring": [
+          [
+            113.9903015,
+            22.4416974
+          ],
+          [
+            113.9905928,
+            22.4416974
+          ],
+          [
+            113.9905928,
+            22.4419689
+          ],
+          [
+            113.9903015,
+            22.4419689
+          ],
+          [
+            113.9903015,
+            22.4416974
+          ]
+        ],
+        "storeys": 4,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      },
+      {
+        "id": "ai-bldg-04",
+        "ring": [
+          [
+            113.9968553,
+            22.4364035
+          ],
+          [
+            113.9971466,
+            22.4364035
+          ],
+          [
+            113.9971466,
+            22.436675
+          ],
+          [
+            113.9968553,
+            22.436675
+          ],
+          [
+            113.9968553,
+            22.4364035
+          ]
+        ],
+        "storeys": 4,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      },
+      {
+        "id": "ai-bldg-05",
+        "ring": [
+          [
+            113.9868061,
+            22.4307024
+          ],
+          [
+            113.9870974,
+            22.4307024
+          ],
+          [
+            113.9870974,
+            22.4309738
+          ],
+          [
+            113.9868061,
+            22.4309738
+          ],
+          [
+            113.9868061,
+            22.4307024
+          ]
+        ],
+        "storeys": 4,
+        "landClass": "paved (ESA WorldCover)",
+        "basis": "paved land (existing envelopes excluded where possible)",
+        "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
+        "heightM": 90.0
+      }
+    ]
+  },
+  "style": {
+    "color": "#ff8f3f",
+    "opacity": 0.0
+  },
+  "status": "draft",
+  "created_at": "2026-10-09T04:22:33Z",
+  "updated_at": "2026-10-09T04:22:33Z"
+}

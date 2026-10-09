@@ -10,7 +10,16 @@
  */
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
-import { Cartesian3, Color, ConstantProperty, Viewer, type ImageryLayer } from 'cesium'
+import {
+  Cartesian3,
+  Color,
+  ConstantProperty,
+  Math as CesiumMath,
+  Material,
+  Rectangle,
+  Viewer,
+  type ImageryLayer,
+} from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 import { usePlanStore } from '@/state/planStore'
@@ -20,15 +29,28 @@ import {
   type CityModelHandle,
   type MassingCollection,
   type MassingOp,
+  type MassingOpResult,
 } from './cityModel'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { addInterventions } from './interventionLayer'
+import { demElevationRange } from './demProvider'
 import {
   createBaseImageryLayer,
   createOverlayLayer,
   createTerrainProvider,
   polygonToRectangle,
 } from './terrainLoader'
+import {
+  bindOrbitGestures,
+  DEFAULT_HEADING_DEG,
+  DEFAULT_PITCH_DEG,
+  frameExtent,
+  orbitBy,
+  tuneNavigation,
+  zoomBy,
+  type Extent,
+} from './cameraRig'
+import { applyViewMode, boundaryColour } from './viewModes'
 
 /** The live city-model handle, so the panel can edit geometry without prop drilling. */
 let cityModelHandle: CityModelHandle | null = null
@@ -36,6 +58,15 @@ let propsHandle: OnlinePropHandle | null = null
 
 /** Massing ops from the active plan, held until the city model exists. */
 const pendingMassingOps = { current: [] as MassingOp[] }
+
+/**
+ * What the last op application actually did.
+ *
+ * `changed` against `total` is the answer to the question a 3D view cannot
+ * answer by itself: a scoped edit that quietly reached every building still
+ * looks like a success. Reported in the panel rather than assumed.
+ */
+let lastMassingResult: MassingOpResult[] = []
 
 /**
  * Selection notification. Holds a revision counter rather than the selection
@@ -67,15 +98,37 @@ export function onlinePropStatus(): { loaded: number; failed: number } {
   return { loaded: propsHandle?.loaded().length ?? 0, failed: propsHandle?.failed().length ?? 0 }
 }
 
-export function cityModelStats(): { count: number; mean: number; selected: string | null } {
+export function cityModelStats(): {
+  count: number
+  mean: number
+  selected: string | null
+  placed: number
+  ops: MassingOpResult[]
+  /** Envelopes standing on a DEM sample, out of `count`. */
+  grounded: number
+} {
   return {
     count: cityModelHandle?.entities.size ?? 0,
     mean: cityModelHandle?.meanHeight() ?? 0,
     selected: cityModelHandle?.selected() ?? null,
+    placed: cityModelHandle?.placedCount() ?? 0,
+    ops: lastMassingResult,
+    grounded: cityModelHandle?.groundedCount() ?? 0,
   }
 }
 export function selectCityBuilding(id: string | null): void {
   cityModelHandle?.select(id)
+}
+
+/**
+ * Back to the generated model: heights, orientations and any blocks a plan
+ * added. A height-only reset would leave placed blocks standing after the user
+ * asked for the district back as it was, which reads as the tool ignoring them.
+ */
+export function resetCityModel(): void {
+  if (!cityModelHandle) return
+  lastMassingResult = cityModelHandle.applyMassingOps([{ op: 'reset' }])
+  useCityModel.setState((st) => ({ rev: st.rev + 1 }))
 }
 
 /**
@@ -107,14 +160,54 @@ export const useOverlayStatus = create<Record<'wetGrid' | 'heatmap', string>>(()
 
 /** Camera actions for `CameraController`, without prop drilling. */
 export const cameraControl: {
+  /** Frame the bbox in 3D. The default, and what the app opens on. */
   flyToBbox: () => void
+  /** Straight down. For reading the wet-grid and heatmap rasters. */
+  topDown: () => void
   reset: () => void
+  /** Orbit about whatever the camera is looking at. Degrees, relative. */
+  orbit: (headingDeg: number, pitchDeg: number) => void
+  /** Move towards (<1) or away from (>1) the subject. */
+  zoom: (factor: number) => void
 } = {
   flyToBbox: () => undefined,
+  topDown: () => undefined,
   reset: () => undefined,
+  orbit: () => undefined,
+  zoom: () => undefined,
 }
 
-export default function SandboxViewer() {
+/**
+ * Steps for the on-screen buttons and the keyboard.
+ *
+ * `ZOOM_STEP` is a distance multiplier per press, so lower is more aggressive: 0.8
+ * moved the camera a fifth of the way per press, which on a 3 km district felt like
+ * nothing happening. 0.55 is roughly a third per press, which is one press to make a
+ * visible difference and about four to cross the whole district.
+ */
+const ORBIT_STEP_DEG = 12
+const TILT_STEP_DEG = 8
+const ZOOM_STEP = 0.55
+
+/**
+ * Panel width, in CSS pixels, occupied on the left of the canvas.
+ *
+ * A module-level value rather than a prop so `frameExtent` can shift the study
+ * area out from behind the drawer without threading the panel's layout through
+ * the camera code. `App` is the only writer.
+ */
+let panelInsetLeft = 0
+
+export function setPanelInsetLeft(px: number): void {
+  panelInsetLeft = px
+}
+
+export interface SandboxViewerProps {
+  /** Leftover for callers that need to size the viewer; the canvas is 100%. */
+  className?: string
+}
+
+export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<Viewer | null>(null)
   const baseRef = useRef<ImageryLayer | null>(null)
@@ -131,6 +224,7 @@ export default function SandboxViewer() {
   const showCityModel = useSceneStore((s) => s.layers.cityModel ?? true)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const layers = useSceneStore((s) => s.layers)
+  const viewMode = useSceneStore((s) => s.viewMode)
 
   // ---- create the viewer once -------------------------------------------
   useEffect(() => {
@@ -155,8 +249,28 @@ export default function SandboxViewer() {
     })
     viewerRef.current = viewer
 
-    cameraControl.flyToBbox = () => flyTo(viewer, true)
-    cameraControl.reset = () => flyTo(viewer, false)
+    // Dev-only handles on the live viewer and the two Cesium types needed to
+    // rebuild the building fabric outside the app. They are what makes camera
+    // behaviour and generated GLSL checkable from headless Chromium: the run
+    // asserts on camera position after a pan, which is the only way to tell "the
+    // drag moved the camera" from "the drag was swallowed and the view just
+    // re-rendered", and the custom fabric only exists once Cesium has assembled it.
+    if (import.meta.env.DEV) {
+      const w = window as unknown as {
+        __cesiumViewer?: Viewer
+        __cesium?: { Material: typeof Material; Color: typeof Color }
+      }
+      w.__cesiumViewer = viewer
+      w.__cesium = { Material, Color }
+    }
+
+    tuneNavigation(viewer)
+    bindOrbitGestures(viewer)
+    cameraControl.flyToBbox = () => flyTo(viewer, 'oblique')
+    cameraControl.topDown = () => flyTo(viewer, 'nadir')
+    cameraControl.reset = () => flyTo(viewer, 'scene')
+    cameraControl.orbit = (headingDeg, pitchDeg) => orbitBy(viewer, headingDeg, pitchDeg)
+    cameraControl.zoom = (factor) => zoomBy(viewer, factor)
 
     return () => {
       overlaysRef.current = { wetGrid: null, heatmap: null }
@@ -199,9 +313,14 @@ export default function SandboxViewer() {
       // fix, and it has to happen here rather than at init because the terrain
       // arrives asynchronously.
       if (binding.terrainIsReal) {
-        flyTo(viewer, true, 0)
+        flyTo(viewer, 'oblique', 0)
         viewer.scene.requestRender()
       }
+      // Grounding is *not* done here. This effect and the city-model effect are
+      // both keyed on `terrainMeta` and race each other, so a call from whichever
+      // wins would find either no model yet or no raster yet. `addCityModel`
+      // waits for the DEM itself, which is the only ordering that is actually
+      // guaranteed.
     })
 
     const base = createBaseImageryLayer(terrainMeta)
@@ -216,13 +335,16 @@ export default function SandboxViewer() {
       }
       baseRef.current = null
     }
-  }, [terrainMeta])
+    // `bbox` is in the deps as well as `terrainMeta`: both change together when a
+    // different scene is loaded, and the imagery has to be re-added against it.
+  }, [terrainMeta, bbox])
 
   // ---- boundary outline --------------------------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
     const rectangle = polygonToRectangle(bbox)
+    const outline = boundaryColour(viewMode).withAlpha(0.95)
 
     if (!rectangle) {
       if (boundaryRef.current) {
@@ -234,7 +356,15 @@ export default function SandboxViewer() {
     }
     if (boundaryRef.current) {
       const existing = viewer.entities.getById(boundaryRef.current)
-      if (existing) existing.show = layers.boundary
+      // Repainted rather than recreated, so switching mode does not drop the
+      // outline and flash. Yellow reads on a photograph; cyan reads on the dark
+      // globe, which is why it is mode-dependent at all.
+      if (existing) {
+        existing.show = layers.boundary
+        if (existing.rectangle) {
+          existing.rectangle.outlineColor = new ConstantProperty(outline)
+        }
+      }
       return
     }
     const id = viewer.entities.add({
@@ -244,15 +374,41 @@ export default function SandboxViewer() {
         // RectangleGraphics members are Property objects, not raw booleans.
         fill: new ConstantProperty(false),
         outline: new ConstantProperty(true),
-        outlineColor: new ConstantProperty(
-          Color.fromCssColorString('#ffd54f').withAlpha(0.95),
-        ),
+        outlineColor: new ConstantProperty(outline),
         outlineWidth: new ConstantProperty(2),
       },
       show: layers.boundary,
     })
     boundaryRef.current = id.id
-  }, [bbox, layers.boundary])
+  }, [bbox, layers.boundary, viewMode])
+
+  // ---- the view mode -----------------------------------------------------
+  //
+  // Keyed on `terrainMeta` as well as the mode, because it dims the base imagery
+  // layer, and that layer is created by the effect above. Ordering matters more
+  // than the dependency: this is declared after it, so on a first paint the
+  // layer already exists.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer) || !terrainMeta) return
+
+    const dispose = applyViewMode(viewer, viewMode, {
+      baseLayer: baseRef.current,
+      rectangle: polygonToRectangle(terrainMeta.bbox),
+    })
+    return dispose
+  }, [viewMode, terrainMeta])
+
+  // ---- the building surface follows the mode -----------------------------
+  //
+  // Separate from the effect above on purpose: it touches 2,639 materials, which
+  // is worth doing only when the city model exists, and the handle arrives after
+  // the scene does. Uniform writes, so this is instant.
+  useEffect(() => {
+    cityModelHandle?.setLook(
+      viewMode === 'tactical' ? { lit: false, grid: 0.6 } : { lit: true, grid: 0 },
+    )
+  }, [viewMode, terrainMeta])
 
   // ---- overlay layers follow the toggles --------------------------------
   useEffect(() => {
@@ -313,10 +469,98 @@ export default function SandboxViewer() {
   useEffect(() => {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
-    flyTo(viewer, true, 0)
-    // Placement happens once per scene load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    flyTo(viewer, 'oblique', 0)
+    // Placement happens once per scene load, which is what keying on `bbox` means. The
+    // original disable comment here was stale -- the rule does not fire on this effect --
+    // and a directive that suppresses nothing is worse than none, because it reads as
+    // a suppression that is still doing something.
   }, [bbox])
+
+  // ---- keyboard orbit ------------------------------------------------------
+  //
+  // Arrow keys orbit and tilt, +/- zoom. Not a substitute for the mouse: it is here
+  // because rotating the view is the one navigation action a trackpad does badly
+  // (right-drag is a two-finger click on a Mac, and middle-drag is not available at
+  // all), and because a keyboard route is the only one that works without a pointer.
+  //
+  // ## Which keys are left alone, and why it is not "anything in the panel"
+  //
+  // The rainfall and temperature controls are MUI sliders, and arrow keys are how a
+  // slider is operated, so those must be spared. An earlier version guarded the whole
+  // drawer instead, which was both too broad and wrong in a way nobody would have
+  // reported: after clicking any camera button, focus sat on that button and the
+  // arrow keys stopped orbiting until the user clicked the map. Buttons do not
+  // consume arrow keys, so the guard names only what genuinely handles them —
+  // text entry, sliders, and listboxes, where arrows move a selection.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer)) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!isLive(viewer)) return
+      if (event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || target?.isContentEditable) return
+      if (target?.closest('[role="slider"], [role="listbox"], [role="combobox"]')) return
+
+      switch (event.key) {
+        case 'ArrowLeft':
+          orbitBy(viewer, -ORBIT_STEP_DEG, 0, 0)
+          break
+        case 'ArrowRight':
+          orbitBy(viewer, ORBIT_STEP_DEG, 0, 0)
+          break
+        case 'ArrowUp':
+          // Arrow up raises the view, which means pitching towards the horizon.
+          // Pitch is negative-when-looking-down, so this adds to it.
+          orbitBy(viewer, 0, TILT_STEP_DEG, 0)
+          break
+        case 'ArrowDown':
+          orbitBy(viewer, 0, -TILT_STEP_DEG, 0)
+          break
+        case '+':
+        case '=':
+          zoomBy(viewer, ZOOM_STEP, 0)
+          break
+        case '-':
+        case '_':
+          zoomBy(viewer, 1 / ZOOM_STEP, 0)
+          break
+        default:
+          return
+      }
+      event.preventDefault()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
+
+  // ---- ask for a frame when terrain and imagery finish --------------------
+  //
+  // `requestRenderMode` means nothing paints unless something requests a frame, and
+  // imagery arriving from the network does not request one. The symptom is that
+  // flying to a new zoom leaves the basemap blurry at the wrong level of detail
+  // until some unrelated interaction happens to nudge a frame -- which reads as a
+  // broken basemap rather than as a rendering-mode detail, and is most obvious on
+  // exactly the interaction this view was built for.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer)) return
+    const globe = viewer.scene.globe
+    const onTileLoad = () => {
+      // Only once the queue has drained, so this is one render per settled batch
+      // rather than one per tile.
+      if (!viewer.isDestroyed() && globe.tilesLoaded) viewer.scene.requestRender()
+    }
+    globe.tileLoadProgressEvent.addEventListener(onTileLoad)
+    return () => {
+      if (!viewer.isDestroyed()) {
+        globe.tileLoadProgressEvent.removeEventListener(onTileLoad)
+      }
+    }
+  }, [])
 
   // ---- 3D city model ------------------------------------------------------
   //
@@ -350,7 +594,7 @@ export default function SandboxViewer() {
         // The plan may have been selected before the model finished loading, in
         // which case its massing ops were parked. Apply them now.
         if (pendingMassingOps.current.length) {
-          handle?.applyMassingOps(pendingMassingOps.current)
+          lastMassingResult = handle?.applyMassingOps(pendingMassingOps.current) ?? []
           useCityModel.setState((st) => ({ rev: st.rev + 1 }))
         }
         useCityModel.setState((st) => ({ rev: st.rev + 1 }))
@@ -371,6 +615,11 @@ export default function SandboxViewer() {
       cityModelHandle?.dispose()
       cityModelHandle = null
     }
+    // `showCityModel` is deliberately NOT a dependency. It is read once here to set the
+    // initial visibility of a freshly built model, and a separate effect below keeps it
+    // in sync afterwards. Listing it here would tear down and rebuild all 2,639 entities
+    // every time the layer is toggled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terrainMeta])
 
   // ---- online 3D assets ---------------------------------------------------
@@ -439,7 +688,7 @@ export default function SandboxViewer() {
         (f) => f.properties?.params as unknown as MassingOp,
       )
       if (cityModelHandle) {
-        cityModelHandle.applyMassingOps(ops)
+        lastMassingResult = cityModelHandle.applyMassingOps(ops)
         // The panel's mean height reads from the handle, so it has to be told the
         // geometry moved. Skipping this left the number stale while the skyline
         // silently changed -- the worst combination, because the screen disagreed
@@ -449,7 +698,7 @@ export default function SandboxViewer() {
         pendingMassingOps.current = ops
       }
     } else if (cityModelHandle) {
-      cityModelHandle.applyMassingOps([])
+      lastMassingResult = cityModelHandle.applyMassingOps([])
       useCityModel.setState((st) => ({ rev: st.rev + 1 }))
     }
 
@@ -474,21 +723,45 @@ export default function SandboxViewer() {
     }
   }, [showInterventions, interventions])
 
-  return <div ref={containerRef} className="absolute inset-0 z-0" />
+  return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }
 
-/** Fly to the bbox extent, or fall back to the scene's `defaultCamera`. */
-function flyTo(viewer: Viewer, useBbox: boolean, duration = 1.2): void {
+/** Which of the three framings a camera button asked for. */
+type Frame = 'oblique' | 'nadir' | 'scene'
+
+/**
+ * Put the camera somewhere deliberate.
+ *
+ * `'nadir'` is the only mode that still frames by handing Cesium a `Rectangle`,
+ * and it is kept as an explicit button rather than as the default because a
+ * rectangle has no orientation: Cesium can only ever fit it from directly
+ * overhead. That is correct for reading a raster and wrong for a city, so the
+ * app opens in `'oblique'` and the flat view is something the user chooses on
+ * purpose. See `cameraRig.ts`.
+ */
+function flyTo(viewer: Viewer, frame: Frame, duration = 1.2): void {
   if (!isLive(viewer)) return
   const store = useSceneStore.getState()
   const scene = store.scene
   if (!scene) return
 
-  const rectangle = useBbox ? polygonToRectangle(scene.bbox) : null
-  if (rectangle) {
-    viewer.camera.flyTo({ destination: rectangle, duration })
+  const rectangle = polygonToRectangle(scene.bbox)
+
+  if (frame !== 'scene' && rectangle) {
+    // The DEM's own relief, read rather than typed: it decides how much vertical
+    // extent the frame has to keep, and a hard-coded 141 m would be a constant
+    // that goes stale the next time the DEM is re-fetched over another bbox.
+    const relief = demElevationRange()
+    frameExtent(viewer, extentOf(rectangle), {
+      insetLeft: panelInsetLeft,
+      reliefM: relief ? Math.max(relief.max, 0) : 0,
+      pitchDeg: frame === 'nadir' ? -90 : DEFAULT_PITCH_DEG,
+      headingDeg: DEFAULT_HEADING_DEG,
+      duration,
+    })
     return
   }
+
   const lon = scene.defaultCamera.longitude ?? scene.center.coordinates[0]
   const lat = scene.defaultCamera.latitude ?? scene.center.coordinates[1]
   viewer.camera.flyTo({
@@ -500,4 +773,14 @@ function flyTo(viewer: Viewer, useBbox: boolean, duration = 1.2): void {
     },
     duration,
   })
+}
+
+/** `Rectangle` in radians to the degrees `cameraRig` works in. */
+function extentOf(rectangle: Rectangle): Extent {
+  return {
+    west: CesiumMath.toDegrees(rectangle.west),
+    south: CesiumMath.toDegrees(rectangle.south),
+    east: CesiumMath.toDegrees(rectangle.east),
+    north: CesiumMath.toDegrees(rectangle.north),
+  }
 }

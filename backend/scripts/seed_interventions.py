@@ -62,15 +62,67 @@ GREEN_MIN_CELLS = 120
 SEED_MARKER = "seeded-by:scripts/seed_interventions.py"
 
 
+# Largest polygon any seeded site may have, in cells. At 5 m (25 m2) that is
+# 6,000 cells = 15 ha, roughly 390 m square -- the size of a real retention basin.
+#
+# This cap exists because of what happened without it. The wet grid's largest
+# connected basin sprawls across nearly half the study area, so its *bounding box*
+# covered 47% of the district (3.6 km2) and one seeded "retention basin" was a
+# polygon that reclassified a third of Hung Shui Kiu as open water. The seeder was
+# honest about it -- it recorded `boxToWetRatio` -- but the ledger downstream
+# applies the polygon, not the ratio, so the scenario numbers were fiction.
+MAX_SITE_CELLS = 6_000
+
+
+def _shrink_to_cap(min_row: int, min_col: int, max_row: int, max_col: int,
+                   centroid: tuple[int, int] | None,
+                   max_cells: int) -> tuple[int, int, int, int]:
+    """Shrink a bounding box about its centroid until it fits ``max_cells``.
+
+    Shrunk symmetrically so the site stays on the part of the component that was
+    actually identified, rather than sliding off it.
+    """
+    height = max_row - min_row + 1
+    width = max_col - min_col + 1
+    if height * width <= max_cells:
+        return min_row, min_col, max_row, max_col
+
+    target = max_cells
+    new_h = max(1, min(height, int(target ** 0.5)))
+    new_w = max(1, min(width, target // new_h))
+
+    if centroid is None:
+        cr = (min_row + max_row) // 2
+        cc = (min_col + max_col) // 2
+    else:
+        cr, cc = centroid
+
+    top = max(min_row, min(cr - new_h // 2, max_row - new_h + 1))
+    left = max(min_col, min(cc - new_w // 2, max_col - new_w + 1))
+    return top, left, top + new_h - 1, left + new_w - 1
+
+
 def extent_polygon(bounds, cell_w_deg: float, cell_h_deg: float,
-                   min_row: int, min_col: int, max_row: int, max_col: int) -> dict[str, Any]:
+                   min_row: int, min_col: int, max_row: int, max_col: int,
+                   centroid: tuple[int, int] | None = None,
+                   max_cells: int | None = None) -> dict[str, Any]:
     """A grid-cell *extent* -> one closed GeoJSON polygon.
 
     Deliberately a bounding box rather than a traced outline: the component is
     8-connected and possibly concave, and a box is honest about that -- it is
     labelled as a box in ``params`` and the exact cell count is recorded
     alongside, so a reader knows the true wet area is at most the box.
+
+    The box is additionally **capped** at ``max_cells`` about the component's
+    centroid. Without the cap a sprawling concave component produced a polygon
+    orders of magnitude larger than the feature it stood for, and anything
+    downstream that consumed the geometry -- the storage ledger -- reclassified
+    most of the district on the strength of one "retention basin".
     """
+    if max_cells is not None:
+        min_row, min_col, max_row, max_col = _shrink_to_cap(
+            min_row, min_col, max_row, max_col, centroid, max_cells)
+
     lon_min, _, _, lat_max = bounds
     west = lon_min + min_col * cell_w_deg
     east = lon_min + (max_col + 1) * cell_w_deg
@@ -184,9 +236,15 @@ def build_features() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     basins = [b for b in basins if b[2] >= BASIN_MIN_CELLS]
 
     for row, col, size, extent in basins[:3]:
-        min_r, min_c, max_r, max_c = extent
+        min_r, min_c, max_r, max_c = _shrink_to_cap(*extent, (row, col),
+                                                    MAX_SITE_CELLS)
+        # Derived from the CAPPED extent, not the raw one. Computing it before the
+        # cap made `areaHa` describe a polygon that no longer existed -- 447.7 ha
+        # reported on a 15 ha shape -- which is the "stated size disagrees with its
+        # own geometry" failure this file already warns about, reintroduced by the
+        # fix for it.
         box_ha = (max_r - min_r + 1) * (max_c - min_c + 1) * cell_w * cell_h / 10_000.0
-        true_ha = size * cell_w * cell_h / 10_000.0
+        true_ha = min(size * cell_w * cell_h / 10_000.0, box_ha)
         max_depth = float(depth[row, col])
         features.append({
             "geometry": extent_polygon(bounds, cell_w_deg, cell_h_deg,
@@ -196,7 +254,8 @@ def build_features() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             "params": {
                 "basis": "deepest connected basin in the computed wet grid",
                 "evidenceRaster": depth_source,
-                "geometry": "bounding box of the connected basin",
+                "geometry": "bounding box of the connected basin, capped at "
+                             "MAX_SITE_CELLS about the component centroid",
                 "areaHa": round(box_ha, 1),
                 "wetCellsInBasin": size,
                 "wetAreaHa": round(true_ha, 1),
@@ -210,9 +269,10 @@ def build_features() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     green = ov.class_mask("green")
     patches = [p for p in _components(green) if p[2] >= GREEN_MIN_CELLS]
     for row, col, size, extent in patches[:3]:
-        min_r, min_c, max_r, max_c = extent
+        min_r, min_c, max_r, max_c = _shrink_to_cap(*extent, (row, col),
+                                                    MAX_SITE_CELLS)
         box_ha = (max_r - min_r + 1) * (max_c - min_c + 1) * cell_w * cell_h / 10_000.0
-        true_ha = size * cell_w * cell_h / 10_000.0
+        true_ha = min(size * cell_w * cell_h / 10_000.0, box_ha)
         features.append({
             "geometry": extent_polygon(bounds, cell_w_deg, cell_h_deg,
                                        min_r, min_c, max_r, max_c),
@@ -221,7 +281,8 @@ def build_features() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             "params": {
                 "basis": "largest contiguous vegetated block (ESA WorldCover class 'green')",
                 "evidenceRaster": "landcover_hsk.npy",
-                "geometry": "bounding box of the contiguous vegetated block",
+                "geometry": "bounding box of the contiguous vegetated block, "
+                             "capped at MAX_SITE_CELLS about the component centroid",
                 "areaHa": round(box_ha, 1),
                 "greenCellsInBlock": size,
                 "greenAreaHa": round(true_ha, 1),

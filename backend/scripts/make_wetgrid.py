@@ -44,19 +44,16 @@ from _overlay_common import (  # noqa: E402
     CN_CITATIONS,
     CN_SOURCE,
     CURVE_NUMBER_HSG_D,
+    DEPRESSION_STORAGE_M,
     LAND_CLASSES,
+    STORAGE_DEPTH_M,
     load_overlay,
     runoff_depth,
 )
 
-# Depth (m) a water or wetland cell is assumed to already hold. This is the
-# "available storage" term and is an ASSUMPTION, not a measurement: the HSK EIA
-# deliberately does not publish retention volumes for the flood storage lakes.
-STORAGE_DEPTH_M = {"water": 1.50, "wetland": 0.60}
-
-# Additional depression storage on generation cells (m of water held in
-# micro-topography before runoff leaves the cell).
-DEPRESSION_STORAGE_M = 0.02
+# STORAGE_DEPTH_M and DEPRESSION_STORAGE_M used to be defined here. They moved to
+# _overlay_common on 9 Oct 2026 so the API could re-run the identical retention
+# arithmetic when scoring a candidate intervention; there is now one definition.
 
 # Ramp for the PNG: transparent below this depth, opaque at MAX_VIS_DEPTH_M.
 MIN_VIS_DEPTH_M = 0.005
