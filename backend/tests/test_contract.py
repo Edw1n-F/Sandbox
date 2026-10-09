@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.schemas.scene import SceneCreate, close_ring  # noqa: E402
+from app.services import scene_service  # noqa: E402
 
 client = TestClient(app)
 
@@ -283,6 +284,326 @@ def test_epsg4326_is_enforced() -> None:
     )
     assert bad.status_code == 422
     client.delete(f"/api/scenes/{scene_id}")
+
+
+# --------------------------------------------------------------------------- #
+# 4. Stages 3-6 -- the four new routes and the extended /ventilation
+# --------------------------------------------------------------------------- #
+
+
+def _scene_with_model() -> str:
+    """A fresh scene carrying the shipped city model, for the routes that need one."""
+    scene_id = client.post(
+        "/api/scenes", json={"name": "Stage 3-6 probe", "center": CENTER}
+    ).json()["sceneId"]
+    scene_service.attach_overlay(scene_id, "city_model_path", "rasters/citymodel_hsk.json")
+    return scene_id
+
+
+def _scenarios_body(weights: dict | None = None) -> dict:
+    body = {
+        "scenarios": [
+            {"scenarioId": "A", "massingOps": []},
+            {"scenarioId": "B", "massingOps": [{"op": "scale_all", "multiplier": 1.2}]},
+        ]
+    }
+    if weights is not None:
+        body["weights"] = weights
+    return body
+
+
+def test_compare_endpoint_refuses_without_weights() -> None:
+    scene_id = _scene_with_model()
+    try:
+        r = client.post(f"/api/scenes/{scene_id}/scenario/compare",
+                        json=_scenarios_body())
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["refused"] is True
+        assert body["ranked"] is None
+        assert isinstance(body["reason"], str) and len(body["reason"]) > 20
+        assert body["combinedScore"] is None
+        assert body["verdict"] is None
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_compare_endpoint_orders_with_weights() -> None:
+    scene_id = _scene_with_model()
+    try:
+        r = client.post(f"/api/scenes/{scene_id}/scenario/compare",
+                        json=_scenarios_body({"shade": 1.0, "ventilation": 2.0,
+                                              "drainage": 1.0}))
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for field in ("refused", "reason", "weightsAsSupplied", "weightsUsed",
+                      "weightsNormalisedBySum", "weightsAreCallersOpinion", "polarity",
+                      "normalisation", "sharedBaseline", "scenarioCount", "ranked",
+                      "byAxis", "combinedScore", "verdict", "whyNoVerdict", "status",
+                      "warning"):
+            assert field in body, f"missing {field}"
+        assert body["refused"] is False
+        assert body["combinedScore"] is None
+        assert body["verdict"] is None
+        assert abs(sum(body["weightsUsed"].values()) - 1.0) < 1e-9
+        assert len(body["ranked"]) == 2
+        for row in body["ranked"]:
+            for field in ("rank", "scenarioId", "axes", "favourability",
+                          "contributions", "weightedFavourability", "perAxisRank"):
+                assert field in row, f"missing ranked row {field}"
+            assert set(row["axes"]) == {"shade", "ventilation", "drainage"}
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_compare_endpoint_422_cases() -> None:
+    scene_id = _scene_with_model()
+    try:
+        url = f"/api/scenes/{scene_id}/scenario/compare"
+        # negative weight
+        assert client.post(url, json=_scenarios_body({"shade": -1.0})).status_code == 422
+        # unknown axis name
+        assert client.post(url, json=_scenarios_body({"nonsense": 1.0})).status_code == 422
+        # all-zero weights
+        assert client.post(url, json=_scenarios_body(
+            {"shade": 0.0, "ventilation": 0.0, "drainage": 0.0})).status_code == 422
+        # duplicate scenarioId
+        dup = {"scenarios": [{"scenarioId": "A"}, {"scenarioId": "A"}]}
+        assert client.post(url, json=dup).status_code == 422
+        # out-of-range dayOfYear
+        body = _scenarios_body()
+        body["dayOfYear"] = 999
+        assert client.post(url, json=body).status_code == 422
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_heat_field_endpoint_contract() -> None:
+    scene_id = _scene_with_model()
+    try:
+        r = client.get(f"/api/scenes/{scene_id}/heat-field",
+                       params={"hours": "9,14", "day_of_year": 355})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for field in ("meanHeatIndex", "maxHeatIndex", "weights", "components", "svf",
+                      "anchoring", "status", "warning", "note"):
+            assert field in body, f"missing {field}"
+        assert body["svf"]["searchRadiusCells"] is not None
+        assert body["anchoring"]["anchorSource"] == "none"
+        assert body["anchoring"]["heatIndexSource"] == (
+            "Hand-authored screening index; awaiting verification")
+        assert body["status"] == "RELATIVE_INDEX_NOT_A_TEMPERATURE"
+        # out-of-range hours is refused, not silently clamped
+        assert client.get(f"/api/scenes/{scene_id}/heat-field",
+                          params={"hours": "99"}).status_code == 422
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_heat_field_rejects_out_of_range_day_of_year() -> None:
+    """An out-of-range day-of-year must be refused, not silently evaluated.
+
+    ``solar_position`` accepts any day-of-year, so 999 produces a plausible-looking
+    sun position for a day that does not exist -- the exact silent-wrong-number
+    failure this project keeps hitting. ``day_of_year`` and its ``dayOfYear``
+    spelling must both be range-checked.
+    """
+    scene_id = _scene_with_model()
+    try:
+        assert client.get(f"/api/scenes/{scene_id}/heat-field",
+                          params={"day_of_year": 999}).status_code == 422
+        assert client.get(f"/api/scenes/{scene_id}/heat-field",
+                          params={"dayOfYear": 999}).status_code == 422
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_design_metrics_day_of_year_alias_and_range() -> None:
+    """``/design-metrics`` honours both spellings and range-checks the day.
+
+    The camelCase alias and the range check were both missing until the fix: a
+    camelCase caller was silently served the 355 default, and a day of 999 reached
+    ``solar_position`` and returned a plausible-looking sun position for a date
+    that does not exist. Both are pinned here so neither can regress.
+    """
+    scene_id = _scene_with_model()
+    try:
+        url = f"/api/scenes/{scene_id}/design-metrics"
+
+        # 1. both spellings take effect, not merely parse
+        snake = client.get(url, params={"day_of_year": 172})
+        camel = client.get(url, params={"dayOfYear": 172})
+        assert snake.status_code == 200, snake.text
+        assert camel.status_code == 200, camel.text
+        assert snake.json()["solarInputs"]["dayOfYear"] == 172
+        assert camel.json()["solarInputs"]["dayOfYear"] == 172
+        snake_alt = [i["solarAltitudeDeg"] for i in snake.json()["shade"]["instants"]]
+        camel_alt = [i["solarAltitudeDeg"] for i in camel.json()["shade"]["instants"]]
+        assert snake_alt == camel_alt, (
+            f"the alias changed the geometry: {snake_alt} vs {camel_alt}")
+
+        # 2. out-of-range is refused under both spellings
+        assert client.get(url, params={"day_of_year": 999}).status_code == 422
+        assert client.get(url, params={"dayOfYear": 999}).status_code == 422
+        assert client.get(url, params={"day_of_year": 0}).status_code == 422
+        assert client.get(url, params={"day_of_year": 367}).status_code == 422
+
+        # 3. the default path is unchanged, and the parameter actually does something
+        default = client.get(url).json()
+        assert default["solarInputs"]["dayOfYear"] == 355
+        default_alt = [i["solarAltitudeDeg"] for i in default["shade"]["instants"]]
+        assert default_alt != snake_alt, (
+            "day_of_year made no difference: the parameter is inert")
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_corridors_endpoint_contract() -> None:
+    scene_id = _scene_with_model()
+    try:
+        r = client.get(f"/api/scenes/{scene_id}/ventilation/corridors",
+                       params={"directions": "NE,SW"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for field in ("metric", "costSurface", "resolutionM", "directions", "status",
+                      "warning", "limitation"):
+            assert field in body, f"missing {field}"
+        assert set(body["directions"]) == {"NE", "SW"}
+        for block in body["directions"].values():
+            for field in ("corridorCells", "pathLengthM", "meanCost", "blocked", "path"):
+                assert field in block, f"missing corridor {field}"
+        # unknown direction is refused
+        assert client.get(f"/api/scenes/{scene_id}/ventilation/corridors",
+                          params={"directions": "XX"}).status_code == 422
+        # the default is the eight principal directions
+        default = client.get(f"/api/scenes/{scene_id}/ventilation/corridors").json()
+        assert set(default["directions"]) == {
+            "N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_drainage_routed_endpoint_contract() -> None:
+    # Routing reads only the land-class grid and the saved artefacts, so a scene
+    # with NO city model must still answer -- unlike the other three new routes.
+    scene_id = client.post(
+        "/api/scenes", json={"name": "Routing only", "center": CENTER}
+    ).json()["sceneId"]
+    try:
+        r = client.get(f"/api/scenes/{scene_id}/drainage/routed",
+                       params={"rainfall_mm": 450})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for field in ("runoffInM3", "storedM3", "dischargedM3", "massBalance",
+                      "wetCells", "maxDepthM", "meanDepthInWetAreaM", "depressions",
+                      "hand", "handVsRouted", "status", "warning", "rainfallMm"):
+            assert field in body, f"missing {field}"
+        assert body["massBalance"]["balanced"] is True
+        assert abs(body["runoffInM3"]
+                   - (body["storedM3"] + body["dischargedM3"])) < 1.0
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_city_model_routes_refuse_a_model_less_scene() -> None:
+    scene_id = client.post(
+        "/api/scenes", json={"name": "No model", "center": CENTER}
+    ).json()["sceneId"]
+    try:
+        assert client.get(f"/api/scenes/{scene_id}/heat-field").status_code == 422
+        assert client.get(f"/api/scenes/{scene_id}/ventilation").status_code == 422
+        assert client.get(
+            f"/api/scenes/{scene_id}/ventilation/corridors").status_code == 422
+        assert client.post(
+            f"/api/scenes/{scene_id}/scenario/compare",
+            json={"scenarios": [{"scenarioId": "A"}]}).status_code == 422
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+# The pre-existing /ventilation payload, before Stages 3-6 added anything. The
+# extension must not have reshaped a single one of these; `corridors` and
+# `fadRatio` are the only additions.
+_VENTILATION_PREEXISTING = {
+    "metric", "units", "siteAreaM2", "buildingCount", "frontalAreaDensity",
+    "prevailingDirections", "combinedFrequencyPercent", "prevailingMeanFad",
+    "leastExposedPrevailingDirection", "limitation", "note", "sceneId",
+    "publishedReference",
+}
+
+
+def test_ventilation_keeps_its_preexisting_keys() -> None:
+    scene_id = _scene_with_model()
+    try:
+        body = client.get(f"/api/scenes/{scene_id}/ventilation").json()
+        assert set(body) == _VENTILATION_PREEXISTING | {"corridors", "fadRatio"}, (
+            f"unexpected key change: {sorted(set(body) ^ (_VENTILATION_PREEXISTING | {'corridors', 'fadRatio'}))}")
+        # The pre-existing payload is still the untouched screening output.
+        assert body["buildingCount"] == 2639
+        assert len(body["frontalAreaDensity"]["byDirection"]) == 16
+        assert body["publishedReference"] is not None
+        assert "corridors" in body and "fadRatio" in body
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def _truthy_verdict_hits(node, path: str = "") -> list[str]:
+    hits: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("verdict", "pass", "fail") and value:
+                hits.append(f"{path}.{key}={value!r}")
+            hits.extend(_truthy_verdict_hits(value, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for i, value in enumerate(node):
+            hits.extend(_truthy_verdict_hits(value, f"{path}[{i}]"))
+    return hits
+
+
+def test_no_new_response_carries_a_truthy_verdict() -> None:
+    scene_id = _scene_with_model()
+    try:
+        responses = [
+            client.post(f"/api/scenes/{scene_id}/scenario/compare",
+                        json=_scenarios_body({"shade": 1.0})).json(),
+            client.get(f"/api/scenes/{scene_id}/heat-field").json(),
+            client.get(f"/api/scenes/{scene_id}/ventilation/corridors",
+                       params={"directions": "NE"}).json(),
+            client.get(f"/api/scenes/{scene_id}/drainage/routed").json(),
+            client.get(f"/api/scenes/{scene_id}/ventilation").json(),
+        ]
+        for i, body in enumerate(responses):
+            hits = _truthy_verdict_hits(body)
+            assert not hits, f"response {i} carries a truthy verdict/pass/fail: {hits}"
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_query_param_spellings_both_take_effect() -> None:
+    """camelCase and snake_case must both change the answer, not just be accepted."""
+    scene_id = _scene_with_model()
+    try:
+        snake = client.get(f"/api/scenes/{scene_id}/heat-field",
+                           params={"day_of_year": 172}).json()
+        camel = client.get(f"/api/scenes/{scene_id}/heat-field",
+                           params={"dayOfYear": 172}).json()
+        assert snake["solarInputs"]["dayOfYear"] == 172
+        assert camel["solarInputs"]["dayOfYear"] == 172
+        # and it is not merely the default being echoed
+        default = client.get(f"/api/scenes/{scene_id}/heat-field").json()
+        assert default["solarInputs"]["dayOfYear"] == 355
+
+        wet_snake = client.get(f"/api/scenes/{scene_id}/drainage/routed",
+                               params={"rainfall_mm": 550}).json()
+        wet_camel = client.get(f"/api/scenes/{scene_id}/drainage/routed",
+                               params={"rainfallMm": 550}).json()
+        assert wet_snake["rainfallMm"] == 550.0
+        assert wet_camel["rainfallMm"] == 550.0
+        dry = client.get(f"/api/scenes/{scene_id}/drainage/routed",
+                         params={"rainfall_mm": 450}).json()
+        assert wet_snake["runoffInM3"] > dry["runoffInM3"]
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
 
 
 # --------------------------------------------------------------------------- #

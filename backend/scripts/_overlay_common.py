@@ -127,6 +127,24 @@ STORAGE_DEPTH_M: dict[str, float] = {"water": 1.50, "wetland": 0.60}
 DEPRESSION_STORAGE_M = 0.02
 
 
+class _CellAreaM2(float):
+    """A cell area that is both a number and a callable.
+
+    ``Overlay`` has always exposed its cell area as a *method* -- the scripts and
+    ``tests/test_constants.py`` call ``ov.cell_area_m2()`` -- while the canonical
+    geometry in ``app/services/design_metrics.py`` reads it as an *attribute*
+    (``grids.cell_area_m2``). Those two spellings used to be bridged by a small
+    grid shim inside ``make_heatmap.py``; deleting that shim means ``Overlay``
+    itself has to satisfy both, so this value answers to each. It is a ``float``
+    in every arithmetic and JSON sense; ``()`` is the only extra thing it does.
+    """
+
+    __slots__ = ()
+
+    def __call__(self) -> float:
+        return float(self)
+
+
 @dataclass
 class Overlay:
     """Everything the two scripts need, derived once."""
@@ -144,8 +162,26 @@ class Overlay:
     def class_mask(self, name: str) -> np.ndarray:
         return self.land_class == LAND_CLASSES.index(name)
 
+    def cell_of(self, lon: float, lat: float) -> tuple[int, int]:
+        """``(row, col)`` for a lon/lat, mirroring ``Grids.cell_of``.
+
+        Deliberately the *same* formula and the same clamping as
+        ``app/services/sandbox_model.py:Grids.cell_of`` -- ``col`` from the west
+        edge, ``row`` from the north edge, each clamped to ``[0, n-1]``. There is
+        one cell-centre map in this project and this is it, read from the overlay
+        side; a second copy in the scripts is exactly the drift the "one
+        definition of one geometry" rule forbids, and it is what let
+        ``make_heatmap.py`` carry its own ``_OverlayGrid`` shim.
+        """
+        x0, y0, x1, y1 = self.bounds
+        col = int((lon - x0) / (x1 - x0) * self.cols)
+        row = int((y1 - lat) / (y1 - y0) * self.rows)
+        return (max(0, min(self.rows - 1, row)),
+                max(0, min(self.cols - 1, col)))
+
+    @property
     def cell_area_m2(self) -> float:
-        return float(self.grid["cell_width_m"] * self.grid["cell_height_m"])
+        return _CellAreaM2(self.grid["cell_width_m"] * self.grid["cell_height_m"])
 
 
 def load_overlay(resolution_m: float = 5.0) -> Overlay:

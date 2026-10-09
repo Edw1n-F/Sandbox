@@ -2,7 +2,51 @@
   "artefact": "heatmap",
   "generated": "2026-10-06",
   "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
-  "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
+  "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
+  "anchoring": {
+    "anchorSource": "none",
+    "anchorRangeC": null,
+    "calibrationPath": null,
+    "quantity": null,
+    "heatIndexSource": "Hand-authored screening index; awaiting verification",
+    "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
+    "warning": "No real LST/HKO calibration is present; the scale is not anchored to observed data. Screening-level; relative, not absolute."
+  },
+  "anchorSource": "none",
+  "anchorRangeC": null,
+  "calibrationPath": null,
+  "quantity": null,
+  "heatIndexSource": "Hand-authored screening index; awaiting verification",
+  "blend": {
+    "weights": {
+      "land": 0.5,
+      "svf": 0.3,
+      "shadow": 0.2
+    },
+    "components": {
+      "land": 0.8102,
+      "svf": 0.2981,
+      "shadow": 0.2215
+    },
+    "meanHeatIndex": 0.7714,
+    "maxHeatIndex": 1.0,
+    "svf": {
+      "meanSvf": 0.2981,
+      "meanOpenFieldSvf": 0.5052,
+      "minSvf": 0.0,
+      "maxSvf": 1.0,
+      "azimuthBins": 16,
+      "searchRadiusM": 300.0,
+      "searchRadiusCells": 60,
+      "buildingCells": 129017,
+      "method": "Per-cell sky view factor from a horizon search over the massing height raster: SVF = 1 - (1/N) sum_i sin(gamma_i), where gamma_i is the horizon elevation angle in azimuth bin i (16 bins), searched to a 300 m (60-cell) radius. A cell under massing is inside the building and scores 0.",
+      "limitation": "Geometry, not radiation. SVF is a sky-exposure fraction -- how much sky a ground point sees -- not a temperature. No sun, no surface energy balance, no air temperature. The horizon is sampled on 16 azimuth rays, so a narrow slot between two buildings can fall between rays and be missed.",
+      "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
+      "warning": "Heat is not a temperature. This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade -- not degrees Celsius and not a modelled air-temperature field. Screening-level; relative, not absolute."
+    },
+    "solarDayOfYear": 355,
+    "solarHour": 14.0
+  },
   "inputs": {
     "resolution_m": 5.0,
     "rows": 664,
@@ -28,7 +72,7 @@
     "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
   },
   "results": {
-    "meanIndex": 0.8102,
+    "meanIndex": 0.7714,
     "maxIndex": 1.0,
     "cellCountByClass": {
       "water": 1185,

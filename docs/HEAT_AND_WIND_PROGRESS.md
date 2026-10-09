@@ -155,10 +155,10 @@ number say whether a breeze is available to compensate.
 | 0 | Research, cited and recorded here | **done** |
 | 1 | `design_metrics.py` — geometry metrics each tied to a published rule | **done** |
 | 2 | One `evaluate(scenario)` returning three separate deltas, and no total | **done** |
-| 3 | Scenario comparison — the relative judgement the AVA document asks for | next |
-| 4 | Heat: SVF + shadow + blend, anchored to a published LST/HKO normal | **part done** (shadow only) |
-| 5 | Wind: break the NE≡SW symmetry; LCP corridors | **part done** (symmetry broken; corridors need scipy) |
-| 6 | Drainage: D8 fill-and-spill + mass balance + HAND cross-check | not started |
+| 3 | Scenario comparison — the relative judgement the AVA document asks for | **done** — `compare()` refuses to rank without stated weights |
+| 4 | Heat: SVF + shadow + blend, anchored to a published LST/HKO normal | **SVF + blend done; anchoring mechanism built, no reference data on disk** |
+| 5 | Wind: break the NE≡SW symmetry; LCP corridors | **done** — symmetry broken by `directional_exposure`; corridors on `1 + cellFAD`. The corridors themselves remain 180°-periodic |
+| 6 | Drainage: D8 fill-and-spill + mass balance + HAND cross-check | **done** — balances to 1e-14 relative |
 | 7 | Expose to the LLM as an objective, not a number | not started |
 
 ## Alignment with `Hack4SDG_Heat_Wind_Drainage_Research.md` (9 Oct 2026)
@@ -327,3 +327,53 @@ ordering must state its weights.
 
   The report prints `verdict: null` and says why: the AVA policy states that
   whether a scheme meets a standard cannot be known, so there is nothing to pass.
+
+- **9 Oct 2026, Stages 3–6 built** — `compare()` under stated weights; SVF, the
+  blended heat field and the anchoring mechanism; least-cost-path corridors and
+  `fad_ratio`; and the D8 fill-and-spill cascade with a mass-balance assertion and
+  HAND. **393 backend tests, up from 271.** The research document's Stages 5 and 6
+  are now built; Stage 4's anchoring is built but has nothing to anchor to.
+
+  Four things are worth recording, because each was found by a check rather than by
+  reading, and the first was found by the mass-balance assertion itself.
+
+  - **`Grids.elevation_5m` was not the surface its docstring claimed.** It was
+    documented as the Priority-Flood conditioned surface, but `load_grids()` rebuilds
+    a fresh `Overlay` from the raw DEM, so the script's in-place `ov.elevation =
+    filled` never persisted — it had always been the **raw** surface, on which only
+    **94.8%** of D8 receivers point downhill. Routing on it loses water to
+    already-processed cells, and `mass_balance` **raised**. `flow_filled_hsk.npy` now
+    stores the surface the receiver was actually derived from. This is the strongest
+    argument yet for the project's habit of asserting an identity rather than
+    printing a number: the bug was invisible in every summary statistic and fatal to
+    the conservation law.
+  - **The depression mask is only correct in float64.** In float32 the ~1e-5 m
+    rounding turns `filled > raw + 1e-9` into **1,748** phantom depressions instead of
+    37, and inflates the capacity that is meant to count only genuinely raised cells.
+  - **HAND propagates in *increasing* filled elevation, not decreasing.** The design
+    said decreasing; that is backwards. A cell's reference is its receiver's
+    reference and the receiver is always lower, so the outlet end must be visited
+    first.
+  - **The corridor cost surface cannot be `1/(1+FAD)`.** Taken literally that is
+    *minimised* where FAD is largest, so a least-cost path routes through the most
+    blocked cells — and it fails the design's own "one low-FAD lane" acceptance test.
+    Implemented as `1 + cellFAD`.
+
+- **9 Oct 2026, three silent bugs fixed in `apply_massing`** — all pre-existing, all
+  found while wiring the new geometry rather than by any failing test. The `move` op
+  raised `NameError` on **every** call: `f_lat` was undefined, hoisted out of a
+  comprehension where it cannot be hoisted at all, because the degree scale depends on
+  each footprint's own latitude. And `scale_all`, `set_site` and `move` each rebuilt
+  `Footprint(...)` without carrying `bearing_deg`, so a preceding `rotate` was
+  silently discarded — a `[rotate, scale_all]` scheme scored as if unrotated, and the
+  new `cell_fad` reads exactly that field. Separately, `GET /design-metrics` accepted
+  `?dayOfYear=` and silently ignored it, and neither it nor the new `/heat-field`
+  range-checked the day, so `?day_of_year=999` returned a plausible sun position for
+  a date that does not exist.
+
+- **9 Oct 2026, scipy was not installable as declared.** `requirements.txt` stated
+  that scipy 1.18.1 was installed for the corridors; nothing was installed at all. On
+  installing 1.15.3, `scipy.sparse` proved unimportable on this host — a `_propack`
+  extension rejected by dyld. Pinned to `>=1.11,<1.14` (1.13.1 verified; Dijkstra
+  over the 664×474 grid in 0.05 s). No fallback Dijkstra was written: two
+  shortest-path implementations is precisely the duplication this project forbids.
