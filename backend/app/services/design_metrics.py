@@ -400,18 +400,29 @@ def shade_fraction(footprints: list[Footprint], grids: Any, lat_deg: float,
                 * np.arange(-hc, hc + 1, dtype=np.int64)[None, :]
             )
 
-        max_h = float(heights.max())
-        max_steps = min(max_steps, int(max_h / tan_alt / cell) + 1)
+        # Each building is swept only as far as ITS OWN shadow reaches. An earlier
+        # version ran every building out to the *tallest* building's shadow length,
+        # so a 5 m shed had its footprint painted along the sun vector right
+        # across the district. The shaded set saturated, and the tell was that
+        # scaling the western 1,232 envelopes gave byte-identical shade to scaling
+        # all 2,639 -- a physically impossible result that every ordering check
+        # still passed, because a saturated sweep is monotone in the right
+        # directions while being wrong about the magnitude.
+        reach = np.rint(heights / tan_alt / cell).astype(np.int64)
+        max_steps = min(max_steps, int(reach.max()) if reach.size else 0)
+        reach = np.minimum(reach, max_steps)
+
         for i in range(max_steps + 1):
             for span, members in groups.items():
                 m = np.asarray(members, dtype=np.int64)
                 off = offsets[span]
                 rr = np.rint(br[m][:, None] + drow * i + off[0]).astype(np.int64)
                 cc = np.rint(bc[m][:, None] + dcol * i + off[1]).astype(np.int64)
-                ok = (rr >= 0) & (rr < rows_n) & (cc >= 0) & (cc < cols_n)
+                ok = ((rr >= 0) & (rr < rows_n) & (cc >= 0) & (cc < cols_n)
+                      & (i <= reach[m][:, None]))
                 if ok.any():
                     shaded[rr[ok], cc[ok]] = True
-        if int(max_h / tan_alt / cell) + 1 > max_steps:
+        if reach.size and int(heights.max() / tan_alt / cell) + 1 > max_steps:
             capped = 1
 
     total = float(rows_n * cols_n)

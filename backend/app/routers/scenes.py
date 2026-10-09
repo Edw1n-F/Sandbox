@@ -544,3 +544,109 @@ def get_design_metrics(scene_id: str, day_of_year: int = 355,
                      "seeded generator, on the 5 m land-cover grid"),
     }
     return report
+
+
+@router.post("/scenes/{scene_id}/scenario/evaluate")
+def post_scenario_evaluate(scene_id: str, body: dict) -> dict:
+    """POST /api/scenes/{sceneId}/scenario/evaluate
+
+    Score a candidate scheme against the baseline on **all three axes at once**:
+    shade, ventilation and drainage.
+
+    **There is no combined score in the response, and that is the design.** The
+    units are incompatible (a fraction of ground, a dimensionless blockage, cubic
+    metres), the ventilation axis has no threshold to normalise against, and the
+    axes genuinely conflict -- raising heights shades more ground and blocks more
+    wind. A single number would settle that trade-off silently. The three axes
+    come back separately with their own units, and `tradeoffs` says in words what
+    moved.
+
+    Request body, all optional::
+
+        {
+          "massingOps": [{"op": "scale_all", "multiplier": 1.4, "scope": "west"}],
+          "interventions": [{"kind": "green", "ring": [[lon, lat], ...]}],
+          "rainfallMm": 450,
+          "sunHours": [9, 14],
+          "dayOfYear": 355
+        }
+
+    An unrecognised scope is refused with 422 rather than widened to the whole
+    district: "make the western blocks taller" answered with an edit everywhere is
+    the failure this project has already made once.
+    """
+    from app.services.scenario import MassingOp, evaluate
+
+    scene_service.get_scene(scene_id)
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"))
+
+    model = scene_service.city_model_path(scene_id)
+    if not model:
+        raise HTTPException(status_code=422,
+                            detail="this scene has no city model; run scripts/make_citymodel.py")
+    features = json.loads(model.read_text()).get("features", [])
+
+    raw_ops = body.get("massingOps") or []
+    if not isinstance(raw_ops, list):
+        raise HTTPException(status_code=422, detail="massingOps must be a list")
+    ops: list[MassingOp] = []
+    for raw in raw_ops:
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=422,
+                                detail=f"each massingOp must be an object, got {type(raw).__name__}")
+        try:
+            ops.append(MassingOp(
+                op=str(raw.get("op") or ""),
+                multiplier=raw.get("multiplier"),
+                height_m=raw.get("heightM", raw.get("height_m")),
+                delta_m=raw.get("deltaM", raw.get("delta_m")),
+                degrees=raw.get("degrees"),
+                dx_m=raw.get("dxM", raw.get("dx_m")),
+                dy_m=raw.get("dyM", raw.get("dy_m")),
+                scope=raw.get("scope"),
+                count=raw.get("count"),
+            ))
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+    raw_iv = body.get("interventions") or []
+    if not isinstance(raw_iv, list):
+        raise HTTPException(status_code=422, detail="interventions must be a list")
+
+    hours = body.get("sunHours") or [9, 14]
+    try:
+        parsed_hours = tuple(sorted({int(h) for h in hours}))
+        if any(h < 0 or h > 23 for h in parsed_hours):
+            raise ValueError
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422,
+                            detail=f"sunHours must be hours 0-23, got {hours!r}")
+    try:
+        doy = int(body.get("dayOfYear", 355))
+        if not 1 <= doy <= 366:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422,
+                            detail=f"dayOfYear must be 1-366, got {body.get('dayOfYear')!r}")
+    rain = body.get("rainfallMm")
+    try:
+        rain_f = None if rain is None else float(rain)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail=f"rainfallMm must be a number, got {rain!r}")
+
+    try:
+        report = evaluate(
+            grids, features, ops=ops, interventions=raw_iv, rainfall_mm=rain_f,
+            sun_hours=parsed_hours, day_of_year=doy)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if "error" in report:
+        raise HTTPException(status_code=422, detail=report["error"])
+
+    report["sceneId"] = scene_id
+    return report

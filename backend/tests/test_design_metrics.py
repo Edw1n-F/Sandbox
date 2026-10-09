@@ -148,9 +148,55 @@ def main() -> int:
           noon["shadeFraction"] > summer["shadeFraction"],
           f"winter {noon['shadeFraction']:.1%} vs summer {summer['shadeFraction']:.1%}")
     check("and the fraction is physical, not a 3% walk artefact",
-          noon["shadeFraction"] > 0.15, f"{noon['shadeFraction']:.1%}")
-    check("morning shade is substantial when the sun is low",
-          morn["shadeFraction"] > 0.2, f"{morn['shadeFraction']:.1%}")
+          noon["shadeFraction"] > 0.05, f"{noon['shadeFraction']:.1%}")
+
+    # --- saturation, the bug this check exists for --- #
+    #
+    # An earlier sweep ran every building out to the TALLEST building's shadow
+    # length, so short buildings had their footprints painted right across the
+    # district. The shaded set saturated, and shade was over-reported by 2.3x
+    # (51.2% where the truth is 22.2%). Every ordering check above still passed,
+    # because a saturated sweep is monotone in the right directions while being
+    # wrong about the magnitude. Ordering is not enough; magnitude is the signal.
+    half = footprints_from_geojson(features[: len(features) // 2])
+    from app.services.scenario import MassingOp, apply_massing
+    raised_all = shade_fraction(
+        apply_massing(fps, [MassingOp("scale_all", multiplier=1.4)], grids.bounds),
+        grids, 22.44, 114.01, 355, 14)["shadeFraction"]
+    raised_half = shade_fraction(
+        apply_massing(fps, [MassingOp("scale_all", multiplier=1.4, scope="west")],
+                      grids.bounds),
+        grids, 22.44, 114.01, 355, 14)["shadeFraction"]
+    check("raising half the district shades strictly less than raising all of it",
+          raised_half < raised_all,
+          f"west {raised_half:.2%} vs all {raised_all:.2%} "
+          f"(equal values mean the sweep saturated)")
+    check("and the two are not merely close",
+          raised_all - raised_half > 0.005,
+          f"difference {raised_all - raised_half:.4f}")
+    ladder = [shade_fraction(
+        apply_massing(fps, [MassingOp("scale_all", multiplier=m)], grids.bounds),
+        grids, 22.44, 114.01, 355, 14)["shadeFraction"]
+        for m in (1.0, 1.2, 1.4, 1.6)]
+    check("shade increases strictly with height, step by step",
+          all(b > a for a, b in zip(ladder, ladder[1:])),
+          " < ".join(f"{v:.1%}" for v in ladder))
+    check("and a building is never swept past its own shadow",
+          half and shade_fraction(half, grids, 22.44, 114.01, 355, 14)
+          ["shadeFraction"] <= noon["shadeFraction"],
+          "half the district cannot out-shade all of it")
+    # The earlier version of this asserted morning shade > 20%, which was
+    # calibrated against the saturated sweep. The physically sound claim is the
+    # seasonal one: a lower sun casts longer shadows, so the winter solstice must
+    # shade more ground than the summer solstice at the same hours.
+    from app.services.design_metrics import design_report as _dr
+    december = _dr(fps, grids, day_of_year=355)["shade"]["meanShadeFraction"]
+    june = _dr(fps, grids, day_of_year=172)["shade"]["meanShadeFraction"]
+    check("the low winter sun shades more ground than the high summer sun",
+          december > june, f"December {december:.1%} vs June {june:.1%}")
+    check("and both are a real fraction of the district, not noise",
+          0.05 < june < december < 0.60,
+          f"{june:.1%} .. {december:.1%}")
     check("no sun means no shade, with a reason",
           night["shadeFraction"] == 0.0 and "horizon" in night.get("note", ""), "")
     check("every instant declares itself a single instant",

@@ -154,7 +154,7 @@ number say whether a breeze is available to compensate.
 |---|---|---|
 | 0 | Research, cited and recorded here | **done** |
 | 1 | `design_metrics.py` — geometry-derived, each metric tied to a published rule: height dispersion, ground-level permeability, site coverage, swept-shadow fraction | **done** |
-| 2 | One `evaluate(scenario)` returning heat + wind + drainage together | next |
+| 2 | One `evaluate(scenario)` returning heat + wind + drainage together, and no total | **done** |
 | 3 | Scenario comparison — the relative judgement the AVA document asks for | planned |
 | 4 | Replace the hand-authored heat index with a solar-access basis | needs a source |
 | 5 | Expose to the LLM as an objective, not a number | planned |
@@ -179,23 +179,92 @@ ordering must state its weights.
   whether a scheme meets a standard **cannot be known**. So the absence is the
   finding, not a gap in my work, and it is now cited rather than defended.
 - **9 Oct 2026, Stage 1 built** — `app/services/design_metrics.py` and
-  `GET /api/scenes/{sceneId}/design-metrics`. On the real district: mean height
-  35.3 m with variation CV 0.76, site coverage 30.2%, ground-level void fraction
-  94.8%, FAD mean 0.446 over 16 directions, shade 45.6% at 09:00 and 51.2% at
-  14:00 in December. 37 tests; 227 backend tests in total.
+  `GET /api/scenes/{sceneId}/design-metrics`. 37 tests.
 
-  Two things worth recording because they were wrong first:
+  The shade figures first published with Stage 1 were **wrong by 2.3x** (46% and
+  51% where the truth is 16% and 22%) and are corrected in Stage 2 below. The
+  other Stage 1 figures stand: mean height 35.3 m, height variation CV 0.76, site
+  coverage 30.2%, ground-level void fraction 94.8%, FAD mean 0.446 over sixteen
+  directions.
+
+- **9 Oct 2026, Stage 2 built** — `app/services/scenario.py` and
+  `POST /api/scenes/{sceneId}/scenario/evaluate`. All three axes at once, and **no
+  combined score**.
+
+  Corrected geometry figures for the district: shade 16.2% at 09:00 and 22.1% at
+  14:00 in December, 11.5% mean at the June solstice. A low-rise district at 22N
+  genuinely has little pedestrian shade at midday — the high sun clears the
+  street — and morning shade exceeds noon in December because the sun is still
+  low in the east.
+
+  The no-score decision has three independent reasons, and the third is the one
+  that matters: the axes genuinely conflict. "Make the western blocks 40% taller"
+  gives **more shade (+3.0 pp), more wind blockage (FAD +0.084), and no change at
+  all to drainage**. A single score would settle that trade-off in whichever
+  direction the weights leaned, without saying so. So the response returns three
+  axes with their own units plus a `tradeoffs` list in plain language.
+
+  Three more findings from building it:
+
+  - **A direction label contradicted its own number.** A *rise* in frontal area
+    density was reported as "less blockage". The cause was a hand-written
+    if/elif chain, so the direction of each axis is now a single table,
+    `AXIS_UP_MEANS`, stated once. The same drift that produced two copies of
+    `projected_width_m` produced this.
+  - **Rainfall is a forcing, not a scheme.** It shifts the baseline and the
+    candidate equally, so it never appears in an axis delta — which made
+    "what if it rains 100 mm more" return all-zero and look broken. It is now
+    reported separately: at 550 mm the deficit rises by **780,289 m³**, which is
+    the number the question was actually asking for.
+  - **Height does not move drainage, and that is arithmetic.** A footprint is
+    already impervious whatever its height, so "30% taller" returns a drainage
+    delta of exactly zero. The response says so in the axis limitation rather
+    than letting it look like a bug. Interventions are what move drainage.
+
+  Three things worth recording, because all three were wrong first and the first
+  two looked entirely plausible while they were wrong:
 
   - **Shade was first reported as 3.0%** on a winter afternoon, because the
     shadow walk marked one cell per step instead of sweeping each building's
-    footprint. A 35 m building at a 38 deg solar altitude throws a 44 m shadow,
-    which is nine cells, not one. Sweeping the footprint gives 51.2% — and the
-    pattern (high sun 11.7%, low sun 51.2%) is the physically expected one. A
-    number that looked plausible was an artefact of the algorithm.
+    footprint.
+  - **Sweeping the footprint then over-reported by 2.3x, at 51.2%.** The sweep ran
+    every building out to the *tallest* building's shadow length, so a 5 m shed had
+    its 30 m footprint painted right across the district. The shaded set
+    saturated. This was found in Stage 2, not Stage 1, and the tell was a
+    physically impossible result: raising the western 1,232 envelopes gave
+    byte-identical shade to raising all 2,639. **Every ordering check passed
+    throughout** — summer below winter, morning below noon — because a saturated
+    sweep is still monotone in the right directions. Ordering was not enough;
+    magnitude was the signal, and only a comparison between two different schemes
+    exposed it.
   - **The sweep took 22 seconds** because it issued one NumPy assignment per
-    building per step. Our footprints come from a grid pitch, so they cluster into
-    a handful of distinct spans; grouping by span made it 0.01 s with identical
-    output.
+    building per step. Grouping by footprint span made it 0.01 s.
 
   The report prints `verdict: null` and says why: the AVA policy states that
   whether a scheme meets a standard cannot be known, so there is nothing to pass.
+
+## What Stage 2 settled, and what is still open
+
+Stage 2 produced the finding the plan predicted: the axes conflict, and the
+conflict is the content. Raising heights shades more ground and blocks more wind;
+green space lowers the deficit and does nothing to shade or ventilation; a forcing
+change moves neither scheme axis. There is no ordering of these that is true
+without saying what you weight.
+
+**Still open, in the order I would do it:**
+
+- **Stage 3, comparison.** `compare()` must rank schemes with *stated* weights,
+  and must refuse to rank when the weights are not supplied. A default weight set
+  would quietly become the project's opinion about which axis matters, which is
+  the thing the AVA guidance says cannot be settled.
+- **Stage 4, the heat index.** `HEAT_INDEX` is still hand-authored with no
+  published provenance. It is now the weakest number in the project and it sits in
+  the drainage/retention path, so it should be sourced or replaced.
+- **Stage 5, the LLM as policy.** With three real axes, the planner can state an
+  objective — "cut the deficit here without losing shade" — and the evaluator can
+  report what that costs on each axis. That is a division of labour where neither
+  half can silently corrupt the other.
+- **`place` and `reset` cannot yet be scored.** Both need the city-model
+  generator, and reimplementing either in the evaluator would drift from it. The
+  evaluator says `unsupported` rather than approximating, which is the right
+  answer today and a real gap by the demo.

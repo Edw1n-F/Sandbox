@@ -25,10 +25,28 @@ ENE and E, together 40.8% of wind frequency**. No frequency is invented for any
 other direction, and every direction is still computed and reported so the shape
 of the site is visible even where the frequency is unknown.
 
-The pass/fail bands live in Technical Circular No. 1/06 and its Annex A Technical
-Guide, which we have not extracted. **This module therefore asserts no
-threshold.** It reports what the geometry is, and leaves the judgement to a
-qualified assessor.
+## There is no threshold, and that is the finding
+
+An earlier version of this note said the pass/fail bands "have not been
+extracted". They were never there to extract. The policy document behind Hong
+Kong's own guidance -- Ng & Cheng, *Policies and technical guidelines for urban
+planning of high-density cities - air ventilation assessment (AVA) of Hong Kong*,
+Building and Environment 44 (2009) 1478-1488 -- states:
+
+    "A design having a higher velocity ratio would be considered as a better
+    design than one having a lower velocity ratio. At this stage, only the better
+    design option is known, but whether the better design option meets a standard
+    cannot be known."
+
+It does publish *empirical reference values*, which are not criteria: velocity
+ratios of **0.3** near the waterfront and in open spaces, and **0.05-0.1** in
+streets and congested urban spaces. Those live in
+:mod:`app.services.design_metrics` as ``VR_OPEN_SPACE`` and
+``VR_CONGESTED_STREET``.
+
+**So this module still asserts no threshold, but now for the opposite reason:**
+not because we could not find one, but because the guidance says none exists yet.
+That is a stronger position than the old note claimed, and it is cited.
 """
 
 from __future__ import annotations
@@ -40,18 +58,29 @@ from typing import Any
 
 from app.config import settings
 
+# The geometry primitives are defined once, in design_metrics, and re-exported
+# here so this module's callers and tests are unaffected. Two copies of
+# projected_width_m existed between these modules, and two implementations of one
+# formula is how a screening starts disagreeing with itself -- which is the one
+# failure this module exists to rule out.
+from app.services.design_metrics import (  # noqa: F401
+    CARDINALS,
+    VR_COMFORTABLE_PEDESTRIAN,
+    VR_CONGESTED_STREET,
+    VR_OPEN_SPACE,
+    Footprint,
+    projected_width_m,
+)
+
 REFERENCE_PATH = "reference/hsk_ava_reference.json"
 
 # Meteorological convention: the direction a wind comes FROM. Named explicitly
 # because "wind from the east" and "wind towards the east" differ by 180 degrees,
 # and getting that backwards points every building at the wrong side.
-CARDINALS: dict[str, float] = {
-    "N": 0.0, "NNE": 22.5, "NE": 45.0, "ENE": 67.5, "E": 90.0, "ESE": 112.5,
-    "SE": 135.0, "SSE": 157.5, "S": 180.0, "SSW": 202.5, "SW": 225.0,
-    "WSW": 247.5, "W": 270.0, "WNW": 292.5, "NW": 315.0, "NNW": 337.5,
-}
 
-M_PER_DEG_LAT = 110_540.0
+# M_PER_DEG_LAT used to be defined here and is now unused in this module: the one
+# function that needed it moved to design_metrics. Left behind as a second source
+# of a physical constant is exactly the drift this consolidation removed.
 
 
 def load_reference() -> dict[str, Any] | None:
@@ -62,22 +91,6 @@ def load_reference() -> dict[str, Any] | None:
         return json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-
-
-def projected_width_m(west_east_m: float, north_south_m: float,
-                      bearing_deg: float) -> float:
-    """Width of a rectangle seen face-on to wind arriving from ``bearing_deg``.
-
-    For a rectangle of sides ``a`` (east-west) and ``b`` (north-south) with its
-    own bearing, the projected width is ``a·|sin φ| + b·|cos φ|`` where φ is the
-    angle between the wind and the face normal. That reduces to the form below
-    when the rectangle's own bearing is zero, which is the case for every
-    footprint this project generates -- they come from a raster grid, so they are
-    axis-aligned by construction.
-    """
-    phi = math.radians(bearing_deg)
-    return (west_east_m * abs(math.sin(phi))
-            + north_south_m * abs(math.cos(phi)))
 
 
 def frontal_area_density(
