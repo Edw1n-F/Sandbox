@@ -429,3 +429,260 @@ def storage_ledger(
         "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
         "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
     }
+
+# --------------------------------------------------------------------------- #
+# Buffer deficit: the headline number, and what a scenario does to it
+# --------------------------------------------------------------------------- #
+
+# How each intervention kind changes the land-class grid.
+#
+# Two of these deliberately have NO grid effect, and that is the honest answer
+# rather than a gap:
+#
+# - `massing_height` is a 3D operation on buildings that already exist. It moves
+#   shade and exposure; it does not change a single 5 m cell of land cover, and a
+#   ledger that pretended otherwise would invent a flood benefit from raising a
+#   building.
+# - `drainage_alignment` is a network. Whether it helps depends on pipe capacity
+#   and outfall levels, which this screening model does not have. Reporting it
+#   as zero is the truthful answer and it is reported as zero *visibly*, with a
+#   reason, so nobody reads an absence as an oversight.
+#
+# `permeable_paving` is the interesting one: it does not change the land *class*
+# -- the surface is still paved -- it lowers the runoff coefficient. So it is
+# modelled as a Curve Number override, which is what permeable paving physically
+# is, rather than being smeared into the nearest class.
+INTERVENTION_EFFECTS: dict[str, dict[str, Any]] = {
+    "water_reservoir": {"to": "water", "why": "an open water surface stores water"},
+    "flood_storage": {"to": "water", "why": "explicit flood storage is a water body"},
+    "green_space": {"to": "green", "why": "vegetated ground generates less runoff"},
+    "urban_green": {"to": "green", "why": "urban green is vegetated ground"},
+    "permeable_paving": {"cn": 72.0,
+                         "why": "permeable paving lowers the runoff coefficient; "
+                                "CN 72 is an assumed mid value for permeable "
+                                "pavement on an HSG D soil, not a TR-55 lookup"},
+    "drainage_alignment": {"to": None,
+                           "why": "a drainage network needs pipe and outfall "
+                                  "capacity, which this screening model does "
+                                  "not have; no grid effect is claimed"},
+    "massing_height": {"to": None,
+                       "why": "a 3D operation on existing buildings; it changes "
+                              "shade and exposure, not land cover"},
+}
+DEFAULT_PERMEABLE_CN = 72.0
+
+# The largest share of the study area one intervention may rework. Beyond this it
+# is describing a land-use change rather than a feature someone would build, and
+# applying it would let a single polygon erase the district's hydrology.
+MAX_INTERVENTION_COVERAGE = 0.25
+
+
+def _polygon_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int]]:
+    """Cells whose centre falls inside a polygon ring.
+
+    Scanline over the ring's bounding box rather than a point-in-polygon test per
+    cell: the boxes are small (a few hundred cells) and this keeps the whole
+    rasteriser dependency-free and easy to read.
+    """
+    # Defensive: one stored intervention in the seeded set carries a malformed
+    # ring whose coordinates are floats rather than pairs, and indexing it raised
+    # TypeError deep inside the scanline. Bad geometry is skipped, not fatal.
+    ring = [p for p in (ring or [])
+            if isinstance(p, (list, tuple)) and len(p) >= 2
+            and all(isinstance(v, (int, float)) for v in p[:2])]
+    if len(ring) < 3:
+        return []
+    xs = [p[0] for p in ring]
+    ys = [p[1] for p in ring]
+    r0, c0 = grids.cell_of(min(xs), max(ys))
+    r1, c1 = grids.cell_of(max(xs), min(ys))
+
+    x0, y0, x1, y1 = grids.bounds
+    cell_w = (x1 - x0) / grids.cols
+    cell_h = (y1 - y0) / grids.rows
+
+    def inside(lon: float, lat: float) -> bool:
+        hit = False
+        n = len(ring)
+        j = n - 1
+        for i in range(n):
+            xi, yi = ring[i]
+            xj, yj = ring[j]
+            if (yi > lat) != (yj > lat):
+                x_cross = xi + (lat - yi) * (xj - xi) / (yj - yi)
+                if lon < x_cross:
+                    hit = not hit
+            j = i
+        return hit
+
+    out: list[tuple[int, int]] = []
+    for r in range(min(r0, r1), max(r0, r1) + 1):
+        lat = y1 - (r + 0.5) * cell_h
+        for c in range(min(c0, c1), max(c0, c1) + 1):
+            lon = x0 + (c + 0.5) * cell_w
+            if inside(lon, lat):
+                out.append((r, c))
+    return out
+
+
+def ledger_for_scenario(
+    grids: Grids,
+    features: list[dict[str, Any]],
+    rainfall_mm: float = DEFAULT_RAINFALL_MM,
+    cn_override: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    """The storage ledger for one scenario, and the delta against today's land use.
+
+    ``features`` are stored intervention features. Each is translated into the
+    land-class change it actually implies -- see :data:`INTERVENTION_EFFECTS` --
+    and the project's own runoff/retention arithmetic is then run over the
+    modified grid. Nothing is estimated on the way past: an intervention either
+    changes a cell or it is reported as changing nothing.
+
+    This is the number the brief's glossary calls the headline: *how much flood
+    water has nowhere to go*, and *how much worse than today*.
+    """
+    base = storage_ledger(grids, grids.land_class, rainfall_mm)
+
+    trial = grids.land_class.copy()
+    cn_over: dict[tuple[int, int], float] = {}
+    applied: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for feature in features:
+        kind = str(feature.get("intervention_type")
+                   or feature.get("kind") or "unknown")
+        effect = INTERVENTION_EFFECTS.get(kind)
+        params = feature.get("params") or {}
+        fid = feature.get("id")
+
+        if effect is None:
+            skipped.append({"id": fid, "kind": kind,
+                            "why": "no land-cover effect is defined for this "
+                                   "intervention type"})
+            continue
+        if effect.get("to") is None and "cn" not in effect:
+            skipped.append({"id": fid, "kind": kind, "why": effect["why"]})
+            continue
+
+        ring = ((feature.get("geometry") or {}).get("coordinates") or [[]])[0]
+        if not isinstance(ring, list):
+            skipped.append({"id": fid, "kind": kind,
+                            "why": "malformed geometry: coordinates are not a ring"})
+            continue
+        cells = _polygon_cells(grids, ring)
+        if not cells:
+            skipped.append({"id": fid, "kind": kind,
+                            "why": "the polygon covers no 5 m cell"})
+            continue
+
+        # Coverage guard.
+        #
+        # The seeded water_reservoir features are the bounding box of "the
+        # deepest connected basin in the computed wet grid", and that basin is
+        # 3.6 km2 -- 45% of the study area. Converting it to open water is not a
+        # retention basin, it is erasing the district's ponds, and it produced a
+        # fictitious 63% reduction in the deficit. A single intervention that
+        # reworks a quarter of the area is a land-use change, not an intervention,
+        # so it is refused and reported rather than quietly applied.
+        coverage = len(cells) / float(grids.rows * grids.cols)
+        if coverage > MAX_INTERVENTION_COVERAGE:
+            skipped.append({
+                "id": fid, "kind": kind,
+                "why": (f"polygon covers {coverage:.1%} of the study area, over "
+                        f"the {MAX_INTERVENTION_COVERAGE:.0%} limit for a single "
+                        f"intervention; this is a land-use change, not a "
+                        f"retention feature -- it needs re-siting"),
+                "coverageFraction": round(coverage, 4),
+            })
+            continue
+
+        changed = 0
+        if effect.get("to") is not None:
+            target = LAND_CLASSES.index(effect["to"])
+            for r, c in cells:
+                if int(trial[r, c]) != target:
+                    trial[r, c] = target
+                    changed += 1
+        else:
+            cn = float(effect["cn"])
+            for r, c in cells:
+                if LAND_CLASSES[int(trial[r, c])] in ("paved", "bare"):
+                    cn_over[(r, c)] = cn
+                    changed += 1
+
+        applied.append({
+            "id": fid,
+            "kind": kind,
+            "cellsChanged": changed,
+            "areaM2": round(changed * grids.cell_area_m2, 1),
+            "coverageFraction": round(coverage, 5),
+            "why": effect["why"],
+            "basis": params.get("basis"),
+        })
+
+    if cn_over:
+        cn_grid = np.zeros(trial.shape, dtype=np.float32)
+        for name, value in CURVE_NUMBER_HSG_D.items():
+            cn_grid[trial == LAND_CLASSES.index(name)] = min(100.0, value)
+        for (r, c), value in cn_over.items():
+            cn_grid[r, c] = value
+        scen = _ledger_from_cn(grids, trial, cn_grid, rainfall_mm)
+    else:
+        scen = storage_ledger(grids, trial, rainfall_mm)
+
+    d_unstored = scen["unstoredM3"] - base["unstoredM3"]
+    return {
+        "rainfallMm": rainfall_mm,
+        "baseline": base,
+        "scenario": scen,
+        "bufferDeficitM3": round(base["unstoredM3"], 1),
+        "scenarioDeficitM3": round(scen["unstoredM3"], 1),
+        "deltaUnstoredM3": round(d_unstored, 1),
+        "deltaRunoffM3": round(scen["runoffM3"] - base["runoffM3"], 1),
+        "deltaGreenAreaM2": round(scen["greenAreaM2"] - base["greenAreaM2"], 1),
+        "worsens": d_unstored > 1.0,
+        "interventionsApplied": applied,
+        "interventionsSkipped": skipped,
+        "interpretation": (
+            "bufferDeficitM3 is today's unstored water: runoff with nowhere to go. "
+            "deltaUnstoredM3 is the change a scenario makes to it -- positive "
+            f"means {round(d_unstored, 1):,.0f} m3 WORSE than today, negative "
+            "means better, under the same assumed rainfall. Both are screening "
+            "figures from a level-pool allocation, not routed hydraulics."
+        ),
+    }
+
+
+def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
+                    rainfall_mm: float) -> dict[str, float]:
+    """The same ledger, but with an explicit Curve Number grid.
+
+    Needed for permeable paving, which changes the runoff coefficient without
+    changing the land class -- so it cannot be expressed by swapping a class.
+    """
+    runoff_m = runoff_depth(rainfall_mm, cn)
+
+    storage_m = np.full(land_class.shape, DEPRESSION_STORAGE_M, dtype=np.float32)
+    for name, depth in STORAGE_DEPTH_M.items():
+        storage_m[land_class == LAND_CLASSES.index(name)] = depth
+    for name, side in COUNTED_AS.items():
+        if side == "retention":
+            runoff_m[land_class == LAND_CLASSES.index(name)] = 0.0
+
+    unstored_m = np.maximum(runoff_m - storage_m, 0.0)
+    cell_area = grids.cell_area_m2
+
+    heat = np.zeros(land_class.shape, dtype=np.float32)
+    for name, value in HEAT_INDEX.items():
+        heat[land_class == LAND_CLASSES.index(name)] = value
+
+    green_idx = LAND_CLASSES.index("green")
+    paved_idx = LAND_CLASSES.index("paved")
+    return {
+        "runoffM3": float(runoff_m.sum() * cell_area),
+        "unstoredM3": float(unstored_m.sum() * cell_area),
+        "heatMean": float(heat.mean()),
+        "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
+        "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
+    }

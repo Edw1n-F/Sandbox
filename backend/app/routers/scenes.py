@@ -93,6 +93,49 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
     })
 
 
+def request_plan_id(scene_id: str) -> str | None:
+    """The most recently created plan for a scene, or None if it has none."""
+    listed = scene_service.list_plans(scene_id)
+    plans = listed.plans if hasattr(listed, "plans") else listed
+    if not plans:
+        return None
+    ordered = sorted(plans, key=lambda p: str(getattr(p, "created_at", "") or ""))
+    return ordered[-1].plan_id
+
+
+def intervention_features(plan_id: str | None) -> list[dict]:
+    """Stored intervention features as plain dicts, ready for the ledger.
+
+    ``list_interventions`` takes a *plan* id and returns a Pydantic collection;
+    this unwraps it to the dicts the ledger reads, so the ledger never has to know
+    about the wire types.
+    """
+    if not plan_id:
+        return []
+    collection = scene_service.list_interventions(plan_id)
+    features = getattr(collection, "features", collection)
+    out: list[dict] = []
+    for f in features or []:
+        item = f if isinstance(f, dict) else f.model_dump(by_alias=True)
+        # A wire feature wraps the payload in geometry/properties; the ledger wants
+        # intervention_type and geometry at the top level, like the stored row.
+        props = item.get("properties") or {}
+        # The wire is camelCase (`interventionType`); the stored row is
+        # snake_case. Both are accepted because both shapes exist in this
+        # codebase and guessing one of them wrong returns "unknown" for every
+        # intervention -- which is exactly what happened the first time.
+        kind = (item.get("interventionType") or item.get("intervention_type")
+                or props.get("interventionType") or props.get("intervention_type")
+                or item.get("kind") or props.get("kind"))
+        out.append({
+            "id": item.get("id") or props.get("id"),
+            "intervention_type": kind,
+            "geometry": item.get("geometry"),
+            "params": item.get("params") or props.get("params") or {},
+        })
+    return out
+
+
 @router.get("/scenes/{scene_id}/buildings/{building_id}/fit")
 def get_building_fit(
     scene_id: str,
@@ -186,4 +229,62 @@ def get_building_fit(
         "terrainSource": grids.terrain_source,
         "landCoverSource": grids.landcover_source,
     }
+    return result
+
+
+@router.get("/scenes/{scene_id}/ledger")
+def get_ledger(scene_id: str, rainfall_mm: float | None = None,
+               plan_id: str | None = None) -> dict:
+    """GET /api/scenes/{sceneId}/ledger
+
+    The headline number, and what the stored interventions do to it.
+
+    `bufferDeficitM3` is today's unstored water -- runoff with nowhere to go,
+    which is the figure the project's own glossary calls the single headline
+    number. `deltaUnstoredM3` is the change the active interventions make to it:
+    positive means worse than today, negative means better, under the same
+    assumed rainfall.
+
+    Pass `plan_id` to score a specific scenario; the default is the most recently
+    created plan. A scenario is a plan, so interventions from other plans are not
+    mixed in -- comparing two plans means calling this twice.
+
+    Interventions are translated into the land-class change each actually
+    implies and the project's own runoff/retention arithmetic is re-run over the
+    modified grid. Two kinds are refused with a stated reason rather than
+    approximated: `massing_height` is a 3D operation that changes no land cover,
+    and `drainage_alignment` needs pipe and outfall capacity this screening model
+    does not have.
+    """
+    from app.services.sandbox_model import (
+        MAX_INTERVENTION_COVERAGE,
+        load_grids,
+        ledger_for_scenario,
+    )
+
+    scene_service.get_scene(scene_id)
+
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
+        )
+
+    chosen = plan_id or request_plan_id(scene_id)
+    features = intervention_features(chosen)
+
+    result = ledger_for_scenario(
+        grids, features,
+        rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM,
+    )
+    result["sceneId"] = scene_id
+    result["planId"] = chosen
+    result["maxInterventionCoverage"] = MAX_INTERVENTION_COVERAGE
+    result["note"] = (
+        "Screening figures from a level-pool allocation, not routed hydraulics. "
+        "The Curve Number table is the largest single lever on every number here; "
+        "run scripts/make_wetgrid.py --sensitivity for the band it implies."
+    )
     return result
