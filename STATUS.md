@@ -3,20 +3,19 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 449 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 456 backend + 50 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **449** on
-> 2026-10-09 (416 after the Stage 5c/reconciliation increment, +6 place/reset checks,
-> +1 count correction, +12 place/reset/identity checks). The frontend figure of 104 is
-> the frontend owner's, carried forward unchanged.
+> leaves the other's alone. Backend counts below were re-verified at **456** on
+> 2026-10-10 (476 after the hourly storm increment; test_scenario +8 resize/move, test_ai_plan +2 resize/schema, -30 hourly-storm moved to its own suite already counted). The frontend figure of 50 is the frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
-| backend `test_scenario` | 58/58 | `python tests/test_scenario.py` |
-| backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
+| backend `test_scenario` | 66/66 | `python tests/test_scenario.py` |
+| backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
+| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
 | backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
@@ -87,6 +86,18 @@ new output carries a machine-readable `status` and a human `warning`.
 - **Drainage: D8 fill-and-spill routing.** `label_depressions`, `fill_and_spill` and
   `hand` in `scripts/hydrology.py`, on the Priority-Flood surface the project already
   computed but never routed. Served by `GET /api/scenes/{id}/drainage/routed`.
+- **Hourly storm simulation — the time axis.** `hourly_storm_simulation` +
+  `GET /api/scenes/{id}/drainage/hourly`: rain level and drainage capability,
+  hour by hour, with the per-cell retention state carried forward (a pool filled
+  at hour 2 has less room at hour 5). Reference storms are cited (the 2023-09-07
+  record storm, the DSD 50-year design block, the Black Rain threshold); a
+  custom hyetograph is accepted. The whole-simulation identity
+  `rain_in == stored_gain + drained + standing` is **enforced** (raises on a
+  leak). The drainage capability is the DSD published 134 mm/h rural design
+  standard, stated as a PROXY in every response — no pipe data exists for this
+  site and none is invented. The no-drainage counterfactual
+  (`drained_m3_per_hour=0`) is the capability read: on the 2023-09-07 storm it
+  is the difference between 0 and **1,515,884 m³** of standing water.
 - **Drainage: a mass-balance assertion that is enforced, not reported.**
   `mass_balance()` **raises** when `runoff in ≠ stored + discharged`. A second
   identity, `generation == local_retention + runoff_in`, is asserted separately so an

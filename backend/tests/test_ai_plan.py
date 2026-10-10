@@ -294,6 +294,56 @@ def _geometry_fields(tool: dict, prefix: str = "") -> list[str]:
     return found
 
 
+def _coordinate_fields_are_bounded(tool: dict) -> bool:
+    """Every coordinate-bearing field in the schema carries min/max bounds.
+
+    The safety guarantee moved from 'no coordinate field exists' to 'the
+    coordinate is bounded to the study area and validated in apply_massing'.
+    This checks the schema half: that every lon/lat field has a minimum and
+    a maximum, so a model cannot emit a coordinate outside the study area
+    and have the schema accept it. The runtime half is in apply_massing,
+    which refuses any target outside the bbox.
+    """
+    def _check(spec: dict) -> bool:
+        if not isinstance(spec, dict):
+            return True
+        # If this spec itself is a coordinate field (has min and max), it passes.
+        if "minimum" in spec and "maximum" in spec:
+            return True
+        # If it has no coordinate words, recurse into children.
+        properties = spec.get("properties") or {}
+        items = spec.get("items") or {}
+        for child in list(properties.values()) + [items]:
+            if isinstance(child, dict):
+                if not _check(child):
+                    return False
+        return True
+
+    schema = tool.get("input_schema") or tool
+    # Find every field whose name contains a geometry word and check it has bounds.
+    def _find_and_check(spec: dict, prefix: str = "") -> bool:
+        properties = (spec.get("properties") or {})
+        for name, child in properties.items():
+            path = f"{prefix}{name}"
+            if any(word in name.lower() for word in GEOMETRY_WORDS):
+                # This is a coordinate field. It must have min AND max.
+                if not (isinstance(child, dict) and "minimum" in child
+                        and "maximum" in child):
+                    return False
+            # Recurse into nested objects/arrays.
+            for key in ("items", "properties"):
+                nested = (child or {}).get(key) if isinstance(child, dict) else None
+                if isinstance(nested, dict):
+                    if not _find_and_check(
+                            nested if key == "properties"
+                            else {"properties": nested},
+                            f"{path}."):
+                        return False
+        return True
+
+    return _find_and_check(schema)
+
+
 def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
     """"Make the district 25% taller" -> one massing_height feature, multiplier 1.25.
 
@@ -321,8 +371,14 @@ def test_llm_massing_op_becomes_a_grounded_draft_feature() -> None:
     check("geometry is a closed ring",
           f["geometry"]["type"] == "Polygon" and len(ring) >= 4 and ring[0] == ring[-1],
           f"{f['geometry']['type']} {len(ring)} pts")
-    check("the request offered the model no coordinate to echo",
-          not _geometry_fields(capture["payload"]["tools"][0]),
+    check("the massing tool's coordinate fields are bounded, not absent",
+          # target_lon/target_lat ARE in the schema now (added 10 Oct 2026 for
+          # direct-coordinate move), but they carry min/max bounds that confine
+          # the target to the study area. The safety guarantee moved from
+          # "no coordinate field at all" to "the coordinate is validated
+          # against the study-area bounds in apply_massing, and refused
+          # if outside".
+          _coordinate_fields_are_bounded(capture["payload"]["tools"][0]),
           f"coordinate-bearing fields: {_geometry_fields(capture['payload']['tools'][0])}")
 
 
@@ -354,10 +410,13 @@ def test_scope_is_resolved_here_and_is_not_the_model_s_geometry() -> None:
     check("the feature's own geometry is the area it affects",
           out[0]["geometry"]["coordinates"][0] == scope["ring"], "geometry differs")
     check("label is human-readable", scope["label"] == "the west", scope["label"])
-    # The tool schema is where a coordinate would have to come from.
+    # The tool schema now carries target_lon/target_lat (added 10 Oct 2026), but
+    # every coordinate field must carry min/max bounds confining it to the study
+    # area. The guarantee is that a coordinate outside the bbox is refused in
+    # apply_massing, not that the field does not exist.
     tool = capture["payload"]["tools"][0]
-    check("the tool offers no coordinate field",
-          not _geometry_fields(tool),
+    check("the tool's coordinate fields are bounded to the study area",
+          _coordinate_fields_are_bounded(tool),
           f"coordinate-bearing fields: {_geometry_fields(tool)}")
 
 
@@ -905,6 +964,50 @@ def test_heuristic_reads_massing_instructions_too() -> None:
     for text in ("add two water reservoirs", "make it nicer"):
         check(f"no false positive: {text!r}", parse_massing_intent(text) == [],
               str(parse_massing_intent(text)))
+
+
+def test_heuristic_reads_resize_instructions() -> None:
+    """The deterministic parser understands footprint resize language."""
+    g = load_grounding()
+    cases = {
+        "widen the blocks by 20%": ("widthScale", 1.2),
+        "make the footprints 30% wider": ("widthScale", 1.3),
+        "narrow the western blocks 15%": ("widthScale", 0.85),
+        "widen the buildings": ("widthScale", 1.2),  # bare verb defaults to 20%
+    }
+    for text, (field, expected) in cases.items():
+        ops = parse_massing_intent(text)
+        got = ops[0].get(field) if ops else None
+        check(f"{text!r} -> {field}={expected}", got == expected, f"got {got}")
+
+    out = HeuristicProvider().propose("widen the eastern blocks by 20%", g)
+    check("produces a resize feature",
+          bool(out) and out[0]["params"]["op"] == "resize"
+          and out[0]["params"]["widthScale"] == 1.2,
+          str([f["params"].get("op") for f in out]))
+    check("and the feature is a draft as ADR-030 requires",
+          bool(out) and out[0]["source"] == "ai"
+          and out[0]["params"]["status"] == "draft_pending_human_review", "")
+
+
+def test_tool_schema_has_bounded_coordinate_fields() -> None:
+    """The massing tool's target_lon/target_lat carry study-area bounds."""
+    tool = MASSING_TOOL
+    props = tool["input_schema"]["properties"]["edits"]["items"]["properties"]
+    check("target_lon exists and is bounded",
+          "target_lon" in props
+          and "minimum" in props["target_lon"]
+          and "maximum" in props["target_lon"], "")
+    check("target_lat exists and is bounded",
+          "target_lat" in props
+          and "minimum" in props["target_lat"]
+          and "maximum" in props["target_lat"], "")
+    check("width_scale exists and is bounded",
+          "width_scale" in props
+          and 0.1 <= props["width_scale"]["minimum"]
+          and props["width_scale"]["maximum"] <= 10.0, "")
+    check("resize is in the op enum",
+          "resize" in props["op"]["enum"], str(props["op"]["enum"]))
 
 
 def test_stored_massing_features_are_drafts() -> None:

@@ -110,7 +110,7 @@ export interface MassingPlacement {
 }
 
 export interface MassingOp {
-  op: 'scale_all' | 'set_site' | 'rotate' | 'place' | 'move' | 'reset'
+  op: 'scale_all' | 'set_site' | 'rotate' | 'place' | 'move' | 'reset' | 'resize'
   multiplier?: number
   heightM?: number | null
   /** A change in metres rather than an absolute height. */
@@ -121,6 +121,12 @@ export interface MassingOp {
   dyM?: number | null
   scope?: MassingScope | null
   placements?: MassingPlacement[]
+  /** Direct target coordinate for move (inside the study area). */
+  targetLon?: number | null
+  targetLat?: number | null
+  /** Footprint size scale for resize. 1.2 = 20% wider. */
+  widthScale?: number | null
+  depthScale?: number | null
 }
 
 export interface MassingOpResult {
@@ -273,6 +279,27 @@ export function translateRing(ring: number[][], dxM: number, dyM: number): numbe
     Number((lon + dxM / kx).toFixed(7)),
     Number((lat + dyM / ky).toFixed(7)),
   ])
+}
+
+/**
+ * Scale a ring's width and/or depth about its own centroid.
+ *
+ * Works in metres (not degrees) so the scaling is isotropic in plan regardless
+ * of latitude. `ws` scales the east-west axis, `ds` the north-south axis; each
+ * defaults to 1.0. Exported for tests.
+ */
+export function scaleRing(ring: number[][], ws: number, ds: number): number[][] {
+  const [cx, cy] = ringCentroid(ring)
+  const kx = mPerDegLon(cy)
+  const ky = M_PER_DEG_LAT
+  return ring.map(([lon, lat]) => {
+    const dx = (lon - cx) * kx * ws
+    const dy = (lat - cy) * ky * ds
+    return [
+      Number((cx + dx / kx).toFixed(7)),
+      Number((cy + dy / ky).toFixed(7)),
+    ]
+  })
 }
 
 /**
@@ -604,18 +631,58 @@ export async function addCityModel(
             changed += 1
           })
         } else if (op.op === 'move') {
-          const dx = typeof op.dxM === 'number' ? op.dxM : 0
-          const dy = typeof op.dyM === 'number' ? op.dyM : 0
-          if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+          // Two modes: metric offset (dx/dy) or direct target coordinate.
+          // The coordinate must be inside the study area; one outside is a
+          // no-op (the backend refuses it too).
+          if (typeof op.targetLon === 'number' && typeof op.targetLat === 'number') {
+            targets.forEach((id) => {
+              const entity = entities.get(id)
+              const ring0 = baseRings.get(id)
+              if (!entity?.polygon || !ring0) return
+              // Reposition the ring so its centroid lands on the target.
+              const [cx, cy] = ringCentroid(ring0)
+              const dLon = op.targetLon! - cx
+              const dLat = op.targetLat! - cy
+              setRing(entity, ring0.map(([lon, lat]) => [lon + dLon, lat + dLat]))
+              centroids.set(id, [op.targetLon!, op.targetLat!])
+              edited.add(id)
+              changed += 1
+            })
+          } else {
+            const dx = typeof op.dxM === 'number' ? op.dxM : 0
+            const dy = typeof op.dyM === 'number' ? op.dyM : 0
+            if (!Number.isFinite(dx) || !Number.isFinite(dy) || (dx === 0 && dy === 0)) {
+              continue
+            }
+            targets.forEach((id) => {
+              const entity = entities.get(id)
+              const ring0 = baseRings.get(id)
+              if (!entity?.polygon || !ring0) return
+              // Always from the *generated* ring, so two moves compose the way two
+              // height changes do, rather than the second compounding the first.
+              setRing(entity, translateRing(ring0, dx, dy))
+              const [lon, lat] = ringCentroid(ring0)
+              centroids.set(id, [
+                lon + dx / mPerDegLon(lat),
+                lat + dy / M_PER_DEG_LAT,
+              ])
+              edited.add(id)
+              changed += 1
+            })
+          }
+        } else if (op.op === 'resize') {
+          // Scale the footprint's width and/or depth. The ring is rebuilt from
+          // its centroid: each vertex moves radially by the scale factor.
+          const ws = typeof op.widthScale === 'number' ? op.widthScale : 1
+          const ds = typeof op.depthScale === 'number' ? op.depthScale : 1
+          if (!Number.isFinite(ws) || !Number.isFinite(ds) || (ws === 1 && ds === 1)) {
             continue
           }
           targets.forEach((id) => {
             const entity = entities.get(id)
             const ring0 = baseRings.get(id)
             if (!entity?.polygon || !ring0) return
-            // Always from the *generated* ring, so two moves compose the way two
-            // height changes do, rather than the second compounding the first.
-            setRing(entity, translateRing(ring0, dx, dy))
+            setRing(entity, scaleRing(ring0, ws, ds))
             edited.add(id)
             changed += 1
           })

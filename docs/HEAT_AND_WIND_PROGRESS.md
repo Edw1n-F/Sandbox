@@ -251,6 +251,22 @@ ordering must state its weights.
 
 ## Progress log
 
+- **10 Oct 2026, the hourly axis.** Research first: DSD's published design
+  standards (LegislCo replies 9316/13895/13898, July 2024) put rural main
+  drainage channels at the 50-year return period — **134 mm/h hourly design
+  rainfall** after the 2024 Stormwater Drainage Manual update — and the record
+  event is 2023-09-07's **158.1 mm/h** at HKO HQ. No pipe asset data exists
+  for this site, so the capability read is the published standard used as a
+  stated proxy, never an invented network. `hourly_storm_simulation` then
+  marches the storm hour by hour over the project's own physics (same CN
+  table, same depression capacities), carries the retention state forward,
+  enforces `rain_in == stored_gain + drained + standing` by raising, and
+  routes the final standing volume once through the one router as a view.
+  Measured on the reference storm: 1,821,982 m³ generated; the 134 mm/h
+  standard drains 1,515,884 m³ and leaves 0 standing, while zero drainage
+  leaves 1,515,884 m³ standing — the difference is the capability read, and
+  it is what the endpoint shows. 27 new checks; backend total **476**.
+
 - **9 Oct 2026 (night), gap 7 closed: `place` and `reset` are scoreable.** The
   old entry said reimplementing either "would drift from the generator" — right,
   and that is exactly why the fix is a **call, not a copy**: `apply_massing`'s

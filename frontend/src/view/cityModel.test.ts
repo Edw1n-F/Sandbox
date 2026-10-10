@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { pointInRing, ringCentroid, rotateRing, translateRing } from './cityModel'
+import { pointInRing, ringCentroid, rotateRing, scaleRing, translateRing } from './cityModel'
 
 /** A closed, axis-aligned rectangle ring, the shape every generated building has. */
 const square = (west: number, south: number, east: number, north: number): number[][] => [
@@ -164,5 +164,32 @@ describe('rotateRing', () => {
       expect(rotated[i][0]).toBeCloseTo(RING[i][0], 6)
       expect(rotated[i][1]).toBeCloseTo(RING[i][1], 6)
     }
+  })
+})
+
+describe('scaleRing', () => {
+  it('keeps the centroid fixed', () => {
+    const before = ringCentroid(RING)
+    const after = ringCentroid(scaleRing(RING, 1.5, 0.8))
+    expect(after[0]).toBeCloseTo(before[0], 6)
+    expect(after[1]).toBeCloseTo(before[1], 6)
+  })
+
+  it('widens the ring by the requested factor', () => {
+    // Width is the east-west extent. Scaling by 2.0 should double it.
+    const original = square(113.99, 22.44, 113.991, 22.441)
+    const widened = scaleRing(original, 2.0, 1.0)
+    const origWidth = original[1][0] - original[0][0]
+    const newWidth = widened[1][0] - widened[0][0]
+    expect(newWidth / origWidth).toBeCloseTo(2.0, 4)
+  })
+
+  it('is a no-op at scale 1.0', () => {
+    expect(scaleRing(RING, 1, 1)).toEqual(RING)
+  })
+
+  it('keeps the ring closed', () => {
+    const scaled = scaleRing(RING, 1.3, 0.7)
+    expect(scaled[0]).toEqual(scaled[scaled.length - 1])
   })
 })

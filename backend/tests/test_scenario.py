@@ -202,6 +202,73 @@ def main() -> int:
           len(mixed) == len(fps),
           f"{len(fps)} in, {len(mixed)} out")
 
+    # --- 8b. resize: directly changing the footprint size ------------------ #
+    # "Widen the western blocks by 20%" -> the footprint's width grows, its
+    # height and position stay. This is the direct coordinate/size editing the
+    # user asked for.
+    fps_copy = footprints_from_geojson(feats)
+    west_ids = [i for i, f in enumerate(fps_copy)
+                if f.lon < (grids.bounds[0] + grids.bounds[2]) / 2]
+    before_w = sum(fps_copy[i].width_m for i in west_ids)
+    resized = apply_massing(
+        fps_copy, [MassingOp("resize", width_scale=1.2, scope="west")],
+        grids.bounds)
+    after_w = sum(resized[i].width_m for i in west_ids)
+    check("resize widens the western footprints by 20%",
+          abs(after_w / before_w - 1.2) < 0.01,
+          f"before {before_w:,.0f} m, after {after_w:,.0f} m")
+    check("and the heights are unchanged",
+          all(abs(resized[i].height_m - fps_copy[i].height_m) < 1e-9
+              for i in west_ids), "")
+    check("and the positions are unchanged",
+          all(abs(resized[i].lon - fps_copy[i].lon) < 1e-9
+              for i in west_ids), "")
+    # Depth-only resize
+    deepened = apply_massing(
+        footprints_from_geojson(feats),
+        [MassingOp("resize", depth_scale=0.8, scope="all")],
+        grids.bounds)
+    check("a depth-only resize leaves widths alone",
+          all(abs(deepened[i].width_m
+                  - footprints_from_geojson(feats)[i].width_m) < 1e-9
+              for i in range(len(deepened))), "")
+    check("and shrinks depths by 20%",
+          all(abs(deepened[i].depth_m
+                  / footprints_from_geojson(feats)[i].depth_m - 0.8) < 0.01
+              for i in range(len(deepened))
+              if footprints_from_geojson(feats)[i].depth_m > 0), "")
+
+    # --- 8c. move to a direct target coordinate --------------------------- #
+    # "Move the eastern blocks to the centre" -> the footprints' centroids
+    # land on the stated coordinate, validated inside the bounds.
+    centre_lon = (grids.bounds[0] + grids.bounds[2]) / 2
+    centre_lat = (grids.bounds[1] + grids.bounds[3]) / 2
+    moved = apply_massing(
+        footprints_from_geojson(feats),
+        [MassingOp("move", target_lon=centre_lon, target_lat=centre_lat,
+                   scope="east")],
+        grids.bounds)
+    east_before_idx = [i for i, f in enumerate(footprints_from_geojson(feats))
+                       if f.lon > centre_lon]
+    east_before = [footprints_from_geojson(feats)[i] for i in east_before_idx]
+    check("a coordinate move repositions the eastern blocks to the centre",
+          all(abs(moved[i].lon - centre_lon) < 1e-6
+              and abs(moved[i].lat - centre_lat) < 1e-6
+              for i in east_before_idx),
+          f"target ({centre_lon:.4f}, {centre_lat:.4f})")
+    check("and preserves their heights and sizes",
+          all(abs(moved[i].height_m - east_before[j].height_m) < 1e-9
+              and abs(moved[i].width_m - east_before[j].width_m) < 1e-9
+              for j, i in enumerate(east_before_idx)), "")
+    # A target outside the study area is refused (a no-op)
+    out_of_bounds = apply_massing(
+        footprints_from_geojson(feats),
+        [MassingOp("move", target_lon=999.0, target_lat=999.0, scope="all")],
+        grids.bounds)
+    check("a target outside the study area is refused",
+          all(f.lon == footprints_from_geojson(feats)[i].lon
+              for i, f in enumerate(out_of_bounds)), "")
+
     # --- 9. purity: the baseline survives being evaluated against --- #
     from app.services.design_metrics import footprints_from_geojson
     fps = footprints_from_geojson(feats)

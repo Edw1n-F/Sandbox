@@ -676,7 +676,8 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     that was never offered returns None rather than a plausible-looking default.
     """
     op = str(_pick(edit, "op") or "")
-    if op not in ("scale_all", "set_site", "reset", "rotate", "place", "move"):
+    if op not in ("scale_all", "set_site", "reset", "rotate", "place", "move",
+                  "resize"):
         return None
 
     scope = resolve_scope(
@@ -753,6 +754,14 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
         dx = float(dx) if dx is not None else None
         dy = float(dy) if dy is not None else None
         count = int(count) if count is not None else None
+        target_lon = float(_pick(edit, "target_lon", "targetLon")) \
+            if _pick(edit, "target_lon", "targetLon") is not None else None
+        target_lat = float(_pick(edit, "target_lat", "targetLat")) \
+            if _pick(edit, "target_lat", "targetLat") is not None else None
+        width_scale = float(_pick(edit, "width_scale", "widthScale")) \
+            if _pick(edit, "width_scale", "widthScale") is not None else None
+        depth_scale = float(_pick(edit, "depth_scale", "depthScale")) \
+            if _pick(edit, "depth_scale", "depthScale") is not None else None
     except (TypeError, ValueError):
         return None
 
@@ -772,13 +781,23 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
         if degrees is None or not -180.0 <= degrees <= 180.0:
             return None
     elif op == "move":
-        for axis in (dx, dy):
-            if axis is not None and not -500.0 <= axis <= 500.0:
-                return None
-        if not dx and not dy:
-            # A move of zero metres is a no-op, and returning it would report an
-            # edit that did nothing.
+        # Two modes: metric offset or direct target coordinate. The coordinate
+        # is validated against the study-area bounds in apply_massing, but here
+        # we check that at least one mode has a non-trivial value.
+        has_coord = (target_lon is not None and target_lat is not None)
+        has_offset = bool(dx or dy)
+        if not has_coord and not has_offset:
             return None
+        if not has_coord:
+            for axis in (dx, dy):
+                if axis is not None and not -500.0 <= axis <= 500.0:
+                    return None
+    elif op == "resize":
+        if width_scale is None and depth_scale is None:
+            return None
+        for s in (width_scale, depth_scale):
+            if s is not None and not 0.1 <= s <= 10.0:
+                return None
 
     placements: list[dict[str, Any]] = []
     params["multiplier"] = multiplier
@@ -787,6 +806,10 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     params["degrees"] = degrees
     params["dxM"] = dx
     params["dyM"] = dy
+    params["targetLon"] = target_lon
+    params["targetLat"] = target_lat
+    params["widthScale"] = width_scale
+    params["depthScale"] = depth_scale
 
     if op == "place":
         # A placed block's height is the instruction's height, defaulting to a
@@ -825,7 +848,9 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     if op != "place":
         params["note"] = (
             "Annotates the existing procedural massing. Adds no building and "
-            "returns no coordinate."
+            "returns no coordinate. 'resize' changes the footprint size; 'move' "
+            "with targetLon/targetLat repositions to a stated coordinate inside "
+            "the study area."
         )
 
     return {
@@ -947,6 +972,18 @@ MASSING_PATTERNS: tuple[tuple[str, str, float | None], ...] = (
     (r"\b(taller|higher|denser|more\s+dense)\b", "scale_all", 1.25),
     (r"\b(shorter|lower|less\s+dense)\b", "scale_all", 0.8),
 )
+
+# Resize: footprint width/depth changes. "Widen", "narrow", "broader", "make
+# the blocks wider by 20%" -- these all change the footprint, not the height.
+RESIZE_VERB = re.compile(
+    r"\b(widen|wider|broaden|broader|narrow|narrower|shrink|smaller footprint|"
+    r"enlarge|larger footprint)\b", re.IGNORECASE)
+# Two word orders: "15% narrower" (adjective after) and
+# "narrow ... 15%" / "widen ... by 20%" (adjective before, number after).
+RESIZE_PERCENT = re.compile(
+    r"(\d+(?:\.\d+)?)\s*%\s*(?:wider|broader|narrower|smaller|larger)|"
+    r"\b(?:widen|broaden|narrow|shrink|enlarge)\w*\b[^.]{0,30}?"
+    r"(\d+(?:\.\d+)?)\s*%", re.IGNORECASE)
 
 ROTATE_VERB = r"\b(rotate|rotating|rotated|turn|twist|reorient|reorienting|re-?align)"
 ANGLE_RE = re.compile(r"(\d{1,3})\s*(?:deg|degree|degrees|\u00b0)")
@@ -1161,6 +1198,38 @@ def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
                     "scope": scope})
         break
 
+    # --- resize: footprint width/depth ------------------------------------- #
+    # "Widen the blocks by 20%", "make the footprints narrower" -- these change
+    # the footprint size, not the height. Width and depth scale together unless
+    # the instruction names only one axis ("widen" = width only, "deepen" =
+    # depth only).
+    resize_match = RESIZE_PERCENT.search(text) or (
+        RESIZE_VERB.search(text) and not any(op["op"] == "scale_all" for op in ops))
+    if resize_match:
+        pct = RESIZE_PERCENT.search(text)
+        if pct:
+            # Two word orders: "15% wider" (group 1) or "widen ... 20%" (group 2)
+            raw = pct.group(1) or pct.group(2)
+            magnitude = float(raw) / 100.0
+            matched_text = pct.group(0)
+            is_shrink = bool(re.search(
+                r"narrow|shrink|smaller", matched_text, re.IGNORECASE))
+            scale = 1.0 - magnitude if is_shrink else 1.0 + magnitude
+        else:
+            # Bare "widen"/"narrow" without a number: default 20%.
+            verb_text = RESIZE_VERB.search(text).group(0)
+            is_shrink = bool(re.search(
+                r"narrow|shrink|smaller", verb_text, re.IGNORECASE))
+            scale = 0.8 if is_shrink else 1.2
+        # "widen"/"broaden" affects width only; "deepen" would affect depth only.
+        # A generic "resize"/"enlarge" affects both.
+        width_only = bool(re.search(r"\bwiden|wider|broaden|broader\b", text, re.IGNORECASE))
+        depth_only = bool(re.search(r"\bdeepen|deeper\b", text, re.IGNORECASE))
+        ws = round(scale, 4) if width_only or not depth_only else 1.0
+        ds = round(scale, 4) if depth_only or not width_only else 1.0
+        ops.append({"op": "resize", "widthScale": ws, "depthScale": ds,
+                    "scope": scope})
+
     return ops
 
 
@@ -1332,12 +1401,13 @@ MASSING_TOOL = {
                         "op": {
                             "type": "string",
                             "enum": ["scale_all", "set_site", "rotate", "place",
-                                     "move", "reset"],
+                                     "move", "reset", "resize"],
                             "description": (
                                 "scale_all: multiply heights. set_site: set or "
                                 "shift heights. rotate: turn the blocks. place: "
                                 "add new massing. move: translate the blocks. "
-                                "reset: restore generated heights and orientations."
+                                "reset: restore generated heights and orientations. "
+                                "resize: scale footprint width and/or depth."
                             ),
                         },
                         "scope": {
@@ -1407,6 +1477,36 @@ MASSING_TOOL = {
                         "dy_m": {
                             "type": "number", "minimum": -500, "maximum": 500,
                             "description": "North-positive offset in metres.",
+                        },
+                        "target_lon": {
+                            "type": "number", "minimum": 113.0, "maximum": 115.0,
+                            "description": (
+                                "For move: a direct target longitude. The "
+                                "coordinate must be inside the study area; one "
+                                "outside is refused. Use this when the instruction "
+                                "names a specific location, e.g. 'move to the "
+                                "centre'. Prefer dx_m/dy_m for relative moves."
+                            ),
+                        },
+                        "target_lat": {
+                            "type": "number", "minimum": 22.0, "maximum": 23.0,
+                            "description": "For move: a direct target latitude.",
+                        },
+                        "width_scale": {
+                            "type": "number", "minimum": 0.1, "maximum": 10.0,
+                            "description": (
+                                "For resize: multiply the footprint width. "
+                                "1.2 = 20% wider, 0.8 = 20% narrower. "
+                                "Defaults to 1.0 (no change)."
+                            ),
+                        },
+                        "depth_scale": {
+                            "type": "number", "minimum": 0.1, "maximum": 10.0,
+                            "description": (
+                                "For resize: multiply the footprint depth. "
+                                "1.2 = 20% deeper, 0.8 = 20% shallower. "
+                                "Defaults to 1.0 (no change)."
+                            ),
                         },
                     },
                     "required": ["op"],
