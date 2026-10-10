@@ -389,6 +389,7 @@ database; the backend never knows what Cesium is.
 | `GET` | `/api/scenes/{sceneId}/ventilation/corridors` | Least-cost-path ventilation corridors, per direction |
 | `GET` | `/api/scenes/{sceneId}/heat-field` | The blended heat field, sky view, and the cited anchor band |
 | `GET` | `/api/scenes/{sceneId}/drainage/routed` | D8 fill-and-spill routing, mass balance and HAND |
+| `GET` | `/api/scenes/{sceneId}/drainage/hourly` | Hourly storm simulation — rain and drainage per hour, cited reference storms, an enforced whole-simulation mass balance, and the DSD 134 mm/h design standard as the stated capability proxy |
 | `POST` | `/api/scenes/{sceneId}/scenario/evaluate` | Three separate axis deltas — and **no combined score** |
 | `POST` | `/api/scenes/{sceneId}/scenario/compare` | Order scenarios **only under stated weights**; refuses without them |
 

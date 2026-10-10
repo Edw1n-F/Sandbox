@@ -2,6 +2,66 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-10 — hourly storm simulation: rain and drainage, hour by hour
+
+The two existing drainage readings are static: the level pool solves one total
+volume, the routed cascade routes one total volume. This adds the time axis
+— **`hourly_storm_simulation`** in `sandbox_model.py`, served by
+**`GET /api/scenes/{id}/drainage/hourly`**.
+
+### Research first (what the standard is, and what the data is not)
+
+- **DSD design standards** (DEVB LegislCo replies 9316/13895/13898, July 2024):
+  urban trunk drains 200-year; **main rural catchment drainage channels
+  50-year** — the applicable class for HSK/HT. After the 2024 Stormwater
+  Drainage Manual update the 50-year hourly design rainfall is **134 mm/h**
+  (raised from 128 after the September 2023 storm); the 200-year parameter is
+  155 mm/h. The full published 1-hour spectrum: 2-year 72.5 / 5-year 93.5 /
+  10-year 107 / 20-year 119 / 50-year 134 mm (DSD, 2025).
+- **The record event**: 2023-09-07, HKO HQ **158.1 mm/h** — the highest ever
+  recorded (DEVB 13896). Black Rainstorm Warning threshold: 70 mm/h.
+- **"Water pipes / reservoir drainage ability": no pipe asset data exists for
+  this site in this project** — and none is invented. The capability read is
+  the **published design standard used as a proxy**, stated as such in every
+  response; reservoir/pond capacity comes from the project's own
+  Priority-Flood depression capacities and STORAGE_DEPTH_M tables, already on
+  disk.
+
+### Added
+
+- **`hourly_storm_simulation`** — CN generation per hour through the SAME
+  `_runoff_and_unstored` (no second physics), per-cell retention pools carried
+  hour to hour (capacity = the LARGER of the Priority-Flood depression
+  capacity and the land-class retention allowance, never the sum — the
+  cell-scale ADR-15 double count), overflow standing on the ground until the
+  drainage capability removes it.
+- **Enforced whole-simulation mass balance**:
+  `rain_in == stored_gain + drained + standing` raises AssertionError on a
+  leak, mirroring `hydrology.mass_balance`.
+- **Cited reference hyetographs**: `hko_2023_09_07` (reconstructed hourly
+  shape around the published 158.1 mm/h peak, 450 mm total — labelled a
+  reconstruction, not a gauge trace), `dsd_50y_design` (constant 134 mm/h),
+  `black_rain_70` (70 mm/h). Custom hyetographs accepted as `mm/h` lists.
+- **The end-state routing view**: the final standing volume routed once
+  through `fill_and_spill` (the one router) to show where it pools and what
+  leaves the grid — explicitly never fed back into the march.
+- **`drained_m3_per_hour` parameter** with `0` as the no-drainage
+  counterfactual. **The capability read, measured**: on the 2023-09-07 storm,
+  1,821,982 m³ generated — with the 134 mm/h standard, 1,515,884 m³ drained
+  and **0 standing**; with zero drainage, **1,515,884 m³ standing** at the
+  peak hour. The difference is what the design standard is worth here.
+- **27 new checks** in `tests/test_hourly_storm.py`: the identity on the real
+  district, provenance echoing, the proxy label, the counterfactual,
+  full-pools-start scenario, four refusal cases, determinism, honest labels.
+  Backend total **476**.
+
+### Not claimed
+
+- No pipe network, no outfall hydraulics, no sea-level interaction, no
+  sub-hourly dynamics — all stated in every response's `warning`.
+- The 2023 storm's hourly SHAPE is a reconstruction around the published peak,
+  not a gauge trace; the response says so.
+
 ## 2026-10-09 — `place` and `reset` are scoreable, by delegation not duplication
 
 Gap 7 closed. The scenario evaluator can now score the AI's two most-used

@@ -640,6 +640,311 @@ def routed_ledger(
 
 
 # --------------------------------------------------------------------------- #
+# Hourly storm simulation: the time axis the level pool and the cascade lack
+# --------------------------------------------------------------------------- #
+
+# The drainage capability read the simulation compares against. HSK/HT is a
+# rural catchment being converted to a new development area, so the applicable
+# DSD flood-protection standard is the rural one: main rural catchment
+# drainage channels, 50-year return period. After the DSD Stormwater Drainage
+# Manual update (July 2024, LegislCo reply 13898), the 50-year hourly design
+# rainfall parameter is 134 mm/h (raised from 128 mm/h after the Sept 2023
+# storm). This is a PUBLISHED DESIGN STANDARD used as a proxy for system
+# capability -- not a measured pipe capacity. No pipe asset data exists for
+# this site in this project, and inventing one would be the overclaim this
+# project forbids. The response says exactly this, every time.
+DRAINAGE_STANDARD_MM_H = 134.0
+DRAINAGE_STANDARD_NOTE = (
+    "The drainage capability this simulation compares against is the DSD "
+    "published design standard for main rural catchment drainage channels "
+    "(50-year return period): 134 mm/h hourly design rainfall, from the "
+    "updated Stormwater Drainage Manual (July 2024). This is a published "
+    "design standard used as a PROXY for system capability -- no pipe or "
+    "outfall asset data exists for this site in this project, and none is "
+    "invented."
+)
+
+# Reference hyetographs the caller can name instead of typing hourly numbers.
+# Each is a real Hong Kong event or standard, cited; the response echoes which
+# one ran and where the numbers came from.
+REFERENCE_HYETOGRAPHS: dict[str, dict[str, Any]] = {
+    # The 2023-09-07 record storm: HKO HQ 158.1 mm in the peak hour (LegislCo
+    # reply 13896), ~450 mm event total. Hour shape is a published peak with a
+    # realistic rise/decay, labelled as a RECONSTRUCTION, not a gauge trace
+    # (the hourly gauge trace for this event is not in the committed data).
+    "hko_2023_09_07": {
+        "label": "2023-09-07 record storm (reconstructed hourly shape)",
+        "mmPerHour": [10.0, 25.0, 60.0, 120.0, 158.1, 45.0, 20.0, 11.9],
+        "source": ("HKO HQ peak-hour rainfall 158.1 mm (DEVB LegislCo reply "
+                   "13896, July 2024); event total ~450 mm over 8 hours. The "
+                   "hour-by-hour SHAPE is a reconstruction, not a gauge trace."),
+    },
+    # The DSD design standard for this catchment type, as a design block.
+    "dsd_50y_design": {
+        "label": "DSD 50-year rural design storm (constant intensity)",
+        "mmPerHour": [134.0] * 6,
+        "source": ("Stormwater Drainage Manual (2024 update), 50-year hourly "
+                   "design rainfall 134 mm/h for rural main drainage channels."),
+    },
+    # Black Rainstorm Warning threshold as a reference point: 70 mm/h.
+    "black_rain_70": {
+        "label": "Black Rainstorm Warning threshold (constant intensity)",
+        "mmPerHour": [70.0] * 6,
+        "source": ("HKO Black Rainstorm Warning criterion: hourly rainfall "
+                   "around 70 mm."),
+    },
+}
+DEFAULT_HYETOGRAPH = "hko_2023_09_07"
+
+HOURLY_STATUS = "SCREENING_HOURLY_MASS_BALANCE_ENFORCED"
+HOURLY_WARNING = (
+    "Not a flood prediction. Not engineering-grade. A screening-level hourly "
+    "water balance: CN generation per hour, retention filling and spilling "
+    "per hour, an enforced mass balance over the whole simulation, and a "
+    "published design standard as the drainage-capability proxy. No pipe "
+    "network, no outfall hydraulics, no sea-level interaction."
+)
+
+
+def hourly_storm_simulation(
+    grids: Grids,
+    hyetograph: list[float] | None = None,
+    hyetograph_name: str | None = None,
+    initial_retention_fill: float = 0.0,
+    drained_m3_per_hour: float | None = None,
+) -> dict[str, Any]:
+    """Simulate the storm hour by hour, with the retention state carried forward.
+
+    This is the time axis the two existing drainage readings lack: the level
+    pool solves one static volume, and the routed cascade routes one static
+    volume. Here each hour's rain generates runoff through the SAME CN table
+    (:func:`_runoff_and_unstored` -- no second physics), the per-cell retention
+    pool state carries hour to hour (a pond that filled at hour 2 has less
+    room at hour 5), and the water that finds no pool stands on the ground
+    until the system's drainage capability removes it.
+
+    **Drainage capability, stated honestly.** There is no pipe asset data for
+    this site in this project. The capability read is the DSD published
+    design standard for this catchment type -- rural main drainage channels,
+    50-year return period, 134 mm/h hourly design rainfall (Stormwater
+    Drainage Manual, 2024 update). Set ``drained_m3_per_hour=0`` for the
+    no-drainage counterfactual; the response always says which read it ran.
+
+    **The books are enforced, not reported.** Over the whole simulation:
+
+        rain_in == stored_gain + drained + standing_end
+
+    A leak anywhere raises AssertionError, the same contract
+    :func:`hydrology.mass_balance` enforces on the static cascade. The final
+    standing volume is then routed once through :func:`fill_and_spill` -- the
+    project's one router -- to show where it pools and what would leave the
+    grid; that pass is a decomposition *view* of ``standing_end`` and never
+    feeds back into the march.
+
+    Deterministic: no RNG, no wall-clock. ``initial_retention_fill`` is a
+    fraction in [0, 1] -- how full the ponds start (0: dry; 1: already full,
+    the wet-season worst case).
+    """
+    if not 0.0 <= float(initial_retention_fill) <= 1.0:
+        return {"error": "initial_retention_fill must be within [0, 1]"}
+
+    if grids.receiver is None or grids.raw_elevation_5m is None:
+        return {
+            "status": "ROUTING_UNAVAILABLE",
+            "reason": (
+                "flow_receiver_hsk.npy and flow_raw_elev_hsk.npy not found; "
+                "run scripts/make_wetgrid.py"
+            ),
+            "warning": (
+                "Run scripts/make_wetgrid.py to generate the receiver and raw "
+                "surface. Not a flood prediction."
+            ),
+        }
+
+    # --- resolve the hyetograph ------------------------------------------- #
+    if hyetograph is not None:
+        if (not isinstance(hyetograph, list) or len(hyetograph) == 0
+                or not all(isinstance(v, (int, float)) and v >= 0
+                           for v in hyetograph)):
+            return {"error": "hyetograph must be a non-empty list of >= 0 mm/h"}
+        mm_per_hour = [float(v) for v in hyetograph]
+        ran_name = "custom"
+        hyetograph_source = "Caller-supplied hourly rainfall (mm per hour)."
+    else:
+        name = hyetograph_name or DEFAULT_HYETOGRAPH
+        if name not in REFERENCE_HYETOGRAPHS:
+            return {
+                "error": (f"unknown hyetograph {name!r}; known are "
+                          f"{sorted(REFERENCE_HYETOGRAPHS)}"),
+            }
+        mm_per_hour = list(REFERENCE_HYETOGRAPHS[name]["mmPerHour"])
+        ran_name = name
+        hyetograph_source = REFERENCE_HYETOGRAPHS[name]["source"]
+
+    hours = len(mm_per_hour)
+    cell_area = grids.cell_area_m2
+    rows, cols = grids.rows, grids.cols
+    n = rows * cols
+
+    # --- the static geometry, computed once -------------------------------- #
+    # A cell's pool capacity is the LARGER of its Priority-Flood depression
+    # capacity ((filled - raw) * A, the same definition fill_and_spill applies)
+    # and its land-class retention allowance (the same STORAGE_DEPTH_M table
+    # the ledger uses). Never the sum: both describe the same physical water,
+    # and adding them is the cell-scale shape of the ADR-15 double count.
+    retention_cap_m = np.full((rows, cols), DEPRESSION_STORAGE_M,
+                              dtype=np.float64)
+    for _name, _depth in STORAGE_DEPTH_M.items():
+        retention_cap_m[grids.land_class == LAND_CLASSES.index(_name)] = _depth
+    filled_f = np.asarray(grids.elevation_5m, dtype=np.float64).ravel()
+    raw_f = np.asarray(grids.raw_elevation_5m, dtype=np.float64).ravel()
+    depression_cap_m3 = np.maximum(0.0, filled_f - raw_f) * cell_area
+    pool_cap_m3 = np.maximum(depression_cap_m3,
+                             retention_cap_m.ravel() * cell_area)
+
+    # The carried state: how much water sits in each cell's pool.
+    pool_m3 = pool_cap_m3 * float(initial_retention_fill)
+    initial_stored = float(pool_m3.sum())
+
+    # The system's hourly capability, as a district-wide volume.
+    if drained_m3_per_hour is None:
+        drained_m3_per_hour = (DRAINAGE_STANDARD_MM_H / 1000.0
+                               * (n * cell_area))
+
+    # --- the hourly march -------------------------------------------------- #
+    rain_in_total = 0.0
+    drained_total = 0.0
+    standing_m3 = 0.0  # surface water with nowhere left to go, carried over
+    hourly_rows: list[dict[str, Any]] = []
+
+    for h, mm in enumerate(mm_per_hour):
+        # 1. This hour's generation: the SAME CN table, this hour's rain only.
+        _runoff_m, unstored_m = _runoff_and_unstored(grids.land_class, mm)
+        inflow_m3 = np.asarray(unstored_m, dtype=np.float64).ravel() * cell_area
+        generated = float(inflow_m3.sum())
+        rain_in_total += generated
+
+        # 2. Fill the per-cell pools: each pool takes up to its remaining room.
+        room_m3 = pool_cap_m3 - pool_m3
+        uptake = np.minimum(inflow_m3, room_m3)
+        pool_m3 = pool_m3 + uptake
+        overflow = float((inflow_m3 - uptake).sum())
+
+        # 3. Drainage: the published capability removes from this hour's
+        #    overflow plus whatever was already standing. It cannot remove
+        #    water that is inside a retention pool (that is storage, not
+        #    surface water) and it cannot go below zero.
+        standing_m3 += overflow
+        drained_h = min(drained_m3_per_hour, standing_m3)
+        standing_m3 -= drained_h
+        drained_total += drained_h
+
+        # 4. This hour's levels: the pool state, as depths.
+        depth = (pool_m3 / cell_area).reshape(rows, cols)
+        wet = int((depth > 0).sum())
+        hourly_rows.append({
+            "hour": h,
+            "rainfallMm": round(mm, 2),
+            "generatedM3": round(generated, 1),
+            "storedM3": round(float(pool_m3.sum()), 1),
+            "drainedM3": round(drained_h, 1),
+            "standingM3": round(standing_m3, 1),
+            "wetCells": wet,
+            "meanPoolDepthM": round(float(pool_m3.sum()) / (wet * cell_area), 4)
+            if wet else 0.0,
+            "standingMeanDepthMm": round(
+                standing_m3 / (n * cell_area) * 1000.0, 4),
+        })
+
+    # --- the whole-simulation identity, enforced --------------------------- #
+    # rain_in == stored_gain + drained + standing_end. stored_end counts the
+    # initial fill, so the gain subtracts it: only THIS storm's water is on the
+    # books. A leak anywhere in the march raises here rather than reporting.
+    stored_gain = float(pool_m3.sum()) - initial_stored
+    residual = rain_in_total - (stored_gain + drained_total + standing_m3)
+    tol = 1e-6
+    if abs(residual) > tol * max(1.0, rain_in_total):
+        raise AssertionError(
+            f"hourly simulation mass balance broken: rain {rain_in_total:,.1f}"
+            f" m3 != stored {stored_gain:,.1f} + drained {drained_total:,.1f}"
+            f" + standing {standing_m3:,.1f} (residual {residual:,.3f} m3)"
+        )
+
+    # --- the end-state routing view, via the one router -------------------- #
+    # Where the standing water pools and what leaves the grid, computed once
+    # from the final standing volume. A VIEW: it never feeds back into the
+    # march, and its own books are enforced by fill_and_spill itself.
+    if standing_m3 > 0:
+        standing_field = np.full(n, standing_m3 / n, dtype=np.float64)
+        end_cascade = fill_and_spill(
+            filled=grids.elevation_5m,
+            raw=grids.raw_elevation_5m,
+            receiver=grids.receiver,
+            runoff_in_m3=standing_field,
+            cell_area_m2=cell_area,
+        )
+        end_view = {
+            "status": "ROUTED_END_STATE",
+            "note": ("The final standing volume routed once through the D8 "
+                     "fill-and-spill cascade, as a view of where it pools and "
+                     "what leaves the grid. It is not fed back into the "
+                     "hourly march."),
+            "standingInM3": round(standing_m3, 1),
+            "standingPooledM3": round(float(end_cascade["storedM3"]), 1),
+            "standingDischargedM3": round(float(end_cascade["dischargedM3"]), 1),
+            "standingMaxDepthM": round(float(end_cascade["maxDepthM"]), 4),
+        }
+    else:
+        end_view = {
+            "status": "NO_STANDING_WATER",
+            "note": "Nothing left standing at the end of the simulation.",
+        }
+
+    peak_row = max(hourly_rows, key=lambda r: r["standingM3"])
+
+    return {
+        "hyetograph": {
+            "name": ran_name,
+            "label": (REFERENCE_HYETOGRAPHS[ran_name]["label"]
+                      if ran_name in REFERENCE_HYETOGRAPHS else "custom"),
+            "mmPerHour": mm_per_hour,
+            "totalMm": round(sum(mm_per_hour), 1),
+            "source": hyetograph_source,
+        },
+        "hours": hours,
+        "initialRetentionFill": float(initial_retention_fill),
+        "drainageCapability": {
+            "drainedM3PerHour": round(float(drained_m3_per_hour), 1),
+            "proxyNote": DRAINAGE_STANDARD_NOTE,
+        },
+        "totals": {
+            "rainInM3": round(rain_in_total, 1),
+            "storedM3": round(stored_gain, 1),
+            "drainedM3": round(drained_total, 1),
+            "standingAtEndM3": round(standing_m3, 1),
+            "retainedAtEndM3": round(float(pool_m3.sum()), 1),
+        },
+        "massBalance": {
+            "identity": ("rain_in == stored_gain + drained + standing_end"),
+            "residualM3": round(residual, 6),
+            "relativeResidual": round(
+                abs(residual) / max(rain_in_total, 1e-9), 12),
+            "tol": tol,
+            "enforced": True,
+        },
+        "peaks": {
+            "peakStandingM3": peak_row["standingM3"],
+            "peakStandingHour": peak_row["hour"],
+            "peakWetCells": max(r["wetCells"] for r in hourly_rows),
+        },
+        "hourly": hourly_rows,
+        "endStateRouting": end_view,
+        "status": HOURLY_STATUS,
+        "warning": HOURLY_WARNING,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Buffer deficit: the headline number, and what a scenario does to it
 # --------------------------------------------------------------------------- #
 

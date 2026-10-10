@@ -1023,3 +1023,78 @@ def get_drainage_routed(scene_id: str, rainfall_mm: float | None = None,
         rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM)
     result["sceneId"] = scene_id
     return result
+
+
+@router.get("/scenes/{scene_id}/drainage/hourly")
+def get_drainage_hourly(
+    scene_id: str,
+    hyetograph_name: str | None = None,
+    hyetographName: str | None = None,  # noqa: N803
+    hyetograph: str | None = None,  # comma-separated mm/h, e.g. "10,25,60,120"
+    initial_retention_fill: float | None = None,
+    initialRetentionFill: float | None = None,  # noqa: N803
+    drained_m3_per_hour: float | None = None,
+    drainedM3PerHour: str | None = None,  # noqa: N803 - "0" for no drainage
+) -> dict:
+    """GET /api/scenes/{sceneId}/drainage/hourly?hyetograph_name=hko_2023_09_07
+
+    The hourly storm simulation: rain level and drainage, hour by hour.
+
+    Each hour's rain generates runoff through the project's own CN table, the
+    per-cell retention pools fill (a pool filled at hour 2 has less room at
+    hour 5), and the system's drainage capability removes standing water up to
+    the DSD published design standard for this catchment type (134 mm/h,
+    50-year rural, Stormwater Drainage Manual 2024 update) -- or up to a
+    caller-supplied rate, with ``drained_m3_per_hour=0`` as the no-drainage
+    counterfactual. The whole-simulation mass balance
+    (``rain_in == stored_gain + drained + standing_end``) is **enforced**, not
+    reported, and the final standing volume is routed once through the D8
+    cascade as a view of where it pools.
+
+    **Not a flood prediction.** The drainage capability is a published design
+    standard used as a proxy -- no pipe asset data exists for this site and
+    none is invented; the response says so every time.
+
+    ``hyetograph`` is a comma-separated list of mm/h ("10,25,60,120");
+    ``hyetograph_name`` names one of the cited reference storms
+    (``hko_2023_09_07`` | ``dsd_50y_design`` | ``black_rain_70``). camelCase
+    spellings of every parameter are accepted as everywhere else in this
+    router.
+    """
+    if hyetographName is not None:
+        hyetograph_name = hyetographName
+    if initialRetentionFill is not None:
+        initial_retention_fill = initialRetentionFill
+    if drainedM3PerHour is not None:
+        drained_m3_per_hour = float(drainedM3PerHour)
+
+    scene_service.get_scene(scene_id)
+    grids = _require_grids()
+
+    hyeto: list[float] | None = None
+    if hyetograph is not None:
+        try:
+            hyeto = [float(v) for v in hyetograph.split(",") if v.strip()]
+        except ValueError:
+            raise HTTPException(
+                status_code=422,
+                detail="hyetograph must be comma-separated numbers, e.g. '10,25,60'",
+            ) from None
+        if not hyeto:
+            raise HTTPException(status_code=422,
+                                detail="hyetograph must contain at least one value")
+
+    from app.services.sandbox_model import hourly_storm_simulation
+
+    result = hourly_storm_simulation(
+        grids,
+        hyetograph=hyeto,
+        hyetograph_name=hyetograph_name,
+        initial_retention_fill=(float(initial_retention_fill)
+                                if initial_retention_fill is not None else 0.0),
+        drained_m3_per_hour=drained_m3_per_hour,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=422, detail=result["error"])
+    result["sceneId"] = scene_id
+    return result
