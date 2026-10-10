@@ -2,7 +2,46 @@
 
 Every non-trivial change gets an entry. Newest first.
 
-## 2026-10-09 — Stage 5c at the response level, gap 8's one-view half, Stage 7 recorded
+## 2026-10-09 — `place` and `reset` are scoreable, by delegation not duplication
+
+Gap 7 closed. The scenario evaluator can now score the AI's two most-used
+operations, and the mechanism is the whole point: **the evaluator does not
+re-implement the generator, it calls it.**
+
+### Added
+
+- **`place` in `apply_massing`.** Calls the AI planner's own
+  `placement_footprints()` — the same ESA WorldCover paved mask, the same
+  `make_citymodel.build_blocks` pitch, the same occupied-cell exclusion — and
+  converts each ring through a new shared `footprint_from_ring()` conversion
+  extracted from `footprints_from_geojson` so there is exactly one
+  ring→footprint definition in the project. Measured: `place count=3 east`
+  adds exactly 3 envelopes (2,639 → 2,642), moves shade (+), and leaves the
+  drainage delta at exactly 0 because placed blocks sit on already-paved
+  cells — arithmetic the response still states. A scope with no unbuilt paved
+  land places nothing and reports `placedCount: 0` rather than inventing a
+  block in a field.
+- **`reset` in `apply_massing`.** Restores the generated baseline the way the
+  viewer's reset does — discarding every earlier op in the sequence, removing
+  placed blocks — then lets later ops apply on the fresh baseline. Pinned by
+  three checks: `[scale, reset]` → baseline heights; `[scale, reset, scale]` →
+  the second scale applies; `[place, reset]` → placed blocks gone.
+- **`height_m_new` on `MassingOp`**, now parsed in `_parse_massing_ops`
+  (camelCase `heightMNew` accepted), so a `place` op can carry its own height.
+
+### Changed
+
+- `evaluate()`'s `unsupportedOps` is now `[]`; the response instead carries
+  `supportedOps` (all six), `placedCount`, a `placedCountNote` explaining the
+  count, and an `opsNote` stating the delegation design.
+
+### Tests
+
+- 6 new checks in `test_scenario` (58 total): place adds exactly N envelopes,
+  place moves shade, place leaves drainage at exactly 0, reset restores, reset
+  clears placed blocks, ops-after-reset apply. Backend total **449**.
+
+## 2026-10-09 — Stage 5c at the response level, and one view of two drainage readings
 
 Three things were overdue on the books: the corridors' NE/SW response no longer
 carries direction-blind readings, the two drainage readings are reconciled in one

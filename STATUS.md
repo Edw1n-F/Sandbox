@@ -3,19 +3,19 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 416 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 449 backend + 104 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **416** on
-> 2026-10-09 (404 after the Stage 4b anchor tests, +5 Stage 5c corridor checks,
-> +6 routed-reconciliation checks, +1 count correction). The frontend figure of 104 is
+> leaves the other's alone. Backend counts below were re-verified at **449** on
+> 2026-10-09 (416 after the Stage 5c/reconciliation increment, +6 place/reset checks,
+> +1 count correction, +12 place/reset/identity checks). The frontend figure of 104 is
 > the frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
-| backend `test_scenario` | 54/54 | `python tests/test_scenario.py` |
+| backend `test_scenario` | 58/58 | `python tests/test_scenario.py` |
 | backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
 | backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
@@ -181,9 +181,6 @@ already exist and are tested.
 
 ### Next, in order
 
-- **`place` and `reset` remain unscoreable.** The AI's most-used operations are
-  placeable but not scoreable, because both belong to the city-model generator and
-  reimplementing either in the evaluator would drift from it.
 - **`sea_level_scenario` still reasons about retention submergence rather than
   outfall capacity**, which is where sea level would actually bite. The routed
   cascade now exists and could host the outfall question; the level-pool headline
@@ -230,12 +227,20 @@ Ordered by what would hurt a user first.
 
 ### Gaps in the heat / wind / drainage work
 
-7. **The scenario evaluator cannot score `place` or `reset`.** Both need footprints
-   generated on unbuilt paved land, or the seeded heights restored, and both belong to
-   the city-model generator. Reimplementing either in the evaluator would drift from it,
-   so the response lists them under `unsupportedOps` and says why rather than
-   approximating. Real gap before the demo: the AI's most-used operations are
-   placeable but not scoreable.
+7. **~~The scenario evaluator cannot score `place` or `reset`.~~** **Closed 9 Oct
+   2026, by delegation.** The gap was real: both ops need footprints generated on
+   unbuilt paved land, or the seeded heights restored, and both belong to the
+   city-model generator. The fix is not a second implementation but a call into
+   the generator's own code: `place` invokes the AI planner's
+   `placement_footprints()` (same ESA paved mask, same block pitch, same
+   occupied-cell exclusion) and converts rings through the one
+   `footprint_from_ring()` conversion now shared by the loader, the planner and
+   the evaluator; `reset` restores the generated baseline exactly as the
+   viewer's reset does, discarding every earlier op in the sequence. Measured:
+   `place count=3 east` adds exactly 3 envelopes (2,639 → 2,642), moves shade,
+   and leaves drainage at exactly 0 (placed blocks sit on already-paved cells —
+   arithmetic, honestly stated). `unsupportedOps` is now `[]` and the response
+   reports `placedCount`.
 8. **Two drainage readings coexist by design; they are now shown side by side.**
    The routed fill-and-spill cascade balances to 1e-14 and sits **beside** the
    level-pool solve rather than replacing it: the headline `bufferDeficitM3` and

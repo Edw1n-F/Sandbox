@@ -251,6 +251,18 @@ ordering must state its weights.
 
 ## Progress log
 
+- **9 Oct 2026 (night), gap 7 closed: `place` and `reset` are scoreable.** The
+  old entry said reimplementing either "would drift from the generator" — right,
+  and that is exactly why the fix is a **call, not a copy**: `apply_massing`'s
+  `place` invokes the planner's own `placement_footprints()` (one generator, one
+  block pitch), and its `reset` mirrors the viewer's reset semantics (discard
+  prior ops, restore the generated baseline). A new shared
+  `footprint_from_ring()` in `design_metrics` gives the loader, the planner and
+  the evaluator one ring→footprint definition instead of three drift-prone ones.
+  Measured on the real district: `place count=3 east` → 2,639 → 2,642 envelopes,
+  shade moves, drainage delta exactly 0 (paved cells — arithmetic, stated).
+  Backend total **449**.
+
 - **9 Oct 2026 (evening), Stage 5c at the response level + gap 8's one-view half.**
   The corridors' cost surface stays `1 + cellFAD` — re-weighting it by the
   arrangement would be an invented weight — but each corridor now carries the
