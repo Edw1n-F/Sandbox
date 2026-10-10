@@ -11,7 +11,6 @@ import {
   ColorMaterialProperty,
   ConstantProperty,
   GeoJsonDataSource,
-  HeightReference,
   type Viewer,
 } from 'cesium'
 
@@ -110,21 +109,10 @@ function applyStyle(dataSource: GeoJsonDataSource): void {
       }
     }
 
-    // Extrusion is set from absolute metres, so the polygon must NOT also be
-    // clamped to ground -- otherwise the two offsets compound and the block
-    // floats. Polygons without an extrusion height stay clamped.
     const height = style.extrusionHeight
-    if (entity.polygon) {
-      if (height) {
-        entity.polygon.extrudedHeight = new ConstantProperty(height)
-        entity.polygon.heightReference = new ConstantProperty(
-          HeightReference.NONE,
-        )
-      } else {
-        entity.polygon.heightReference = new ConstantProperty(
-          HeightReference.CLAMP_TO_GROUND,
-        )
-      }
+    if (entity.polygon && height) {
+      entity.polygon.height = new ConstantProperty(0)
+      entity.polygon.extrudedHeight = new ConstantProperty(height)
     }
   }
 }

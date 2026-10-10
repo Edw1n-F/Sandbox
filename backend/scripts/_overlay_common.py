@@ -231,7 +231,19 @@ def _load_or_synthesise_dem(
             dem = np.load(dem_file).astype(np.float64)
             if dem.ndim == 2 and dem.shape[0] > 1 and dem.shape[1] > 1:
                 if not np.isnan(dem).any():
-                    return _bilinear_resample(dem, rows, cols), "open-meteo"
+                    # Determine provenance from sidecar if available.
+                    sidecar = settings.data_dir / "dem_hsk.json"
+                    source_label = "open-meteo"
+                    if sidecar.exists():
+                        try:
+                            import json as _json
+                            _meta = _json.loads(sidecar.read_text(encoding="utf-8"))
+                            src = _meta.get("source", "")
+                            if "Lands Dept" in src or "6-NW-12D" in src:
+                                source_label = "lands-dept-6nw12d"
+                        except Exception:  # noqa: BLE001
+                            pass
+                    return _bilinear_resample(dem, rows, cols), source_label
         except (OSError, ValueError):
             pass
     return _synthetic_surface(rows, cols, land), "synthetic"

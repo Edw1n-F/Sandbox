@@ -12,6 +12,8 @@ Responsibilities beyond wiring:
   ``code``.  The frontend therefore needs one error branch, not three.
 """
 
+import mimetypes
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +24,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import settings
 from app.routers import plans, scenes, terrain
 from app.services.scene_service import ResourceNotFound
+
+# Starlette's StaticFiles uses the Python mimetypes module. 3D Tiles binary
+# formats are not registered by default, which causes them to be served as
+# text/plain and breaks Cesium's loader.
+mimetypes.add_type("application/octet-stream", ".b3dm")
+mimetypes.add_type("application/octet-stream", ".pnts")
+mimetypes.add_type("application/octet-stream", ".i3dm")
+mimetypes.add_type("application/octet-stream", ".cmpt")
 
 app = FastAPI(
     title=settings.app_title,

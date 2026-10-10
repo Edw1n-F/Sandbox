@@ -10,18 +10,25 @@
  */
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
-import { Cartesian3, Color, ConstantProperty, Viewer, type ImageryLayer } from 'cesium'
+import {
+  Cartesian3,
+  Color,
+  ColorMaterialProperty,
+  ConstantProperty,
+  GeoJsonDataSource,
+  ImageryLayer,
+  JulianDate,
+  Math as CesiumMath,
+  PerspectiveFrustum,
+  UrlTemplateImageryProvider,
+  Viewer,
+} from 'cesium'
 import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
-import {
-  addCityModel,
-  type CityModelHandle,
-  type MassingCollection,
-  type MassingOp,
-} from './cityModel'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
+import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { addInterventions } from './interventionLayer'
 import {
   createBaseImageryLayer,
@@ -30,34 +37,10 @@ import {
   polygonToRectangle,
 } from './terrainLoader'
 
-/** The live city-model handle, so the panel can edit geometry without prop drilling. */
-let cityModelHandle: CityModelHandle | null = null
 let propsHandle: OnlinePropHandle | null = null
+let tilesetHandle: TilesetHandle | null = null
 
-/** Massing ops from the active plan, held until the city model exists. */
-const pendingMassingOps = { current: [] as MassingOp[] }
-
-/**
- * Selection notification. Holds a revision counter rather than the selection
- * itself: the panel calls `cityModelStats()` when it re-renders, so there is
- * exactly one source of truth for what is selected.
- */
-const useCityModel = create<{ rev: number }>(() => ({ rev: 0 }))
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
-
-/** Called by the panel's editing controls. Returns the number of buildings changed. */
-export function editCityModelHeights(multiplier: number): number {
-  return cityModelHandle ? cityModelHandle.setAllHeights(multiplier) : 0
-}
-export function setCityModelBuildingHeight(id: string, metres: number): boolean {
-  if (!cityModelHandle || !cityModelHandle.entities.has(id)) return false
-  cityModelHandle.setBuildingHeight(id, metres)
-  return true
-}
-/** Subscribe to selection changes. Returns a revision the panel can ignore. */
-export function useCityModelRevision(): number {
-  return useCityModel((s) => s.rev)
-}
 
 export function usePropsRevision(): number {
   return useProps((s) => s.rev)
@@ -65,17 +48,6 @@ export function usePropsRevision(): number {
 
 export function onlinePropStatus(): { loaded: number; failed: number } {
   return { loaded: propsHandle?.loaded().length ?? 0, failed: propsHandle?.failed().length ?? 0 }
-}
-
-export function cityModelStats(): { count: number; mean: number; selected: string | null } {
-  return {
-    count: cityModelHandle?.entities.size ?? 0,
-    mean: cityModelHandle?.meanHeight() ?? 0,
-    selected: cityModelHandle?.selected() ?? null,
-  }
-}
-export function selectCityBuilding(id: string | null): void {
-  cityModelHandle?.select(id)
 }
 
 /**
@@ -117,19 +89,24 @@ export const cameraControl: {
 export default function SandboxViewer() {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<Viewer | null>(null)
+  const osmBaseRef = useRef<ImageryLayer | null>(null)
   const baseRef = useRef<ImageryLayer | null>(null)
   const overlaysRef = useRef<Record<'wetGrid' | 'heatmap', ImageryLayer | null>>({
     wetGrid: null,
     heatmap: null,
   })
   const boundaryRef = useRef<string | null>(null)
+  const waterbodySourceRef = useRef<GeoJsonDataSource | null>(null)
+  const infraSourceRef = useRef<GeoJsonDataSource | null>(null)
 
   const bbox = useSceneStore((s) => s.scene?.bbox ?? null)
   const terrainMeta = useSceneStore((s) => s.terrain)
   const interventions = usePlanStore((s) => s.interventions)
   const showInterventions = useSceneStore((s) => s.layers.interventions)
-  const showCityModel = useSceneStore((s) => s.layers.cityModel ?? true)
+  const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
+  const showWaterbody = useSceneStore((s) => s.layers.waterbody ?? true)
+  const showInfrastructure = useSceneStore((s) => s.layers.infrastructure ?? true)
   const layers = useSceneStore((s) => s.layers)
 
   // ---- create the viewer once -------------------------------------------
@@ -153,13 +130,73 @@ export default function SandboxViewer() {
       selectionIndicator: false,
       requestRenderMode: true,
     })
+    // Required for CLAMP_TO_GROUND / RELATIVE_TO_GROUND to work correctly against
+    // the terrain-RGB surface. Without this buildings appear to float or sink.
+    viewer.scene.globe.depthTestAgainstTerrain = true
+
+    // This is a local planning sandbox, not a global globe viewer. Disable the
+    // space backdrop and keep a neutral background so the study area reads as
+    // a design model rather than a planet.
+    if (viewer.scene.skyBox) viewer.scene.skyBox.show = false
+    if (viewer.scene.sun) viewer.scene.sun.show = false
+    if (viewer.scene.moon) viewer.scene.moon.show = false
+    viewer.scene.backgroundColor = Color.fromCssColorString('#e8e8e8')
+    viewer.scene.screenSpaceCameraController.minimumZoomDistance = 50
+    viewer.scene.screenSpaceCameraController.maximumZoomDistance = 20000
+
+    // Narrow the default FOV so a small study area does not look like it is
+    // wrapped around a sphere. Cesium manages aspectRatio automatically on
+    // the default frustum; replacing it breaks that, so we only adjust fov.
+    const frustum = viewer.scene.camera.frustum
+    if (frustum instanceof PerspectiveFrustum) {
+      frustum.fov = CesiumMath.toRadians(45)
+    }
+
     viewerRef.current = viewer
+
+    // OSM as the permanent base layer — added once here, never removed.
+    // This ensures the globe has a full-coverage background so that
+    // SingleTileImageryProvider (the Lands Dept texture) does not stretch its
+    // edge pixels beyond its imageryBbox rectangle.
+    const osm = new ImageryLayer(
+      new UrlTemplateImageryProvider({
+        url: '/osm-tiles/{z}/{x}/{y}.png',
+        maximumLevel: 19,
+      })
+    )
+    viewer.imageryLayers.add(osm)
+    osmBaseRef.current = osm
+
+    // Snap the camera to HSK/HT before the scene API responds.
+    // setView() is synchronous and unconditional — the user never sees the
+    // default full-globe view, not even for a single frame.
+    const initScene = useSceneStore.getState().scene
+    const initCam = initScene?.defaultCamera
+    viewer.camera.setView({
+      destination: Cartesian3.fromDegrees(
+        initCam?.longitude ?? 113.9935,
+        initCam?.latitude  ?? 22.435,
+        initCam?.height    ?? 800,
+      ),
+      orientation: {
+        heading: CesiumMath.toRadians(initCam?.heading ?? 0),
+        pitch:   CesiumMath.toRadians(initCam?.pitch   ?? -22),
+        roll: 0,
+      },
+    })
 
     cameraControl.flyToBbox = () => flyTo(viewer, true)
     cameraControl.reset = () => flyTo(viewer, false)
 
+    // If the scene was already loaded before this viewer instance was created
+    // (common in StrictMode remounts), frame it with the full bbox fly-in.
+    if (initScene) {
+      flyTo(viewer, true, 0)
+    }
+
     return () => {
       overlaysRef.current = { wetGrid: null, heatmap: null }
+      osmBaseRef.current = null
       baseRef.current = null
       boundaryRef.current = null
       viewerRef.current = null
@@ -176,12 +213,8 @@ export default function SandboxViewer() {
     let cancelled = false
 
     void createTerrainProvider(terrainMeta, bbox).then((binding) => {
-      // The viewer may have been replaced (StrictMode remount) while the DEM
-      // image was in flight; applying it to a dead viewer is the crash guarded
-      // against by isLive().
       if (cancelled || !isLive(viewer)) return
       viewer.terrainProvider = binding.terrainProvider
-      // Disclose the fallback rather than hiding it; ScenePanel renders this.
       useSceneStore.setState((s) => ({
         scene: s.scene
           ? {
@@ -191,27 +224,56 @@ export default function SandboxViewer() {
             }
           : s.scene,
       }))
-      // Re-frame once the terrain is real.
-      //
-      // The camera was fitted to the bbox while the surface was still flat, so
-      // a study area with 141 m of relief leaves the camera *inside* a hill and
-      // the globe renders black. Fitting again against the loaded terrain is the
-      // fix, and it has to happen here rather than at init because the terrain
-      // arrives asynchronously.
+      // Clamp the camera centre to the scene bbox so the user cannot pan into
+      // the featureless globe where clamp-to-edge artifacts are visible.
+      const ring = bbox?.coordinates?.[0]
+      if (ring) {
+        const lons = ring.map((p: number[]) => p[0])
+        const lats = ring.map((p: number[]) => p[1])
+        const margin = 0.25  // degrees of extra room beyond the bbox edge
+        const lonMin = Math.min(...lons) - margin
+        const lonMax = Math.max(...lons) + margin
+        const latMin = Math.min(...lats) - margin
+        const latMax = Math.max(...lats) + margin
+        viewer.scene.preUpdate.addEventListener(() => {
+          if (!isLive(viewer)) return
+          const carto = viewer.camera.positionCartographic
+          const lon = CesiumMath.toDegrees(carto.longitude)
+          const lat = CesiumMath.toDegrees(carto.latitude)
+          if (lon < lonMin || lon > lonMax || lat < latMin || lat > latMax) {
+            viewer.camera.flyTo({
+              destination: Cartesian3.fromDegrees(
+                Math.min(Math.max(lon, lonMin), lonMax),
+                Math.min(Math.max(lat, latMin), latMax),
+                carto.height,
+              ),
+              duration: 0.3,
+            })
+          }
+        })
+      }
       if (binding.terrainIsReal) {
         flyTo(viewer, true, 0)
         viewer.scene.requestRender()
       }
     })
 
-    const base = createBaseImageryLayer(terrainMeta)
-    viewer.imageryLayers.add(base)
-    baseRef.current = base
+    // createBaseImageryLayer is async (SingleTileImageryProvider.fromUrl must
+    // await image load) and may return null when no imagery is configured.
+    
+    void createBaseImageryLayer(terrainMeta).then((base) => {
+      if (!base || cancelled || !isLive(viewer)) return
+      viewer.imageryLayers.add(base)
+      baseRef.current = base
+      viewer.scene.requestRender()
+    })
+    
 
     return () => {
       cancelled = true
+      const base = baseRef.current
       // Guarded: under StrictMode this cleanup can run after destroy().
-      if (isLive(viewer) && viewer.imageryLayers.contains(base)) {
+      if (base && isLive(viewer) && viewer.imageryLayers.contains(base)) {
         viewer.imageryLayers.remove(base, false)
       }
       baseRef.current = null
@@ -312,66 +374,46 @@ export default function SandboxViewer() {
   // ---- initial camera placement -----------------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!isLive(viewer)) return
+    if (!isLive(viewer) || !bbox) return
+    // setView on first bbox arrival (no animation): the camera is already near
+    // the study area from the init setView above, so no fly-in is needed.
     flyTo(viewer, true, 0)
     // Placement happens once per scene load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bbox])
 
-  // ---- 3D city model ------------------------------------------------------
-  //
-  // Loaded once per scene and then edited in place. The handle is module-level
-  // so the panel's height controls can drive it without threading a ref through
-  // three components -- the alternative was a context, which for one mutable
-  // object is ceremony.
+  // ---- 3D Tiles real buildings (6-NW-12D textured meshes) ----------------
   useEffect(() => {
     const viewer = viewerRef.current
-    const url = terrainMeta?.cityModelUrl
+    const url = terrainMeta?.cityModel3DUrl ?? terrainMeta?.cityModel3dUrl
     if (!isLive(viewer) || !url) {
-      cityModelHandle = null
+      tilesetHandle = null
       return
     }
 
     let cancelled = false
-    void (async () => {
-      try {
-        const response = await fetch(url)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const collection = (await response.json()) as MassingCollection
-        if (cancelled || !isLive(viewer)) return
-        const handle = await addCityModel(viewer, collection, () => {
-          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        })
-        if (cancelled) {
-          handle?.dispose()
-          return
-        }
-        cityModelHandle = handle
-        // The plan may have been selected before the model finished loading, in
-        // which case its massing ops were parked. Apply them now.
-        if (pendingMassingOps.current.length) {
-          handle?.applyMassingOps(pendingMassingOps.current)
-          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        }
-        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        if (!showCityModel) {
-          // Rendered but hidden: keep the handle so the toggle is instant.
-          for (const e of handle?.entities.values() ?? []) e.show = false
-        }
-        viewer.scene.requestRender()
-      } catch (err) {
-        // A missing city model must not take the map down; the terrain and
-        // overlays still matter.
-        console.warn('[sandbox] city model unavailable:', err)
-      }
-    })()
+    void add3DTileset(viewer, url).then((handle) => {
+      if (cancelled || !handle) return
+      tilesetHandle = handle
+      handle.tileset.show = showRealBuildings
+      viewer.scene.requestRender()
+    }).catch((err) => {
+      console.warn('[3dtiles] effect error:', err)
+    })
 
     return () => {
       cancelled = true
-      cityModelHandle?.dispose()
-      cityModelHandle = null
+      tilesetHandle?.dispose()
+      tilesetHandle = null
     }
-  }, [terrainMeta])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terrainMeta?.cityModel3DUrl, terrainMeta?.cityModel3dUrl])
+
+  useEffect(() => {
+    if (!tilesetHandle) return
+    tilesetHandle.tileset.show = showRealBuildings
+    viewerRef.current?.scene.requestRender()
+  }, [showRealBuildings])
 
   // ---- online 3D assets ---------------------------------------------------
   //
@@ -406,13 +448,95 @@ export default function SandboxViewer() {
     viewer.scene.requestRender()
   }, [showProps])
 
+  // ---- waterbody layer (6-NW-12D) ----------------------------------------
   useEffect(() => {
-    if (!isLive(viewerRef.current) || !cityModelHandle) return
-    for (const e of cityModelHandle.entities.values()) e.show = showCityModel
-    viewerRef.current.scene.requestRender()
-  }, [showCityModel])
+    const viewer = viewerRef.current
+    const url = terrainMeta?.waterbodyUrl
+    if (!isLive(viewer) || !url) return
 
-  // ---- intervention features ---------------------------------------------
+    let cancelled = false
+    void GeoJsonDataSource.load(url).then((source) => {
+      if (cancelled || !isLive(viewer)) return
+      source.entities.values.forEach((e) => {
+        if (e.polygon) {
+          e.polygon.material = new ColorMaterialProperty(
+            Color.fromCssColorString('#1565C0').withAlpha(0.55),
+          )
+          e.polygon.outline = new ConstantProperty(false)
+        }
+      })
+      source.show = showWaterbody
+      void viewer.dataSources.add(source)
+      waterbodySourceRef.current = source
+      viewer.scene.requestRender()
+    })
+
+    return () => {
+      cancelled = true
+      const src = waterbodySourceRef.current
+      if (src && isLive(viewer) && viewer.dataSources.contains(src)) {
+        viewer.dataSources.remove(src, true)
+      }
+      waterbodySourceRef.current = null
+    }
+  }, [terrainMeta])
+
+  useEffect(() => {
+    const src = waterbodySourceRef.current
+    if (!src || !isLive(viewerRef.current)) return
+    src.show = showWaterbody
+    viewerRef.current.scene.requestRender()
+  }, [showWaterbody])
+
+  // ---- infrastructure layer (6-NW-12D) ------------------------------------
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.infrastructureUrl
+    if (!isLive(viewer) || !url) return
+
+    let cancelled = false
+    void GeoJsonDataSource.load(url).then((source) => {
+      if (cancelled || !isLive(viewer)) return
+      source.entities.values.forEach((e) => {
+        if (e.polygon) {
+          // height_m is stored as a ConstantProperty in the PropertyBag
+          const heightProp = e.properties?.getValue(JulianDate.now())
+          const h: number = (heightProp as Record<string, number> | null)?.height_m ?? 0
+          e.polygon.material = new ColorMaterialProperty(
+            Color.fromCssColorString('#FF8F00').withAlpha(0.65),
+          )
+          e.polygon.outline = new ConstantProperty(true)
+          e.polygon.outlineColor = new ConstantProperty(
+            Color.fromCssColorString('#E65100').withAlpha(0.9),
+          )
+          if (h > 0) {
+            e.polygon.height = new ConstantProperty(0)
+            e.polygon.extrudedHeight = new ConstantProperty(h)
+          }
+        }
+      })
+      source.show = showInfrastructure
+      void viewer.dataSources.add(source)
+      infraSourceRef.current = source
+      viewer.scene.requestRender()
+    })
+
+    return () => {
+      cancelled = true
+      const src = infraSourceRef.current
+      if (src && isLive(viewer) && viewer.dataSources.contains(src)) {
+        viewer.dataSources.remove(src, true)
+      }
+      infraSourceRef.current = null
+    }
+  }, [terrainMeta])
+
+  useEffect(() => {
+    const src = infraSourceRef.current
+    if (!src || !isLive(viewerRef.current)) return
+    src.show = showInfrastructure
+    viewerRef.current.scene.requestRender()
+  }, [showInfrastructure])
   //
   // The discrete half of ADR-032: interventions are geometry, not raster, so
   // they go in through GeoJsonDataSource and can be extruded and picked. The
@@ -424,41 +548,12 @@ export default function SandboxViewer() {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
 
-    // A `massing_height` feature carries geometry only so it can be listed and
-    // highlighted. It must NOT be handed to the intervention layer: with
-    // opacity 0 it would still create a clickable entity that shows up in picks
-    // and in the feature count. Split it out and apply it to the city model
-    // instead -- that is the whole point of the feature.
-    const isMassing = (f: { properties?: { interventionType?: string } }) =>
-      f.properties?.interventionType === 'massing_height'
-    const drawn = interventions.features.filter((f) => !isMassing(f))
-    const massingFeatures = interventions.features.filter(isMassing)
-
-    if (showInterventions) {
-      const ops = massingFeatures.map(
-        (f) => f.properties?.params as unknown as MassingOp,
-      )
-      if (cityModelHandle) {
-        cityModelHandle.applyMassingOps(ops)
-        // The panel's mean height reads from the handle, so it has to be told the
-        // geometry moved. Skipping this left the number stale while the skyline
-        // silently changed -- the worst combination, because the screen disagreed
-        // with the model.
-        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-      } else {
-        pendingMassingOps.current = ops
-      }
-    } else if (cityModelHandle) {
-      cityModelHandle.applyMassingOps([])
-      useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-    }
-
     let disposed = false
     let dispose: (() => void) | undefined
 
     void addInterventions(viewer, {
       type: 'FeatureCollection',
-      features: showInterventions ? drawn : [],
+      features: showInterventions ? interventions.features : [],
     }).then((fn) => {
       // The effect may have been torn down while the GeoJSON was in flight.
       if (disposed) {
@@ -485,19 +580,47 @@ function flyTo(viewer: Viewer, useBbox: boolean, duration = 1.2): void {
   if (!scene) return
 
   const rectangle = useBbox ? polygonToRectangle(scene.bbox) : null
+  const defaultCamera = scene.defaultCamera
+
+  // Oblique perspective view: heading north, pitched down 35°. This gives a
+  // conventional architectural perspective rather than the top-down view that
+  // Cesium uses when the destination is a Rectangle.
+  const orientation = {
+    heading: CesiumMath.toRadians(defaultCamera.heading ?? 0),
+    pitch: CesiumMath.toRadians(defaultCamera.pitch ?? -35),
+    roll: 0,
+  }
+
   if (rectangle) {
-    viewer.camera.flyTo({ destination: rectangle, duration })
+    const west = CesiumMath.toDegrees(rectangle.west)
+    const east = CesiumMath.toDegrees(rectangle.east)
+    const south = CesiumMath.toDegrees(rectangle.south)
+    const north = CesiumMath.toDegrees(rectangle.north)
+    const lon = (west + east) / 2
+    const lat = (south + north) / 2
+
+    // Compute a camera height that frames the bbox with a comfortable margin.
+    // The diagonal in metres is approximated locally at the latitude of the area.
+    const latRad = CesiumMath.toRadians(lat)
+    const cosLat = Math.cos(latRad)
+    const dx = (east - west) * 111320 * cosLat
+    const dy = (north - south) * 110540
+    const diagonal = Math.sqrt(dx * dx + dy * dy)
+    const height = Math.max(defaultCamera.height ?? diagonal * 1.2, 500)
+
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(lon, lat, height),
+      orientation,
+      duration,
+    })
     return
   }
-  const lon = scene.defaultCamera.longitude ?? scene.center.coordinates[0]
-  const lat = scene.defaultCamera.latitude ?? scene.center.coordinates[1]
+
+  const lon = defaultCamera.longitude ?? scene.center.coordinates[0]
+  const lat = defaultCamera.latitude ?? scene.center.coordinates[1]
   viewer.camera.flyTo({
-    destination: Cartesian3.fromDegrees(lon, lat, Math.max(scene.defaultCamera.height, 100)),
-    orientation: {
-      heading: scene.defaultCamera.heading,
-      pitch: scene.defaultCamera.pitch,
-      roll: 0,
-    },
+    destination: Cartesian3.fromDegrees(lon, lat, Math.max(defaultCamera.height, 100)),
+    orientation,
     duration,
   })
 }

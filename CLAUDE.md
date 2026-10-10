@@ -19,14 +19,26 @@ HSK/HT, which has the stronger public evidence base. Do not silently switch.
 
 ## Tech stack — as actually built
 
-**Backend:** Python 3.13 · FastAPI · Pydantic v2 · numpy · Pillow · rasterio
+**Backend:** Python 3.13 · FastAPI · Pydantic v2 · numpy · Pillow · rasterio · pyproj
 **Frontend:** Vite · React 18 · TypeScript · CesiumJS 1.146 · Zustand · MUI
 
-**Storage is JSON files, not PostGIS.** `STORE_MODE=file`. The documented target
-is PostGIS + MinIO; the seam is `app/db.py` + `app/services/scene_service.py`
-only, so that migration is a swap rather than a rewrite. **No SQLAlchemy, no
-alembic, no migrations directory** — the spec references one, it does not exist,
-and it is flagged in `docs/OCT6_STATUS.md` rather than faked.
+**Storage is JSON files, not PostGIS.** `STORE_MODE=file`. The seam is
+`app/db.py` + `app/services/scene_service.py` — the rest of the codebase never
+touches storage directly, so the migration is a swap of those two files only.
+**No SQLAlchemy, no alembic, no migrations directory** — the spec references
+one; it does not exist, and it is flagged in `docs/OCT6_STATUS.md` rather than
+faked.
+
+**Target architecture (not yet implemented):** PostGIS (EPSG:4326 geometry
+columns) replaces the JSON file store; MinIO replaces the local `/static` mount
+for rasters and glTF assets. When that migration lands:
+- `app/db.py` swaps from `read_doc/write_doc` to `psycopg2` + `GeoAlchemy2`.
+- `app/services/scene_service.py` uses `ST_AsGeoJSON()` for geometry reads.
+- `scripts/ingest_*.py` write SQL `INSERT` instead of JSON files.
+- The `/static` FastAPI mount is replaced by pre-signed MinIO URLs.
+- SQLAlchemy + Alembic + `asyncpg`/`psycopg2-binary` + `GeoAlchemy2` enter
+  `requirements.txt`. A Docker Compose file with `postgis/postgis` and
+  `minio/minio` is the local dev story.
 
 **No Cesium Ion token.** The Viewer sets `baseLayer: false` and supplies
 OpenStreetMap explicitly, so the app runs with zero credentials. Leave
@@ -38,18 +50,27 @@ OpenStreetMap explicitly, so the app runs with zero credentials. Leave
 # Backend -- always activate the venv first; there are two Pythons on this host
 cd backend && source .venv/bin/activate
 python scripts/preflight.py                  # environment check; exits 1 if not runnable
-python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy
-python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
+
+# Primary data pipeline (6-NW-12D Lands Dept glTF -- run in order)
+python scripts/ingest_terrain_gltf.py        # 6-NW-12D terrain -> dem_terrain_rgb.png
+python scripts/ingest_buildings_gltf.py      # 6-NW-12D buildings -> citymodel_hsk.json
+python scripts/ingest_layers_gltf.py         # 6-NW-12D waterbody + infrastructure -> GeoJSON
 python scripts/seed_scene.py                 # prints the sceneId
-python scripts/seed_interventions.py --reset # derive intervention sites from the analysis
-python scripts/make_citymodel.py        # 3D massing envelopes (provisional)
-python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
+
+# Analysis overlays (optional, on top of the above)
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
+
 python -m uvicorn app.main:app --reload      # :8000
 python tests/test_contract.py                # 11/11
 python tests/test_constants.py               # 16/16
 python tests/test_ai_plan.py                # 10/10
+
+# Superseded scripts (open-data fallbacks, do not run unless 6-NW-12D is unavailable)
+# python scripts/fetch_landcover.py          # ESA WorldCover -> landclass_hsk.npy
+# python scripts/fetch_dem.py               # Open-Meteo -> dem_hsk.npy
+# python scripts/make_citymodel.py          # procedural massing from WorldCover
+# python scripts/seed_interventions.py --reset
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
@@ -137,22 +158,29 @@ Storage keeps the spec's `id` column; the API exposes `sceneId` / `planId` as an
 
 ## Raster data
 
-Rasters are **generated artefacts, not source**. Reproduce with:
+**Primary source: `backend/6-NW-12D/`** — HK Lands Department glTF assets,
+EPSG:2326 (HK1980 Grid), converted to WGS84 (EPSG:4326) by `pyproj`.
 
-```bash
-python scripts/fetch_landcover.py            # ESA WorldCover 10 m, CC BY 4.0
-python scripts/fetch_dem.py                 # Open-Meteo, ~90 m
-python scripts/make_wetgrid.py --rainfall 450
-python scripts/make_heatmap.py
-```
+| Asset class | 6-NW-12D subdir | Ingest script | Output |
+|---|---|---|---|
+| Terrain | `TERRAIN(TB)/` | `ingest_terrain_gltf.py` | `dem_terrain_rgb.png`, `dem_hsk.json` |
+| Buildings | `BUILDING/` | `ingest_buildings_gltf.py` | `rasters/citymodel_hsk.json` |
+| Water bodies | `WATERBODY/` | *(planned)* | — |
+| Infrastructure | `INFRASTRUCTURE/` | *(planned)* | — |
+| Vegetation | `VEGETATION(TB)/` | *(planned)* | — |
 
-No MinIO, no `gdal_translate`, no COG pipeline. Elevation reaches Cesium as a
-**mapbox terrain-RGB** raster via `CustomHeightmapTerrainProvider`
-(`src/view/demProvider.ts`). Overlays are `SingleTileImageryProvider` images over
-the bbox rectangle.
+Each ingest script writes a `.json` sidecar with provenance and registers the
+output against the seeded scene via `attach_overlay`.
 
-Every raster writes a `.json` sidecar with its constants and assumptions, and
-registers itself against the seeded scene.
+**Open-data fallbacks (superseded):** `fetch_dem.py` (Open-Meteo ~90 m) and
+`fetch_landcover.py` (ESA WorldCover) remain in `scripts/` but are not part of
+the primary pipeline. Do not run them unless 6-NW-12D data is unavailable.
+
+Elevation reaches Cesium as a **Mapbox terrain-RGB** raster via
+`CustomHeightmapTerrainProvider` (`src/view/demProvider.ts`). Overlays are
+`SingleTileImageryProvider` images over the bbox rectangle. Analysis overlays
+(`wetgrid`, `heatmap`) still use `.npy` as the authoritative data; the `.png`
+is a render only.
 
 ## Conventions that will bite you
 
@@ -180,10 +208,11 @@ registers itself against the seeded scene.
   intervention seeder drew a polygon for a connected component's *centroid
   cell* while reporting the whole component's area, so a "155 ha" feature was
   0.003 ha and invisible. `test_constants.py` now asserts the two agree.
-- **The city model is massing, not buildings.** Footprints are procedural from
-  the ESA WorldCover paved class because OSM is unreachable here; heights are an
-  assumed distribution. Never describe it as surveyed, and keep the provisional
-  chip.
+- **The city model is real massing from Lands Dept, not procedural.** Footprints
+  are AABB rectangles extracted from 6-NW-12D glTF (not surveyed polygons);
+  heights are the glTF mesh Y-axis maximum. Never describe it as a surveyed
+  building dataset, but do not call it "provisional" — the source is official.
+  Keep `citymodel_meta.json`'s `note` field honest.
 - **richdem/hydrotools will not install here** (richdem needs GDAL headers;
   hydrotools gates everything behind it). The algorithms live in
   `scripts/hydrology.py`. Do not try to add them as dependencies.

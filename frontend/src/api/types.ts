@@ -53,20 +53,20 @@ export interface Scene {
 export interface TerrainMeta {
   terrainUrl: string | null
   imageryUrl: string | null
+  /** [lonMin, latMin, lonMax, latMax] — the tight rectangle the imagery tile covers. */
+  imageryBbox: [number, number, number, number] | null
   bbox: Polygon | null
   center?: Point | null
   terrainFormat?: string | null
   terrainSource?: string | null
   wetGridUrl?: string | null
   heatmapUrl?: string | null
-  /**
-   * 3D massing envelopes, plus their provenance. `status` is deliberately blunt
-   * -- these are procedural massing derived from land cover, not surveyed
-   * buildings -- and the panel shows it rather than letting a skyline imply
-   * otherwise.
-   */
-  cityModelUrl?: string | null
-  cityModelMeta?: CityModelMeta | null
+  /** Real 3D Tiles tileset with textured meshes from 6-NW-12D. */
+  cityModel3DUrl?: string | null
+  /** Alias: the API serialises as camelCase; accept both spellings. */
+  cityModel3dUrl?: string | null
+  waterbodyUrl?: string | null
+  infrastructureUrl?: string | null
 }
 
 export type PlanType =
@@ -127,13 +127,14 @@ export interface LayerVisibility {
    * (ADR-032). Separate switch for that reason, not for presentation.
    */
   interventions: boolean
-  /**
-   * The 3D massing model. On by default, because an intervention floating over
-   * empty grass gives the user nothing to judge it against.
-   */
-  cityModel: boolean
+  /** Real 3D buildings from 6-NW-12D 3D Tiles (textured meshes). */
+  realBuildings: boolean
   /** Online glTF assets fetched from the Khronos sample set. */
   props: boolean
+  /** Water bodies from 6-NW-12D WATERBODY glTF. */
+  waterbody: boolean
+  /** Infrastructure structures from 6-NW-12D INFRASTRUCTURE glTF. */
+  infrastructure: boolean
 }
 
 /**
@@ -148,15 +149,3 @@ export interface LayerVisibility {
 export type InterventionSource = 'manual' | 'ai'
 
 
-/** Provenance for the 3D massing model, as served alongside the rasters. */
-export interface CityModelMeta {
-  status: string
-  features: number
-  heightM: { min: number; max: number; mean: number }
-  byClass: Record<string, number>
-  footprintSource: string
-  heightSource: string
-  whyNotOsm: string
-  editable: boolean
-  note: string
-}

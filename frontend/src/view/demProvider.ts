@@ -30,11 +30,12 @@ import {
   WebMercatorTilingScheme,
 } from 'cesium'
 
-/** Resolution of the source raster, in pixels. */
-const SIZE = 256
-
 interface DecodedDem {
   heights: Float32Array
+  /** Actual pixel width of the source raster. */
+  width: number
+  /** Actual pixel height of the source raster. */
+  height: number
   west: number
   south: number
   east: number
@@ -77,6 +78,8 @@ export function decodeTerrainRgb(url: string): Promise<DecodedDem> {
       }
       resolve({
         heights,
+        width: canvas.width,
+        height: canvas.height,
         west: 0,
         south: 0,
         east: 1,
@@ -102,26 +105,38 @@ export function setDemBounds(
   decoded.north = bounds[3]
 }
 
-/** Bilinear sample of the decoded DEM at a lon/lat. Returns metres. */
+/** Bilinear sample of the decoded DEM at a lon/lat. Returns metres, or 0 if inputs are invalid. */
 function sampleAt(dem: DecodedDem, lon: number, lat: number): number {
-  const u = ((lon - dem.west) / (dem.east - dem.west)) * SIZE
-  // Image row 0 is the northernmost pixel, so north maps to v = 0.
-  const v = ((dem.north - lat) / (dem.north - dem.south)) * SIZE
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return 0
+  if (dem.east <= dem.west || dem.north <= dem.south) return 0
 
-  const x = Math.min(Math.max(u - 0.5, 0), SIZE - 1.001)
-  const y = Math.min(Math.max(v - 0.5, 0), SIZE - 1.001)
+  // Return 0 for coordinates strictly outside the raster extent — do NOT clamp
+  // to the edge pixel. Clamping repeats the boundary value across all exterior
+  // tiles, which manifests as visible "streaks" radiating from the data edge.
+  if (lon < dem.west || lon > dem.east || lat < dem.south || lat > dem.north) return 0
+
+  const W = dem.width
+  const H = dem.height
+  const u = ((lon - dem.west) / (dem.east - dem.west)) * W
+  const v = ((dem.north - lat) / (dem.north - dem.south)) * H
+
+  if (!Number.isFinite(u) || !Number.isFinite(v)) return 0
+
+  const x = Math.min(Math.max(u - 0.5, 0), W - 1.001)
+  const y = Math.min(Math.max(v - 0.5, 0), H - 1.001)
   const x0 = Math.floor(x)
   const y0 = Math.floor(y)
   const fx = x - x0
   const fy = y - y0
   const at = (col: number, row: number) =>
-    dem.heights[row * SIZE + col]
+    dem.heights[row * W + col]
 
-  const top = at(x0, y0) * (1 - fx) + at(Math.min(x0 + 1, SIZE - 1), y0) * fx
+  const top = at(x0, y0) * (1 - fx) + at(Math.min(x0 + 1, W - 1), y0) * fx
   const bottom =
-    at(x0, Math.min(y0 + 1, SIZE - 1)) * (1 - fx) +
-    at(Math.min(x0 + 1, SIZE - 1), Math.min(y0 + 1, SIZE - 1)) * fx
-  return top * (1 - fy) + bottom * fy
+    at(x0, Math.min(y0 + 1, H - 1)) * (1 - fx) +
+    at(Math.min(x0 + 1, W - 1), Math.min(y0 + 1, H - 1)) * fx
+  const result = top * (1 - fy) + bottom * fy
+  return Number.isFinite(result) ? result : 0
 }
 
 /**
@@ -136,7 +151,7 @@ export function createDemTerrainProvider(
   credit?: string,
 ): CustomHeightmapTerrainProvider {
   const scheme = new WebMercatorTilingScheme()
-  const SIZE_TILE = 32
+  const SIZE_TILE = 33
 
   return new CustomHeightmapTerrainProvider({
     width: SIZE_TILE,
@@ -165,7 +180,7 @@ export function createDemTerrainProvider(
       const heightData = new Float32Array(size * size)
       if (x < 0 || y < 0 || x >= native || y >= native) return heightData
 
-      const rect = scheme.tileXYToNativeRectangle(x, y, level)
+      const rect = scheme.tileXYToRectangle(x, y, level)
       const west = CesiumMath.toDegrees(rect.west)
       const east = CesiumMath.toDegrees(rect.east)
       const north = CesiumMath.toDegrees(rect.north)
@@ -182,14 +197,15 @@ export function createDemTerrainProvider(
 
       const dLon = (east - west) / size
       const dLat = (north - south) / size
+      if (!Number.isFinite(dLon) || !Number.isFinite(dLat) || dLon === 0 || dLat === 0) {
+        return heightData
+      }
       for (let row = 0; row < size; row += 1) {
         const lat = north - (row + 0.5) * dLat
         for (let col = 0; col < size; col += 1) {
           const lon = west + (col + 0.5) * dLon
           const h = sampleAt(dem, lon, lat)
-          heightData[row * size + col] = Number.isFinite(h)
-            ? Math.min(Math.max(h, dem.minHeight), dem.maxHeight)
-            : 0
+          heightData[row * size + col] = Math.min(Math.max(h, dem.minHeight), dem.maxHeight)
         }
       }
       return heightData

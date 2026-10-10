@@ -35,22 +35,28 @@
       ]
     ]
   },
-  "imagery_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  "imagery_url": "rasters/terrain_texture_hsk.jpg",
+  "imagery_bbox": [
+    113.992132,
+    22.430876,
+    113.999425,
+    22.436302
+  ],
   "default_camera": {
     "longitude": 113.9935,
-    "latitude": 22.44,
-    "height": 4200.0,
+    "latitude": 22.435,
+    "height": 800.0,
     "heading": 0.0,
-    "pitch": -48.0
+    "pitch": -45.0
   },
   "env_params": {
     "temperature": 28.5,
     "precipitation": 450.0
   },
-  "wet_grid_path": "rasters/wetgrid_hsk.png",
-  "heatmap_path": "rasters/heatmap_hsk.png",
+  "wet_grid_path": "rasters\\wetgrid_hsk.png",
+  "heatmap_path": "rasters\\heatmap_hsk.png",
   "created_at": "2026-10-06T11:01:42Z",
-  "updated_at": "2026-10-08T11:13:02Z",
+  "updated_at": "2026-10-10T04:17:24Z",
   "study_area": "hsk-ht-nda",
   "working_grid": {
     "bounds": [
@@ -69,7 +75,10 @@
     "area_m2": 7865484.875024295,
     "crs_note": "Metres via local equirectangular approximation about the extent centre. For volume reporting, swap HK1980 Grid (EPSG:2326)."
   },
-  "terrain_source": "terrain-rgb / open-meteo / srtm-1arcsec",
+  "terrain_source": "terrain-rgb / lands-dept-6nw12d / hk1980-epsg2326",
   "terrain_url": "dem_terrain_rgb.png",
-  "city_model_path": "rasters/citymodel_hsk.json"
+  "city_model_path": "rasters/citymodel_hsk.json",
+  "waterbody_path": "rasters/waterbody_hsk.json",
+  "infrastructure_path": "rasters/infrastructure_hsk.json",
+  "city_model_3d_path": "rasters/3dtiles/tileset.json"
 }

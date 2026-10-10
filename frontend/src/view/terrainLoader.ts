@@ -8,17 +8,19 @@
  *    instead, so the demo runs with zero credentials (ADR-033). A token is read
  *    from `VITE_CESIUM_ION_TOKEN` if one is ever supplied and is never
  *    committed — `frontend/.env.local` is gitignored.
- * 2. **Degrade honestly.** `terrainUrl` is `null` on Oct 6, because no DEM is
- *    downloadable without permission (see `backend/data/scene_hsk.json`).
- *    Rather than inventing terrain we fall back to `EllipsoidTerrainProvider`
- *    and *report that fact*, because a flat surface that is honestly labelled
- *    beats a fake hill nobody can defend.
+ * 2. **Degrade honestly.** Real terrain is now served from HK Lands Dept
+ *    6-NW-12D via `ingest_terrain_gltf.py` (EPSG:2326 → EPSG:4326, Mapbox
+ *    terrain-RGB PNG). The fallback to `EllipsoidTerrainProvider` remains
+ *    active when `terrainUrl` is null (e.g. before the script has run).
+ *    // [SUPERSEDED placeholder text — real terrain from LANDS_DEPT 6-NW-12D
+ *    //  via ingest_terrain_gltf.py as of Oct 2026]
  */
 import {
   Math as CesiumMath,
   EllipsoidTerrainProvider,
   ImageryLayer,
-  OpenStreetMapImageryProvider,
+  // OpenStreetMapImageryProvider — replaced by Lands Dept terrain texture (Option C).
+  // Reinstate if the texture is unavailable and a fallback base map is needed.
   Rectangle,
   SingleTileImageryProvider,
   UrlTemplateImageryProvider,
@@ -152,18 +154,36 @@ export async function createTerrainProvider(
   }
 }
 
-/** Build the base imagery layer. OSM by default, so no token is ever required. */
-export function createBaseImageryLayer(meta: TerrainMeta): ImageryLayer {
+/** Build the base imagery layer.
+ *
+ * Resolution order:
+ *  1. `imageryUrl` + `imageryBbox` → `SingleTileImageryProvider` georeferenced
+ *     to the tight coverage rectangle. This is the Lands Dept terrain texture path.
+ *  2. `imageryUrl` without a bbox → `UrlTemplateImageryProvider` (tile template).
+ *  3. No URL → no layer (null). The globe renders with default Cesium grey.
+ *
+ * OSM (`OpenStreetMapImageryProvider`) has been removed. To reinstate it as a
+ * fallback, add `new ImageryLayer(new OpenStreetMapImageryProvider({}))` in the
+ * null branch and re-import the provider.
+ */
+export async function createBaseImageryLayer(
+  meta: Pick<TerrainMeta, 'imageryUrl' | 'imageryBbox'>,
+): Promise<ImageryLayer | null> {
   const url = meta.imageryUrl?.trim()
+  if (!url) return null
 
-  if (!url) {
-    // Cesium >= 1.124 takes no constructor options for the OSM provider; it
-    // serves the standard tile set.
-    return new ImageryLayer(new OpenStreetMapImageryProvider({}))
+  const bb = meta.imageryBbox
+  if (bb && bb.length === 4) {
+    const rectangle = Rectangle.fromDegrees(bb[0], bb[1], bb[2], bb[3])
+    try {
+      const provider = await SingleTileImageryProvider.fromUrl(url, { rectangle })
+      return new ImageryLayer(provider, { alpha: 1.0 })
+    } catch {
+      // Image failed to load; fall through to tile template below.
+    }
   }
 
-  // Both a `{z}/{x}/{y}` template and a single-tile URL resolve through
-  // UrlTemplateImageryProvider; overlays also arrive this way.
+  // Bare URL without bbox: treat as a tile template ({z}/{x}/{y}) or single tile.
   return new ImageryLayer(new UrlTemplateImageryProvider({ url }))
 }
 

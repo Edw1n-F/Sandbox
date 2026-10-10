@@ -1,19 +1,19 @@
 {
   "artefact": "wetgrid",
   "generated": "2026-10-06",
-  "status": "REAL_TERRAIN_SATISFACTORY",
-  "terrainSource": "open-meteo",
+  "status": "SCREENING_VIEW_SYNTHETIC_TERRAIN",
+  "terrainSource": "lands-dept-6nw12d",
   "conditioning": {
     "method": "Priority-Flood (Barnes et al. 2014)",
     "enabled": true,
-    "cellsRaised": 32500,
+    "cellsRaised": 1053,
     "cellsTotal": 314736,
-    "raisedFraction": 0.1033,
-    "maxFlowAccumulationCells": 73551.0,
+    "raisedFraction": 0.0033,
+    "maxFlowAccumulationCells": 616.0,
     "note": "Implemented in scripts/hydrology.py. richdem and hydrotools are the standard open-source tools for this; both were installed and neither is usable on this host because richdem needs GDAL headers to build."
   },
   "landCoverSource": "esa-worldcover",
-  "warning": "Real elevation and real ESA WorldCover land cover. The surface is Priority-Flood conditioned and D8 flow accumulation is computed and reported, but the runoff VOLUME is still allocated by solving for a water level rather than routed downhill cell by cell. It is a screening view, not a flood prediction.",
+  "warning": "Terrain is SYNTHETIC (see _overlay_common). Run scripts/fetch_dem.py to replace it with real elevation.",
   "inputs": {
     "rainfall_mm": 450.0,
     "resolution_m": 5.0,
@@ -55,11 +55,11 @@
   "results": {
     "runoffVolumeM3": 3326897.7,
     "unstoredVolumeM3": 3170180.3,
-    "wetCells": 83250,
-    "wetAreaHa": 208.05,
+    "wetCells": 305713,
+    "wetAreaHa": 764.0,
     "totalAreaHa": 786.55,
-    "wetAreaFraction": 0.2645,
-    "meanDepthInWetAreaM": 1.5238
+    "wetAreaFraction": 0.9713,
+    "meanDepthInWetAreaM": 0.4149
   },
   "render": {
     "minVisibleDepthM": 0.005,

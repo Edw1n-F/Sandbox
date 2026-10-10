@@ -18,13 +18,6 @@ import Typography from '@mui/material/Typography'
 import { useEffect, useState } from 'react'
 
 import { createAiPlan, type AiPlanResult } from '@/api/planApi'
-import {
-  cityModelStats,
-  editCityModelHeights,
-  selectCityBuilding,
-  setCityModelBuildingHeight,
-  useCityModelRevision,
-} from '@/view/SandboxViewer'
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
 import SliderField from './SliderField'
@@ -37,22 +30,6 @@ export default function ScenePanel() {
   const activePlanId = usePlanStore((s) => s.activePlanId)
   const features = usePlanStore((s) => s.interventions.features.length)
   const plan = plans.find((p) => p.planId === activePlanId)
-  // A massing edit is an AI proposal like any other, so it is shown with the
-  // same posture ADR-030 requires: named, attributed, and reversible.
-  const interventionFeatures = usePlanStore((s) => s.interventions.features)
-  const massingEdit = interventionFeatures.find(
-    (f) => f.properties?.interventionType === 'massing_height',
-  )
-  const massingParams = massingEdit?.properties?.params as
-    | { op?: string; multiplier?: number; heightM?: number; rationale?: string }
-    | undefined
-  const massingSummary = massingParams
-    ? massingParams.op === 'reset'
-      ? 'reset to generated heights'
-      : massingParams.op === 'scale_all'
-        ? `scale all x${massingParams.multiplier}`
-        : `set ${massingParams.heightM} m`
-    : null
   const selectPlan = usePlanStore((s) => s.selectPlan)
   const refreshPlans = usePlanStore((s) => s.refreshPlans)
   const sceneId = useSceneStore((s) => s.sceneId)
@@ -60,8 +37,7 @@ export default function ScenePanel() {
   const [aiBusy, setAiBusy] = useState(false)
   const [aiResult, setAiResult] = useState<AiPlanResult | null>(null)
   // Read from /health so the badge reflects the *server's* configuration, not
-  // what this browser last happened to run. A demo on a machine with no key must
-  // say so before a judge draws the conclusion, not after.
+  // what this browser last happened to run.
   const [llm, setLlm] = useState<{ configured: boolean; model: string | null } | null>(
     null,
   )
@@ -78,16 +54,6 @@ export default function ScenePanel() {
     }
   }, [aiResult])
   const [aiError, setAiError] = useState<string | null>(null)
-  const terrain = useSceneStore((s) => s.terrain)
-  // The city model loads asynchronously, so reading the stats once at mount
-  // captured an empty model and the editing panel never appeared. Re-read them
-  // whenever the viewer's revision counter moves -- which happens both on load
-  // and on every pick.
-  const cityRev = useCityModelRevision()
-  const [city, setCity] = useState(() => cityModelStats())
-  useEffect(() => {
-    setCity(cityModelStats())
-  }, [cityRev])
 
   /**
    * Ask the AI module for a plan, then select it.
@@ -185,65 +151,6 @@ export default function ScenePanel() {
       <Typography variant="caption" color="text.secondary">
         {plan?.label ?? 'No plan'} · {features} feature{features === 1 ? '' : 's'}
       </Typography>
-
-      {city.count > 0 && (
-        <Paper variant="outlined" sx={{ p: 1.5 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Typography variant="subtitle2">3D city model</Typography>
-            <Chip size="small" color="warning" label="provisional" />
-          </Stack>
-          <Typography variant="caption" color="text.secondary" display="block">
-            {city.count} massing envelopes · mean {city.mean.toFixed(1)} m
-            {city.selected ? ` · selected ${city.selected}` : ''}
-          </Typography>
-
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-            {terrain?.cityModelMeta?.note ?? 'Massing derived from land cover.'}
-          </Typography>
-
-          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Button size="small" variant="outlined"
-              onClick={() => { editCityModelHeights(1.25); setCity(cityModelStats()) }}>
-              +25% height
-            </Button>
-            <Button size="small" variant="outlined"
-              onClick={() => { editCityModelHeights(0.8); setCity(cityModelStats()) }}>
-              -20% height
-            </Button>
-            <Button size="small" color="inherit"
-              onClick={() => { editCityModelHeights(1); selectCityBuilding(null); setCity(cityModelStats()) }}>
-              Reset
-            </Button>
-          </Stack>
-
-          {city.selected && (
-            <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
-              <Typography variant="caption">Selected</Typography>
-              <TextField
-                size="small" type="number" defaultValue={0} sx={{ width: 90 }}
-                label="metres"
-                onChange={(e) => {
-                  const m = Number(e.target.value)
-                  if (m > 0) { setCityModelBuildingHeight(city.selected as string, m); setCity(cityModelStats()) }
-                }}
-              />
-            </Stack>
-          )}
-          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-            Click a building to select it, then edit its height directly.
-          </Typography>
-        </Paper>
-      )}
-
-      {massingSummary && (
-        <Alert severity="info" variant="outlined" sx={{ py: 0 }}>
-          <Typography variant="caption">
-            <strong>AI massing edit:</strong> {massingSummary}
-            {massingParams?.rationale ? ` — ${massingParams.rationale}` : ''}
-            . Applied to the live model; switch plans to revert.
-          </Typography>
-        </Alert>
-      )}
 
       <Paper variant="outlined" sx={{ p: 1.5 }}>
         <Typography variant="subtitle2" gutterBottom>

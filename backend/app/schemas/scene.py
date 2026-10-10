@@ -264,6 +264,10 @@ class SceneRead(SceneBase):
     # viewer draw" -- and the viewer should not need a fourth request to boot.
     city_model_url: str | None = None
     city_model_meta: dict[str, Any] | None = None
+    # Real 3D Tiles tileset (textured meshes from 6-NW-12D), distinct from the
+    # editable GeoJSON massing above. ``city_model_url`` is the editable 2.5D
+    # layer; this is the read-only photorealistic one.
+    city_model_3d_url: str | None = None
 
     @model_validator(mode="after")
     def _fill_camera_from_center(self) -> "SceneRead":
@@ -282,6 +286,9 @@ class TerrainRead(RowModel):
 
     terrain_url: str | None = None
     imagery_url: str | None = None
+    # Tight bbox of the imagery tile [lonMin, latMin, lonMax, latMax] in EPSG:4326.
+    # Smaller than scene.bbox when the texture only covers part of the study area.
+    imagery_bbox: list[float] | None = None
     bbox: Polygon | None = None
     center: Point | None = None
     # Not in the spec's three fields, but the frontend cannot build a
@@ -296,6 +303,11 @@ class TerrainRead(RowModel):
     # viewer draw" -- and the viewer should not need a fourth request to boot.
     city_model_url: str | None = None
     city_model_meta: dict[str, Any] | None = None
+    # Real 3D Tiles tileset (textured meshes from 6-NW-12D), distinct from the
+    # editable GeoJSON massing above.
+    city_model_3d_url: str | None = None
+    waterbody_url: str | None = None
+    infrastructure_url: str | None = None
 
 
 PlanType = Literal[

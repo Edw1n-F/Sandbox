@@ -36,6 +36,15 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
       },
+      // OpenStreetMap tiles don't send Access-Control-Allow-Origin, so the
+      // browser blocks direct XHR from localhost. Proxy them through Vite so
+      // the request appears same-origin. The rewrite strips /osm-tiles so the
+      // upstream URL stays at the OSM-standard /{z}/{x}/{y}.png path.
+      '/osm-tiles': {
+        target: 'https://tile.openstreetmap.org',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/osm-tiles/, ''),
+      },
     },
   },
   build: {

@@ -94,6 +94,8 @@ def _scene_to_read(doc: dict[str, Any]) -> SceneRead:
     read = SceneRead.from_row(doc)
     read.wet_grid_url = _resolve_overlay_url(doc, "wet_grid_path")
     read.heatmap_url = _resolve_overlay_url(doc, "heatmap_path")
+    read.city_model_url = _resolve_overlay_url(doc, "city_model_path")
+    read.city_model_3d_url = _resolve_overlay_url(doc, "city_model_3d_path")
     return read
 
 
@@ -357,7 +359,8 @@ def get_terrain(scene_id: str) -> TerrainRead:
         # relative DEM path becomes a URL the viewer can actually fetch, and a
         # path with no file behind it becomes None rather than a broken layer.
         terrain_url=_resolve_overlay_url(doc, "terrain_url"),
-        imagery_url=doc.get("imagery_url"),
+        imagery_url=_resolve_overlay_url(doc, "imagery_url") or doc.get("imagery_url"),
+        imagery_bbox=doc.get("imagery_bbox"),
         bbox=doc.get("bbox"),
         center=doc.get("center"),
         terrain_format=doc.get("terrain_format"),
@@ -366,6 +369,9 @@ def get_terrain(scene_id: str) -> TerrainRead:
         heatmap_url=_resolve_overlay_url(doc, "heatmap_path"),
         city_model_url=_resolve_overlay_url(doc, "city_model_path"),
         city_model_meta=_city_model_meta(),
+        city_model_3d_url=_resolve_overlay_url(doc, "city_model_3d_path"),
+        waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
+        infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
     )
 
 

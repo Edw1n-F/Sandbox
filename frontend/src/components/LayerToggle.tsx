@@ -40,10 +40,12 @@ export default function LayerToggle() {
     // Interventions are geometry rather than a raster, but they belong in the
     // same list: it is the user's single "what am I looking at" control.
     ['interventions', interventionLabel, interventionCount > 0],
-    // The 3D massing model. Disabled only when the script has not been run.
-    ['cityModel', '3D city model (massing)', Boolean(terrain?.cityModelUrl)],
+    // Real textured 3D buildings from 6-NW-12D 3D Tiles.
+    ['realBuildings', 'Real 3D buildings (Lands Dept)', Boolean(terrain?.cityModel3DUrl ?? terrain?.cityModel3dUrl)],
     // Online assets always resolve, so this row is never disabled.
     ['props', `Online 3D assets (${propsStatus.loaded})`, true],
+    ['waterbody', 'Water bodies (Lands Dept)', Boolean(terrain?.waterbodyUrl)],
+    ['infrastructure', 'Infrastructure (Lands Dept)', Boolean(terrain?.infrastructureUrl)],
   ]
 
   const failed = status.wetGrid === 'failed' || status.heatmap === 'failed'

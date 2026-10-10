@@ -1,39 +1,24 @@
 {
-  "artefact": "dem",
-  "generated": "2026-10-06",
-  "status": "REAL_TERRAIN_SAMPLED",
-  "source": {
-    "name": "Open-Meteo elevation API",
-    "url": "https://api.open-meteo.com/v1/elevation",
-    "keyRequired": false,
-    "upstreamModels": "A downsampled global elevation model, ~90 m posting (derived from SRTM and coarser sources). The ~90 m figure is measured on the returned grid, not advertised: the API reports no resolution, and asking for a finer lattice only duplicates values. See grid.resolutionLonM/LatM.",
-    "note": "Verified against Everest and open-ocean control points on every run. The AWS elevation-tiles-prod bucket was tested and rejected: it returns HTTP 200 with non-terrarium pixels that decode to nonsense (Everest ~1e6 m)."
+  "source": "HK Lands Dept 6-NW-12D TERRAIN(TB) glTF",
+  "sourceCrs": "EPSG:2326 HK1980 Grid -> EPSG:4326 WGS84 via pyproj",
+  "tileId": "T17250324000106E10",
+  "vertexCount": 148644,
+  "coverageBounds": {
+    "lonMin": 113.992132,
+    "lonMax": 113.999425,
+    "latMin": 22.430876,
+    "latMax": 22.436302
   },
-  "grid": {
-    "rows": 37,
-    "cols": 28,
-    "resolutionLonM": 84.5,
-    "resolutionLatM": 89.7,
-    "resolutionNote": "Measured from the deduplicated grid. The source is a ~90 m global model; requesting a finer lattice duplicates values rather than resolving them.",
-    "bounds": [
-      113.982,
-      22.425,
-      114.005,
-      22.455
-    ],
-    "orientation": "north-up, row 0 = northernmost",
-    "verticalDatum": "mPD (Open-Meteo returns orthometric heights)"
+  "coverageFraction": 0.0257,
+  "outsideCoverageFill": "0m_flat_ground",
+  "elevationM": {
+    "min": 3.41,
+    "max": 17.61,
+    "meanCovered": 10.5
   },
-  "elevation": {
-    "minM": 2.0,
-    "maxM": 141.0,
-    "meanM": 17.044401168823242,
-    "reliefM": 139.0
-  },
-  "caveats": [
-    "Sampled, not a survey product: ~90 m postings resampled onto the 5 m analysis grid. The 5 m grid is the analysis convention, not the data resolution, and the ~90 m figure is the measured one.",
-    "Orthometric (mPD), not ellipsoidal. No vertical datum shift applied.",
-    "No bare-earth correction. If vegetation/structures bias this upward, a deficit estimate would be biased too.",
-    "Sinks are not filled and there is no flow routing; the wet grid fills by water-surface level, not by routing water downhill."
-  ]
+  "gridRows": 664,
+  "gridCols": 474,
+  "resolutionM": 5.0,
+  "format": "mapbox-terrain-rgb",
+  "note": "Real terrain from HK Lands Dept 6-NW-12D. Outside the glTF tile extent, cells are filled with 0 m (flat ground). To replace the fill, reimplement _fill_outside in ingest_terrain_gltf.py."
 }

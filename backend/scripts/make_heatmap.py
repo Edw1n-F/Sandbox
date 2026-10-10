@@ -62,7 +62,12 @@ def heat_index(land: np.ndarray) -> np.ndarray:
 
 
 def ramp_rgba(index: np.ndarray) -> np.ndarray:
-    """Map a 0..1 index field to RGBA through the display ramp (opaque)."""
+    """Map a 0..1 index field to RGBA through the display ramp.
+
+    The outermost 1-pixel border is forced to alpha=0. Without this, Cesium's
+    SingleTileImageryProvider clamps UV to the edge pixel, which visibly
+    bleeds the boundary colour as a 1-pixel streak at the tile edge.
+    """
     stops = np.array([s[0] for s in RAMP], dtype=np.float64)
     colours = np.array([s[1] for s in RAMP], dtype=np.float64)
     clipped = np.clip(index, 0.0, 1.0)
@@ -71,6 +76,11 @@ def ramp_rgba(index: np.ndarray) -> np.ndarray:
     for channel in range(3):
         out[..., channel] = np.interp(clipped, stops, colours[:, channel])
     out[..., 3] = 255
+    # Transparent border: prevents clamp-to-edge streaks at the raster boundary
+    out[0, :, 3] = 0
+    out[-1, :, 3] = 0
+    out[:, 0, 3] = 0
+    out[:, -1, 3] = 0
     return out
 
 

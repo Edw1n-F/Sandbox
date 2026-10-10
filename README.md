@@ -43,13 +43,13 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | camelCase wire contract with `sceneId`/`planId` aliases | Working | contract test |
 | Single error envelope (`detail` **and** `error`) | Working | contract test |
 | 3D viewer: real terrain, imagery, boundary, camera | Working | headless-browser render, zero console errors |
-| **Real elevation** (~90 m, Open-Meteo global model) | Working | control-point assertions on every fetch; resolution measured, not assumed |
+| **Real elevation** — HK Lands Dept 6-NW-12D terrain, ~0.8 m res, 750 × 600 m coverage | Working | terrain-RGB PNG decoded correctly in browser (Oct 10 fix) |
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay (relative index, 0–1) | Working, screening-grade | — |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
 | **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 18 tests, incl. a real-HTTP round trip |
-| **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded/reproducible; browser-verified edit |
+| **3D city model** — 390 textured building meshes from Lands Dept, grounded on real terrain | Working, Oct 10 | three rendering bugs fixed (axis, elevation, terrain decode) |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
