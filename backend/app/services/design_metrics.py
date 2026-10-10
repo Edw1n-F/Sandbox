@@ -201,30 +201,50 @@ def footprints_from_geojson(features: list[dict[str, Any]]) -> list[Footprint]:
     Deliberately tolerant: a ring with float coordinates, a missing height, or a
     degenerate extent produces a skipped envelope rather than an exception,
     because one bad feature should not cost the caller the other 2,638.
+
+    Delegates per-ring parsing to :func:`footprint_from_ring` so there is exactly
+    one ring-to-footprint conversion in the project. A second copy — the kind a
+    `place` evaluator would otherwise grow — is precisely the drift the "one
+    definition of one geometry" rule exists to prevent.
     """
     out: list[Footprint] = []
     for f in features:
         ring = ((f.get("geometry") or {}).get("coordinates") or [[]])[0]
-        pts = [p for p in (ring or [])
-               if isinstance(p, (list, tuple)) and len(p) >= 2
-               and all(isinstance(v, (int, float)) for v in p[:2])]
-        if len(pts) < 3:
-            continue
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        n = len(pts)
-        lon = sum(xs[:-1]) / (n - 1)
-        lat = sum(ys[:-1]) / (n - 1)
-        width = (max(xs) - min(xs)) * _metres_per_degree_lon(lat)
-        depth = (max(ys) - min(ys)) * M_PER_DEG_LAT
+        height = 0.0
         try:
             height = float((f.get("properties") or {}).get("height_m") or 0.0)
         except (TypeError, ValueError):
             height = 0.0
-        if width <= 0 or depth <= 0:
-            continue
-        out.append(Footprint(lon, lat, width, depth, height))
+        fp = footprint_from_ring(ring, height)
+        if fp is not None:
+            out.append(fp)
     return out
+
+
+def footprint_from_ring(ring: list[Any] | None,
+                        height_m: float) -> Footprint | None:
+    """One closed lon/lat ring -> a metric footprint, or None if unusable.
+
+    The single conversion used by the city model loader, the AI placement path
+    and the scenario evaluator's `place` op — one definition of one geometry.
+    Tolerates float coordinates and a degenerate extent by returning None, so a
+    bad ring is a skip rather than an exception.
+    """
+    pts = [p for p in (ring or [])
+           if isinstance(p, (list, tuple)) and len(p) >= 2
+           and all(isinstance(v, (int, float)) for v in p[:2])]
+    if len(pts) < 3:
+        return None
+    xs = [p[0] for p in pts]
+    ys = [p[1] for p in pts]
+    n = len(pts)
+    lon = sum(xs[:-1]) / (n - 1)
+    lat = sum(ys[:-1]) / (n - 1)
+    width = (max(xs) - min(xs)) * _metres_per_degree_lon(lat)
+    depth = (max(ys) - min(ys)) * M_PER_DEG_LAT
+    if width <= 0 or depth <= 0:
+        return None
+    return Footprint(lon, lat, width, depth, float(height_m))
 
 
 def height_variation_cv(footprints: list[Footprint], index: int,

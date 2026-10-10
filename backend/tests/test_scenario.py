@@ -150,16 +150,57 @@ def main() -> int:
     check("and explains that this is arithmetic, not a bug",
           "NOT to building height" in taller_west["axes"]["drainage"]["limitation"], "")
 
-    # --- 8. place and reset are refused rather than approximated --- #
+    # --- 8. place and reset: scoreable since 9 Oct 2026, by delegation --- #
     placed = evaluate(grids, feats,
                       ops=[MassingOp("place", count=3, scope="east")])
-    check("place is declared unsupported", placed["unsupportedOps"] == ["place"],
-          str(placed["unsupportedOps"]))
-    check("and the envelope count is honestly unchanged",
-          placed["massing"]["candidateCount"] == placed["massing"]["baselineCount"], "")
-    check("with the reason it belongs to the generator",
-          "city-model" in placed["whyUnsupported"]
-          or "city model" in placed["whyUnsupported"], "")
+    check("place is now supported and reports what it placed",
+          placed["unsupportedOps"] == []
+          and "place" in placed["supportedOps"],
+          f"unsupported {placed['unsupportedOps']}, "
+          f"supported {placed['supportedOps']}")
+    check("three placements actually add three envelopes",
+          placed["massing"]["candidateCount"]
+          == placed["massing"]["baselineCount"] + 3
+          and placed["scenario"]["placedCount"] == 3,
+          f"baseline {placed['massing']['baselineCount']}, "
+          f"candidate {placed['massing']['candidateCount']}, "
+          f"placed {placed['scenario']['placedCount']}")
+    check("placement moves the shade axis, not just the count",
+          placed["axes"]["shade"]["delta"] > 0,
+          f"shade delta {placed['axes']['shade']['delta']}")
+    check("and the drainage axis still says height is not a flood lever",
+          placed["axes"]["drainage"]["delta"] == 0,
+          "placed blocks sit on already-paved cells")
+
+    # reset: after [scale, reset] the massing is exactly the baseline again,
+    # because reset discards every earlier op in the sequence.
+    from app.services.design_metrics import footprints_from_geojson
+    fps = footprints_from_geojson(feats)
+    reset_out = apply_massing(
+        fps, [MassingOp("scale_all", multiplier=2.0, scope="all"),
+              MassingOp("reset", scope="all")],
+        grids.bounds)
+    check("a reset between ops restores the generated baseline",
+          sorted(f.height_m for f in reset_out)
+          == sorted(f.height_m for f in fps), "")
+    # ...and ops AFTER a reset still apply
+    after = apply_massing(
+        fps, [MassingOp("scale_all", multiplier=2.0, scope="all"),
+              MassingOp("reset", scope="all"),
+              MassingOp("scale_all", multiplier=1.5, scope="all")],
+        grids.bounds)
+    check("and an op after a reset still applies on the fresh baseline",
+          max(f.height_m for f in after)
+          == max(f.height_m for f in fps) * 1.5, "")
+    # [scale, place, reset]: the placed blocks are gone too, exactly as the
+    # viewer's reset removes them.
+    mixed = apply_massing(
+        fps, [MassingOp("place", count=2, scope="east"),
+              MassingOp("reset", scope="all")],
+        grids.bounds)
+    check("a reset removes placed blocks as the viewer's does",
+          len(mixed) == len(fps),
+          f"{len(fps)} in, {len(mixed)} out")
 
     # --- 9. purity: the baseline survives being evaluated against --- #
     from app.services.design_metrics import footprints_from_geojson

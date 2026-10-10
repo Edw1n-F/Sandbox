@@ -36,7 +36,7 @@ from hydrology import (  # noqa: E402
     mass_balance,
     priority_flood,
 )
-from app.services.sandbox_model import load_grids  # noqa: E402
+from app.services.sandbox_model import load_grids, routed_ledger  # noqa: E402
 
 PASSED = 0
 FAILED = 0
@@ -170,6 +170,37 @@ def main() -> int:
               bool((zero_non_drainage & ~outlets).sum() == 0),
               f"{int(zero_non_drainage.sum())} zeros, "
               f"{int((zero_non_drainage & outlets).sum())} of them outlets")
+
+        # --- gap 8: the reconciliation block (two readings, one view) --- #
+        # The routed cascade and the level-pool headline are different pictures
+        # of the same water and are never merged -- but they must be shown side
+        # by side, under the same rainfall, with their one shared identity
+        # stated and checked, or a reader has to reconcile them by hand.
+        routed = routed_ledger(grids, grids.land_class)
+        rec = routed.get("reconciliation")
+        check("the routed response carries a reconciliation block",
+              rec is not None
+              and "levelPool" in rec and "routed" in rec
+              and "sharedIdentity" in rec and "whyTheyDiffer" in rec, "")
+        if rec is not None:
+            check("the identity holds: the cascade consumes the level pool's unstored volume",
+                  rec["sharedIdentity"]["holds"] is True
+                  and rec["routed"]["runoffInM3"] == rec["levelPool"]["unstoredM3"],
+                  f"{rec['routed']['runoffInM3']} vs "
+                  f"{rec['levelPool']['unstoredM3']}")
+            check("and it equals the published headline, not a re-derivation",
+                  abs(rec["levelPool"]["unstoredM3"] - 3170180.3) < 0.5,
+                  f"{rec['levelPool']['unstoredM3']}")
+            check("the reconciliation is computed, not restated: a different rainfall changes it",
+                  routed_ledger(grids, grids.land_class, rainfall_mm=550.0)
+                  ["reconciliation"]["levelPool"]["unstoredM3"]
+                  != rec["levelPool"]["unstoredM3"], "")
+            check("each half names its own source path",
+                  "storage_ledger" in rec["levelPool"]["source"]
+                  and "fill_and_spill" in rec["routed"]["source"], "")
+            check("the block says neither reading corrects the other",
+                  "Neither is a correction to the other"
+                  in rec["whyTheyDiffer"], "")
     else:
         check("the routing artefacts exist for the real-grid checks", False,
               "run scripts/make_wetgrid.py first")

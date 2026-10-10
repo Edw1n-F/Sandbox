@@ -644,6 +644,7 @@ def _parse_massing_ops(raw_ops: object) -> list:
                 dy_m=raw.get("dyM", raw.get("dy_m")),
                 scope=raw.get("scope"),
                 count=raw.get("count"),
+                height_m_new=raw.get("heightMNew", raw.get("height_m_new")),
             ))
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e

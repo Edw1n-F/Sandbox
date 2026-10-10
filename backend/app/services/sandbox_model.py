@@ -566,6 +566,48 @@ def routed_ledger(
     hand_drainage = hand_result["handM"] == 0
     agreement = float((routed_wet == hand_drainage).mean())
 
+    # --- The reconciliation block (gap 8's "one view" half) --- #
+    # Two drainage readings coexist by design: the routed cascade here and the
+    # level-pool headline in storage_ledger / wetgrid_hsk.npy. They are different
+    # pictures of the same water and are never merged -- but until now they were
+    # also never shown side by side, so a reader had to hold both in their head
+    # and reconcile them by hand. This block puts the level-pool volumes next to
+    # the routed ones under the SAME rainfall, states the one identity they
+    # share (the routed cascade consumes exactly the level pool's unstored
+    # volume), and names the difference in what each counts. It computes from
+    # the same grids rather than restating cached figures, so the block can never
+    # drift from either reading.
+    level_pool = storage_ledger(grids, land_class, rainfall_mm)
+    reconciliation = {
+        "levelPool": {
+            "runoffM3": round(level_pool["runoffM3"], 1),
+            "unstoredM3": round(level_pool["unstoredM3"], 1),
+            "source": "storage_ledger — the level-pool headline; wetgrid_hsk.npy and bufferDeficitM3 come from this path",
+        },
+        "routed": {
+            "runoffInM3": round(float(cascade["runoffInM3"]), 1),
+            "storedM3": round(stored_m3, 1),
+            "dischargedM3": round(float(cascade["dischargedM3"]), 1),
+            "source": "fill_and_spill — D8 routing of the same unstored volume into depressions and outfalls",
+        },
+        "sharedIdentity": {
+            "claim": ("the routed cascade consumes exactly the level pool's "
+                      "unstored volume: runoffInM3 == levelPool.unstoredM3"),
+            "holds": bool(
+                abs(float(cascade["runoffInM3"]) - level_pool["unstoredM3"]) < 0.5),
+        },
+        "whyTheyDiffer": (
+            "The level pool asks 'how much water is left after retention' and "
+            "solves a single water-surface level over the whole grid; the "
+            "cascade asks 'where does each cell's share go' and routes it cell "
+            "to cell into depressions and onward to the boundary. Same water, "
+            "different questions. storedM3 here is water sitting in depressions "
+            "along the way; the level pool's unstored volume has no location "
+            "at all until the wet-grid script allocates it. Neither is a "
+            "correction to the other."
+        ),
+    }
+
     return {
         "runoffInM3": round(float(cascade["runoffInM3"]), 1),
         "storedM3": round(stored_m3, 1),
@@ -590,6 +632,7 @@ def routed_ledger(
                 "the routed depth; the two are never merged."
             ),
         },
+        "reconciliation": reconciliation,
         "status": ROUTED_STATUS,
         "warning": ROUTED_WARNING,
         "rainfallMm": float(rainfall_mm),
