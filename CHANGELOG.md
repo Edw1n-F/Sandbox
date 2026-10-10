@@ -2,6 +2,55 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-10 — direct coordinate and footprint-size editing via GenAI
+
+The GenAI sandbox now lets the model (or the user) directly change the
+**coordinates and size** of 3D massing, not just height and orientation.
+
+### Research
+
+Reviewed the entire GenAI → 3D chain: `POST /ai-plan` (NL → tool call → grounded
+features), `_massing_feature` (ops → GeoJSON `massing_height` features),
+`SandboxViewer.tsx` (features → `applyMassingOps` → live Cesium entities), and
+`ScenePanel.tsx` (user input → plan selection → 3D update). The six existing
+ops (`scale_all`, `set_site`, `rotate`, `move`, `place`, `reset`) could change
+height and position-by-offset but could not:
+- name a **target coordinate** for a move ("move to the centre of the site");
+- change a **footprint's size** ("widen the western blocks by 20%").
+
+The project's original safety rule ("the model never supplies a coordinate")
+was kept: the new `target_lon`/`target_lat` fields carry **study-area bounds**
+in the schema and are **validated against the bbox** in `apply_massing` — a
+coordinate outside the site is refused, never invented.
+
+### Added
+
+- **`resize` op** — scale the footprint's width and/or depth about its own
+  centroid. `width_scale=1.2` means 20% wider; both axes default to 1.0 so a
+  caller can resize one only. Frontend `scaleRing()` works in metres (isotropic
+  in plan) and is tested.
+- **`move` with `target_lon`/`target_lat`** — reposition footprints to a direct
+  coordinate, validated inside the study-area bbox. The heuristic parser
+  recognises "widen"/"narrow"/"broader" + optional percentage.
+- **Schema fields** `target_lon`, `target_lat`, `width_scale`, `depth_scale`
+  added to `MASSING_TOOL` with min/max bounds; `_massing_feature` validates
+  them.
+- **Frontend `scaleRing`** + updated `applyMassingOps` for both modes;
+  `ScenePanel` shows resize/move-to-coordinate in plain language.
+
+### Tests
+
+- 8 new backend checks (test_scenario 66/66): resize widens widths, preserves
+  heights/positions, depth-only, coordinate move to centre, out-of-bounds
+  refused.
+- 2 new AI plan checks (test_ai_plan 41/41): heuristic resize parsing, schema
+  bounds on coordinate fields.
+- 4 new frontend checks (cityModel.test.ts 50/50): `scaleRing` centroid,
+  widening, no-op, closure.
+- Two existing tests updated: the old "no coordinate field" assertion became
+  "coordinate fields are bounded" — the guarantee moved from absence to
+  validated bounds.
+
 ## 2026-10-10 — hourly storm simulation: rain and drainage, hour by hour
 
 The two existing drainage readings are static: the level pool solves one total

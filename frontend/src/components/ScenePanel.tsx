@@ -62,6 +62,10 @@ export default function ScenePanel() {
           rationale?: string
           note?: string
           scope?: { label?: string }
+          targetLon?: number
+          targetLat?: number
+          widthScale?: number
+          depthScale?: number
         }
       | undefined
     const scope = p?.scope?.label ?? 'the whole study area'
@@ -79,14 +83,28 @@ export default function ScenePanel() {
         what = `rotate ${p.degrees}°`
         break
       case 'move': {
-        // Compass, because "dx 12, dy -30" is not something a planner reads.
-        const dx = Number(p.dxM ?? 0)
-        const dy = Number(p.dyM ?? 0)
-        const ns = dy > 0 ? 'north' : dy < 0 ? 'south' : ''
-        const ew = dx > 0 ? 'east' : dx < 0 ? 'west' : ''
-        const bearing = [ns, ew].filter(Boolean).join('-') || '—'
-        const distance = Math.round(Math.hypot(dx, dy))
-        what = `move ${distance} m ${bearing}`
+        // Direct coordinate move if targetLon/Lat are present.
+        if (typeof p.dxM === 'undefined' && typeof p.dyM === 'undefined'
+            && p.rationale?.includes('coordinate')) {
+          what = 'reposition to coordinate'
+        } else {
+          const dx = Number(p.dxM ?? 0)
+          const dy = Number(p.dyM ?? 0)
+          const ns = dy > 0 ? 'north' : dy < 0 ? 'south' : ''
+          const ew = dx > 0 ? 'east' : dx < 0 ? 'west' : ''
+          const bearing = [ns, ew].filter(Boolean).join('-') || '—'
+          const distance = Math.round(Math.hypot(dx, dy))
+          what = `move ${distance} m ${bearing}`
+        }
+        break
+      }
+      case 'resize': {
+        const ws = p.widthScale ?? 1
+        const ds = p.depthScale ?? 1
+        const parts: string[] = []
+        if (ws !== 1) parts.push(`width ×${ws}`)
+        if (ds !== 1) parts.push(`depth ×${ds}`)
+        what = `resize ${parts.join(', ')}`
         break
       }
       case 'place':

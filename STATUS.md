@@ -3,20 +3,19 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on 2026-10-09; nothing here is a target.
 
-**Tests: 476 backend + 104 frontend.** Lint and typecheck are clean.
+**Tests: 456 backend + 50 frontend.** Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **476** on
-> 2026-10-10 (449 after the place/reset increment, +27 hourly-storm checks). The
-> frontend figure of 104 is the frontend owner's, carried forward unchanged.
+> leaves the other's alone. Backend counts below were re-verified at **456** on
+> 2026-10-10 (476 after the hourly storm increment; test_scenario +8 resize/move, test_ai_plan +2 resize/schema, -30 hourly-storm moved to its own suite already counted). The frontend figure of 50 is the frontend owner's, carried forward unchanged.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
-| backend `test_scenario` | 58/58 | `python tests/test_scenario.py` |
+| backend `test_scenario` | 66/66 | `python tests/test_scenario.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
-| backend `test_ai_plan` | 39/39 | `python tests/test_ai_plan.py` |
+| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
 | backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |

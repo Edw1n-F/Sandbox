@@ -126,8 +126,18 @@ class MassingOp:
     scope: str | None = None
     count: int | None = None
     height_m_new: float | None = None
+    # Direct coordinate/size editing (added 10 Oct 2026). The model can now name
+    # a target position and a footprint scale, so "move this block to the
+    # centre of the site and widen it by 20%" is one op. The coordinate is
+    # validated against the study-area bounds -- it is not a free invention
+    # because a coordinate outside the bbox is not on this site.
+    target_lon: float | None = None
+    target_lat: float | None = None
+    width_scale: float | None = None
+    depth_scale: float | None = None
 
-    SUPPORTED = ("scale_all", "set_site", "rotate", "move", "place", "reset")
+    SUPPORTED = ("scale_all", "set_site", "rotate", "move", "place", "reset",
+                 "resize")
 
     def __post_init__(self) -> None:
         if self.op not in self.SUPPORTED:
@@ -238,22 +248,64 @@ def apply_massing(
                     if i in targets else f
                     for i, f in enumerate(out)]
         elif op.op == "move":
-            dx = float(op.dx_m or 0.0)
-            dy = float(op.dy_m or 0.0)
-            if abs(dx) > 1e-9 or abs(dy) > 1e-9:
-                # The metres-per-degree-longitude factor depends on each
-                # footprint's OWN latitude, so it cannot be hoisted out of the
-                # loop. Hoisting it referenced an undefined `f_lat` and raised
-                # NameError; a single shared factor would also be wrong, because
-                # a move is metric while the degree scale shrinks with latitude.
+            # Two modes: a metric offset (dx/dy) or a direct target coordinate.
+            # The coordinate is validated against the study-area bounds -- it is
+            # not a free invention, because a coordinate outside the bbox is not
+            # on this site. The model never supplies a coordinate from nowhere:
+            # it gets one from the scope ring's centroid or the instruction,
+            # and the bounds check is the guard.
+            if op.target_lon is not None and op.target_lat is not None:
+                # Validate: the target must be inside the study area.
+                tlx, tly = float(op.target_lon), float(op.target_lat)
+                if not (x0 <= tlx <= x1 and y0 <= tly <= y1):
+                    # Out of bounds -- refuse rather than inventing a position
+                    # off-site.
+                    continue
                 targets = set(idx)
                 out = [
-                    Footprint(
-                        f.lon + dx / (111_320.0 * math.cos(math.radians(f.lat))),
-                        f.lat + dy / 110_540.0,
-                        f.width_m, f.depth_m, f.height_m,
-                        bearing_deg=f.bearing_deg,
-                    ) if i in targets else f
+                    Footprint(tlx, tly, f.width_m, f.depth_m, f.height_m,
+                              bearing_deg=f.bearing_deg)
+                    if i in targets else f
+                    for i, f in enumerate(out)
+                ]
+            else:
+                dx = float(op.dx_m or 0.0)
+                dy = float(op.dy_m or 0.0)
+                if abs(dx) > 1e-9 or abs(dy) > 1e-9:
+                    # The metres-per-degree-longitude factor depends on each
+                    # footprint's OWN latitude, so it cannot be hoisted out of the
+                    # loop. Hoisting it referenced an undefined `f_lat` and raised
+                    # NameError; a single shared factor would also be wrong, because
+                    # a move is metric while the degree scale shrinks with latitude.
+                    targets = set(idx)
+                    out = [
+                        Footprint(
+                            f.lon + dx / (111_320.0 * math.cos(math.radians(f.lat))),
+                            f.lat + dy / 110_540.0,
+                            f.width_m, f.depth_m, f.height_m,
+                            bearing_deg=f.bearing_deg,
+                        ) if i in targets else f
+                        for i, f in enumerate(out)
+                    ]
+        elif op.op == "resize":
+            # Directly scale the footprint's width and/or depth. A width_scale of
+            # 1.2 means 20% wider; 0.8 means 20% narrower. Both default to 1.0
+            # (no change), so a caller can resize one axis only. The footprint's
+            # area changes, which affects frontal area density and site coverage
+            # -- both scoreable -- but the height and position are preserved.
+            ws = float(op.width_scale) if op.width_scale is not None else 1.0
+            ds = float(op.depth_scale) if op.depth_scale is not None else 1.0
+            if not (0.1 <= ws <= 10.0 and 0.1 <= ds <= 10.0):
+                continue
+            if abs(ws - 1.0) > 1e-9 or abs(ds - 1.0) > 1e-9:
+                targets = set(idx)
+                out = [
+                    Footprint(f.lon, f.lat,
+                              max(1.0, f.width_m * ws),
+                              max(1.0, f.depth_m * ds),
+                              f.height_m,
+                              bearing_deg=f.bearing_deg)
+                    if i in targets else f
                     for i, f in enumerate(out)
                 ]
         elif op.op == "place":
