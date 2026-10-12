@@ -14,4 +14,87 @@ body,
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background: #05080a;
+  color: #dce8e2;
+  font-family: 'Inter', 'SF Pro Display', system-ui, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Thin HUD scrollbars: the panel is dense, and a fat grey scrollbar over a
+   translucent pane reads as an OS chrome leftover. */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(160, 190, 175, 0.22);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(92, 255, 157, 0.4);
+}
+
+::selection {
+  background: rgba(92, 255, 157, 0.3);
+  color: #eafff3;
+}
+
+/* ---- HUD chrome utilities -------------------------------------------- */
+
+/* Uppercase monospace micro-label, the section-header voice of the interface. */
+.hud-label {
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', ui-monospace, Consolas,
+    'Courier New', monospace;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #7d928a;
+}
+
+/* Monospace tabular numerals for readouts. */
+.hud-mono {
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', ui-monospace, Consolas,
+    'Courier New', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Rotated coordinate strip along the screen edge, like the reference frame's
+   vertical edge annotation. Pure chrome: never intercepts a drag meant for
+   the 3D view. */
+.hud-edge-text {
+  font-family: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', ui-monospace, Consolas,
+    'Courier New', monospace;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(125, 146, 138, 0.55);
+  writing-mode: vertical-rl;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Slow blink for the live-status dot. */
+@keyframes hud-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 6px currentColor;
+  }
+  50% {
+    opacity: 0.35;
+    box-shadow: 0 0 2px currentColor;
+  }
+}
+
+.hud-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: hud-pulse 2.4s ease-in-out infinite;
+  flex: none;
 }

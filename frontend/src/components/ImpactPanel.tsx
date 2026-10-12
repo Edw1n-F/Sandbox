@@ -21,9 +21,10 @@ import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
 import Collapse from '@mui/material/Collapse'
 import Link from '@mui/material/Link'
-import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
+
+import HudPanel from '@/components/HudPanel'
 
 import { useEffect, useState } from 'react'
 
@@ -89,20 +90,19 @@ export default function ImpactPanel({ sceneId }: { sceneId: string | null }) {
   if (!sceneId) return null
 
   return (
-    <Paper elevation={0} variant="outlined" sx={{ p: 1.5 }}>
-      <Stack
-        direction="row"
-        alignItems="center"
-        justifyContent="space-between"
-        sx={{ cursor: 'pointer' }}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <Typography variant="subtitle2">Impact — the buffer deficit</Typography>
-        <Typography variant="caption" color="text.secondary">
-          {open ? 'hide' : 'show'}
+    <HudPanel
+      title="Impact — Buffer Deficit"
+      right={
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ cursor: 'pointer', userSelect: 'none' }}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? 'HIDE ▲' : 'SHOW ▼'}
         </Typography>
-      </Stack>
-
+      }
+    >
       <Collapse in={open}>
         {error && (
           <Alert severity="warning" sx={{ mt: 1 }}>
@@ -113,7 +113,10 @@ export default function ImpactPanel({ sceneId }: { sceneId: string | null }) {
         {ledger && (
           <>
             <Section title="Today, against this plan">
-              <Typography variant="h6" sx={{ fontVariantNumeric: 'tabular-nums' }}>
+              <Typography
+                className="hud-mono"
+                sx={{ fontSize: 26, fontWeight: 600, lineHeight: 1.1, color: 'success.main' }}
+              >
                 {m3(ledger.bufferDeficitM3)}
               </Typography>
               <Typography variant="caption" color="text.secondary" display="block">
@@ -225,6 +228,6 @@ export default function ImpactPanel({ sceneId }: { sceneId: string | null }) {
           </Typography>
         )}
       </Collapse>
-    </Paper>
+    </HudPanel>
   )
 }

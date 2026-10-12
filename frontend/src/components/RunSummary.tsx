@@ -9,11 +9,12 @@
  * looking at one panel and not knowing whether they were reading today's
  * committed figures or the run they just asked for.
  */
+import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
-import Paper from '@mui/material/Paper'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 
+import HudPanel from '@/components/HudPanel'
 import type { RunResult } from '@/api/types'
 
 /** m3 with thousands separators, rounded: a 12-digit float reads as noise. */
@@ -42,6 +43,35 @@ function deltaColor(value: number, downwardIsBetter = true): string {
   return worse ? 'error.main' : 'success.main'
 }
 
+/** One mono readout row: label left, value + signed delta right. */
+function Row({
+  label,
+  value,
+  delta,
+  digits = 0,
+}: {
+  label: string
+  value: string
+  delta?: number
+  digits?: number
+}) {
+  return (
+    <Stack direction="row" justifyContent="space-between" alignItems="baseline">
+      <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'inherit' }}>
+        {label}
+      </Typography>
+      <Typography className="hud-mono" sx={{ fontSize: 12, color: 'text.primary' }}>
+        {value}
+        {delta !== undefined && (
+          <Box component="span" sx={{ color: deltaColor(delta), ml: 0.75 }}>
+            {signed(delta, digits)}
+          </Box>
+        )}
+      </Typography>
+    </Stack>
+  )
+}
+
 interface Props {
   result: RunResult
 }
@@ -57,18 +87,18 @@ export default function RunSummary({ result }: Props) {
     : null
 
   return (
-    <Paper variant="outlined" sx={{ p: 1.5 }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle2">Run {result.runId}</Typography>
+    <HudPanel
+      title={`Run ${result.runId.slice(0, 8)}`}
+      right={
         <Stack direction="row" spacing={0.5}>
           <Chip size="small" label={`${inputs.rainfallMm.toFixed(0)} mm`} />
           {inputs.heatPreset === 'heatwave' && (
             <Chip size="small" color="warning" label="heatwave display" />
           )}
         </Stack>
-      </Stack>
-
-      <Typography variant="body2" sx={{ mt: 1 }}>
+      }
+    >
+      <Typography variant="body2" sx={{ mt: 0.5 }}>
         {explanation}
       </Typography>
 
@@ -81,64 +111,27 @@ export default function RunSummary({ result }: Props) {
       </Typography>
 
       <Stack spacing={0.5} sx={{ mt: 1.5 }}>
-        <Stack direction="row" justifyContent="space-between">
-          <Typography variant="caption" color="text.secondary">
-            Unstored runoff
-          </Typography>
-          <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-            {m3(stats.scenario.unstoredM3)}{' '}
-            <Typography
-              component="span"
-              variant="caption"
-              sx={{ color: deltaColor(delta.unstoredM3) }}
-            >
-              ({signed(delta.unstoredM3)} vs today)
-            </Typography>
-          </Typography>
-        </Stack>
-
-        <Stack direction="row" justifyContent="space-between">
-          <Typography variant="caption" color="text.secondary">
-            Wet area
-          </Typography>
-          <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-            {ha(stats.scenario.wetAreaHa)}{' '}
-            <Typography
-              component="span"
-              variant="caption"
-              sx={{ color: deltaColor(delta.wetAreaHa) }}
-            >
-              ({signed(delta.wetAreaHa, 1)})
-            </Typography>
-          </Typography>
-        </Stack>
-
-        <Stack direction="row" justifyContent="space-between">
-          <Typography variant="caption" color="text.secondary">
-            Heat-exposure index
-          </Typography>
-          <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-            {stats.scenario.heatBlendedMean.toFixed(3)}{' '}
-            <Typography
-              component="span"
-              variant="caption"
-              sx={{
-                color: deltaColor(delta.heatBlendedMean, true),
-              }}
-            >
-              ({signed(delta.heatBlendedMean, 3)})
-            </Typography>
-          </Typography>
-        </Stack>
-
-        <Stack direction="row" justifyContent="space-between">
-          <Typography variant="caption" color="text.secondary">
-            Green · paved
-          </Typography>
-          <Typography variant="caption" sx={{ fontVariantNumeric: 'tabular-nums' }}>
-            {ha(delta.greenAreaM2 / 10_000)} · {ha(delta.pavedAreaM2 / 10_000)}
-          </Typography>
-        </Stack>
+        <Row
+          label="Unstored runoff"
+          value={m3(stats.scenario.unstoredM3)}
+          delta={delta.unstoredM3}
+        />
+        <Row
+          label="Wet area"
+          value={ha(stats.scenario.wetAreaHa)}
+          delta={delta.wetAreaHa}
+          digits={1}
+        />
+        <Row
+          label="Heat-exposure index"
+          value={stats.scenario.heatBlendedMean.toFixed(3)}
+          delta={delta.heatBlendedMean}
+          digits={3}
+        />
+        <Row
+          label="Green · paved"
+          value={`${ha(delta.greenAreaM2 / 10_000)} · ${ha(delta.pavedAreaM2 / 10_000)}`}
+        />
       </Stack>
 
       {skippedNote && (
@@ -150,6 +143,6 @@ export default function RunSummary({ result }: Props) {
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
         {result.warning}
       </Typography>
-    </Paper>
+    </HudPanel>
   )
 }

@@ -3,12 +3,14 @@
  *
  * Status plus the rainfall / temperature sliders. Per CLAUDE.md this layer only
  * "triggers state changes, no rendering logic" -- it never renders the map.
+ *
+ * The plain-language intervention input lives in `PromptBar`, floating over the
+ * 3D view; everything here is read-side reporting and direct controls.
  */
 import Alert from '@mui/material/Alert'
 import Button from '@mui/material/Button'
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
-import Paper from '@mui/material/Paper'
 import MenuItem from '@mui/material/MenuItem'
 import Select, { type SelectChangeEvent } from '@mui/material/Select'
 import Stack from '@mui/material/Stack'
@@ -17,7 +19,7 @@ import Typography from '@mui/material/Typography'
 
 import { useEffect, useState } from 'react'
 
-import { createAiPlan, type AiPlanResult } from '@/api/planApi'
+import HudPanel from '@/components/HudPanel'
 import ImpactPanel from '@/components/ImpactPanel'
 import RunSummary from '@/components/RunSummary'
 import {
@@ -33,6 +35,7 @@ import { useSceneStore } from '@/state/sceneStore'
 import SliderField from './SliderField'
 
 export default function ScenePanel() {
+  const sceneId = useSceneStore((s) => s.sceneId)
   const scene = useSceneStore((s) => s.scene)
   const error = useSceneStore((s) => s.error)
   const setEnvParams = useSceneStore((s) => s.setEnvParams)
@@ -125,47 +128,7 @@ export default function ScenePanel() {
       rationale: p?.rationale || undefined }
   })
   const selectPlan = usePlanStore((s) => s.selectPlan)
-  const refreshPlans = usePlanStore((s) => s.refreshPlans)
-  const sceneId = useSceneStore((s) => s.sceneId)
-  const [instruction, setInstruction] = useState('')
-  const [aiBusy, setAiBusy] = useState(false)
-  const [aiResult, setAiResult] = useState<AiPlanResult | null>(null)
-  // Read from /health so the badge reflects the *server's* configuration, not
-  // what this browser last happened to run. A demo on a machine with no key must
-  // say so before a judge draws the conclusion, not after.
-  /**
-   * Tri-state, not a nullable object.
-   *
-   * `null` used to mean two different things -- "no key configured" and "could not
-   * reach /health" -- and the badge collapsed both to "no LLM key". That states
-   * something false: a reachable backend with no key is a configuration problem the
-   * user can fix, whereas an unreachable one means the badge is telling them nothing
-   * because there is nothing to tell. `CLAUDE.md` makes the general point about a demo
-   * quietly not being AI; the same honesty applies to not knowing.
-   */
-  const [llm, setLlm] = useState<{
-    configured: boolean
-    model: string | null
-  } | null>(null)
-  const [llmUnreachable, setLlmUnreachable] = useState(false)
-  useEffect(() => {
-    let cancelled = false
-    void fetch('/health')
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`status ${r.status}`))))
-      .then((d) => {
-        if (cancelled) return
-        setLlmUnreachable(false)
-        if (d?.llm) setLlm(d.llm)
-      })
-      .catch(() => {
-        // Leave `llm` null *and* record that we could not ask, so the badge can say so.
-        if (!cancelled) setLlmUnreachable(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [aiResult])
-  const [aiError, setAiError] = useState<string | null>(null)
+  const loading = usePlanStore((s) => s.loading)
   const terrain = useSceneStore((s) => s.terrain)
   // The city model loads asynchronously, so reading the stats once at mount
   // captured an empty model and the editing panel never appeared. Re-read them
@@ -177,58 +140,16 @@ export default function ScenePanel() {
     setCity(cityModelStats())
   }, [cityRev])
 
-  /**
-   * Ask the AI module for a plan, then select it.
-   *
-   * Selecting the new plan is the whole point: it routes the generated features
-   * through the existing store and render path, so the 3D scene updates with no
-   * special-casing for AI output. That is §3.3.2's "one pipeline" requirement
-   * made visible in the UI.
-   */
-  // The heuristic provider is a regex parser, and calling it AI would be the one
-  // claim in this project that is simply false. So the badge and the copy both
-  // name it for what it is.
-  const aiIsLive = Boolean(aiResult && aiResult.provider !== 'heuristic')
-
-  const runInstruction = async () => {
-    const text = instruction.trim()
-    if (!text || aiBusy || !sceneId) return
-    setAiBusy(true)
-    setAiError(null)
-    setAiResult(null)
-    try {
-      const result = await createAiPlan(sceneId, text)
-      setAiResult(result)
-      if (result.planId) {
-        // Refresh the list first, then select: the panel derives the plan's
-        // label and type from the list, so selecting before the list knows
-        // about the plan renders "No plan" beside a populated intervention
-        // count.
-        await refreshPlans(sceneId)
-        await selectPlan(result.planId)
-        setInstruction('')
-      }
-    } catch (err) {
-      setAiError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setAiBusy(false)
-    }
-  }
-  const loading = usePlanStore((s) => s.loading)
-
   return (
-    <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
       <Box>
-        <Typography variant="overline" color="text.secondary">
-          Scene
-        </Typography>
-        <Typography variant="h6" sx={{ lineHeight: 1.2 }}>
+        <Typography className="hud-label">Scene</Typography>
+        <Typography variant="h6" sx={{ lineHeight: 1.2, mt: 0.25 }}>
           {scene?.name ?? 'No scene'}
         </Typography>
         {scene && (
-          <Typography variant="caption" color="text.secondary" display="block">
-            {scene.center.coordinates[1].toFixed(4)}°N,{' '}
-            {scene.center.coordinates[0].toFixed(4)}°E
+          <Typography className="hud-mono" sx={{ fontSize: 10, color: 'text.secondary', mt: 0.25 }}>
+            {scene.center.coordinates[1].toFixed(4)}°N · {scene.center.coordinates[0].toFixed(4)}°E
           </Typography>
         )}
       </Box>
@@ -242,7 +163,7 @@ export default function ScenePanel() {
       )}
 
       <Stack direction="row" justifyContent="space-between" alignItems="center">
-        <Typography variant="subtitle2">Plan</Typography>
+        <Typography className="hud-label">Plan</Typography>
         <Chip size="small" label={plan?.planType ?? '—'} />
       </Stack>
 
@@ -281,11 +202,10 @@ export default function ScenePanel() {
       </Typography>
 
       {city.count > 0 && (
-        <Paper variant="outlined" sx={{ p: 1.5 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Typography variant="subtitle2">3D city model</Typography>
-            <Chip size="small" color="warning" label="provisional" />
-          </Stack>
+        <HudPanel
+          title="3D City Model"
+          right={<Chip size="small" color="warning" label="provisional" />}
+        >
           <Typography variant="caption" color="text.secondary" display="block">
             {city.count} massing envelopes · mean {city.mean.toFixed(1)} m
             {city.placed ? ` · ${city.placed} added by the plan` : ''}
@@ -316,7 +236,7 @@ export default function ScenePanel() {
             </Button>
             <Button size="small" variant="outlined"
               onClick={() => { editCityModelHeights(0.8); setCity(cityModelStats()) }}>
-              -20% height
+              −20%
             </Button>
             <Button size="small" color="inherit"
               onClick={() => { resetCityModel(); selectCityBuilding(null); setCity(cityModelStats()) }}>
@@ -340,7 +260,7 @@ export default function ScenePanel() {
           <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
             Click a building to select it, then edit its height directly.
           </Typography>
-        </Paper>
+        </HudPanel>
       )}
 
       {massingLines.length > 0 && (
@@ -368,82 +288,14 @@ export default function ScenePanel() {
         </Alert>
       )}
 
-      <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Typography variant="subtitle2" gutterBottom>
-          Propose interventions
+      <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+        <Typography className="hud-label" sx={{ flex: 1 }}>
+          Scenario
         </Typography>
-        <TextField
-          fullWidth
-          size="small"
-          multiline
-          minRows={2}
-          placeholder="e.g. add three 60 m residential towers in the east, or make the western blocks 30% taller"
-          value={instruction}
-          disabled={!sceneId || aiBusy}
-          onChange={(e) => setInstruction(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void runInstruction()
-          }}
-        />
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
-          <Button
-            size="small"
-            variant="contained"
-            disabled={!sceneId || aiBusy || !instruction.trim()}
-            onClick={() => void runInstruction()}
-          >
-            {aiBusy ? 'Generating…' : 'Generate'}
-          </Button>
-          <Stack direction="row" spacing={1} alignItems="center">
-            <Chip
-              size="small"
-              color={aiIsLive ? 'success' : 'warning'}
-              label={
-                aiResult
-                  ? aiResult.provider
-                  : llmUnreachable
-                    ? 'LLM status unknown'
-                    : llm?.configured
-                      ? 'LLM ready'
-                      : 'no LLM key'
-              }
-            />
-            {aiResult && !aiIsLive && (
-              <Typography variant="caption" color="text.secondary">
-                deterministic parser — <strong>not AI</strong>
-              </Typography>
-            )}
-            {!aiResult && llm && !llm.configured && (
-              <Typography variant="caption" color="text.secondary">
-                set ANTHROPIC_API_KEY or LLM_BASE_URL for a live model
-              </Typography>
-            )}
-            {!aiResult && llmUnreachable && (
-              <Typography variant="caption" color="text.secondary">
-                /health did not respond, so whether a model is configured is unknown.
-                Plans will still be generated, by the deterministic parser.
-              </Typography>
-            )}
-          </Stack>
-          {aiResult && (
-            <Typography variant="caption" color="text.secondary" display="block">
-              {aiResult.features} feature{aiResult.features === 1 ? '' : 's'}
-              {aiResult.types.length ? ` · ${aiResult.types.join(', ')}` : ''} ·
-              machine-proposed, status=draft
-            </Typography>
-          )}
-        </Stack>
-        {aiResult && aiResult.features === 0 && aiResult.message && (
-          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5 }}>
-            {aiResult.message}
-          </Typography>
-        )}
-        {aiError && (
-          <Typography variant="caption" color="error" sx={{ mt: 0.5 }}>
-            {aiError}
-          </Typography>
-        )}
-      </Paper>
+        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary' }}>
+          RUN INPUTS — NOT PERSISTED (ADR-024)
+        </Typography>
+      </Stack>
 
       <SliderField
         label="Rainfall"
@@ -470,10 +322,11 @@ export default function ScenePanel() {
       <Button
         variant="contained"
         size="large"
+        fullWidth
         disabled={!sceneId || running}
         onClick={() => void run(activePlanId)}
       >
-        {running ? 'Running simulation…' : 'Run simulation'}
+        {running ? 'Running…' : '▶ Run simulation'}
       </Button>
       {running && (
         <Typography variant="caption" color="text.secondary">
