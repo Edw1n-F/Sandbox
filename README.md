@@ -50,6 +50,9 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **Heat anchor** — the cited band that index is read against | Working | HKO Lau Fau Shan, July [26.4, 32.7] °C; reproducible via `fetch_heat_anchor.py --check` |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
 | **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 30 tests, incl. real-HTTP round trips |
+| **Chat** — ask why, get an answer card whose numbers are checked against the run | **Live.** OpenRouter `:free` model; no key needed to fall back | verified against a real key: 2/2 cards `source: model`, one fully grounded, one flagged a derived 95 % |
+| **Streamed steps** — the reader watches the three steps happen | Working | `run_started` → 3 × `step_started`/`step_finished` → `delta` → `grounding` → `answer` → `done` |
+| **Number grounding** — every figure in a card traced back to the run | Working | invented "42,000 m³" and "99.9" are caught and named |
 | **AI 3D placement** — new massing on real land cover | Working, screening-grade | 3 blocks × 60 m rendered, pixel-verified, selectable |
 | **AI 3D alteration, scoped** — height / density / orientation, by region or site | Working | 1,232 of 2,639 buildings for "western blocks"; west/east visible in the render |
 | **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded; click-to-select + per-building height, browser-verified |
@@ -513,6 +516,45 @@ output.
 The LLM path is exercised on every test run through an injected transport that
 replays a recorded response, so it is not untested code waiting for a key.
 
+### Chat: an answer you can audit
+
+`POST /api/scenes/{sceneId}/chat` answers a question **about a run that already
+happened**, and `/chat/stream` streams it. Three things make it trustworthy
+rather than merely fluent:
+
+1. **It explains, it does not compute.** The run's own numbers are handed over as
+   a FACTS block. Nothing is recalculated inside a Q&A — recomputing would turn a
+   fast reply into a 0.7 s simulation *and* let the answer drift from the numbers
+   on screen.
+2. **The answer is a card, not a paragraph.** Title, one-sentence answer, cause,
+   next step, stats, confidence with a reason, caveats, follow-ups. The same
+   fields are always present, so a cause the numbers do not support shows as
+   `cause: null` instead of as prose that quietly omits it.
+3. **Every number is checked by code, not by the model.** `grounding.py` traces
+   each figure back to the run, at any scale or rounding. A card that fails is
+   sent back once with the offending numbers named, and if it still fails the
+   card is shown **with** the warning rather than without it.
+
+With no model configured the identical card is assembled by code from the run's
+own figures and labelled `source: "template"`. That is not a degraded mode to
+hide — every number in it is one the run actually produced, which is more than a
+hallucinated answer can claim.
+
+**Configuration** (three lines in `backend/.env`):
+
+```ini
+ANTHROPIC_API_KEY=                                # leave empty: it wins over the router
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=sk-or-...
+LLM_MODEL=google/gemma-4-31b-it:free
+LLM_JSON_MODE=auto                                # off if the model rejects response_format
+LLM_FALLBACK_MODELS=nvidia/nemotron-3-ultra-550b-a55b:free
+```
+
+`LLM_FALLBACK_MODELS` matters because a free tier is a shared pool: a `:free`
+model throttled upstream is the normal case, not an emergency. See
+[gap 20](STATUS.md) for the measured latency.
+
 ### Running it live, with no key at all
 
 Ollama serves an OpenAI-compatible API, so a real model needs no vendor account:
@@ -910,7 +952,7 @@ T1/
 ├── CHANGELOG.md                  every non-trivial change, newest first
 ├── CLAUDE.md                     repo conventions for AI agents
 ├── docs/
-│   ├── ARCHITECTURE.md           the 15 design decisions, in depth
+│   ├── ARCHITECTURE.md           the 16 design decisions, in depth
 │   ├── DATA_SOURCES.md           provenance, licences, rejected sources
 │   ├── RUNG_AND_BUSINESS.md      rung declaration + business model
 │   ├── FILE_STRUCTURE.md         module dependency map
@@ -925,6 +967,7 @@ T1/
 │   │   ├── models/               storage shape (incl. the spec DDL)
 │   │   ├── schemas/              the wire contract + RowModel
 │   │   ├── services/             business logic
+│   │   ├── agent/                the chat: llm client, answer card, grounding
 │   │   └── routers/              HTTP only
 │   ├── scripts/
 │   │   ├── preflight.py          is this machine able to run it? exits 1 if not
@@ -942,14 +985,21 @@ T1/
 └── frontend/
     ├── src/
     │   ├── api/                  fetch wrapper + one module per resource
+    │   │   └── chatApi.ts        postChat + streamChat (SSE over fetch)
     │   ├── state/                Zustand: sceneStore, planStore
+    │   ├── theme.ts              one MUI dark theme; signal colours shared
+    │   │                         with the 3D tactical renderer
     │   ├── view/
     │   │   ├── SandboxViewer.tsx owns the Cesium Viewer
+    │   │   ├── cameraRig.ts      bbox framing, orbit, zoom, gesture bindings
     │   │   ├── terrainLoader.ts  imagery + terrain binding, with honest fallback
     │   │   ├── demProvider.ts    terrain-RGB → CustomHeightmapTerrainProvider
     │   │   ├── cityModel.ts      the editable 3D massing model; scoped AI ops
+    │   │   ├── techMaterial.ts   the emissive building shader
+    │   │   ├── viewModes.ts      survey / tactical scene dressing
     │   │   └── interventionLayer.ts  discrete features (extrusion)
-    │   ├── components/           panel, layer switches, camera, sliders
+    │   ├── components/           ChatPanel, HudPanel, StatsPanel, SlidersPanel,
+    │   │                         ProjectCatalog, ViewButtons, RunSummary
     │   ├── App.tsx  main.tsx  index.css
     ├── vite.config.ts            @ alias + /api and /static dev proxies
     ├── .env.local.example
@@ -1016,8 +1066,22 @@ which is a real gap for an area under construction.
 No vertical datum shift, no LiDAR, no bare-earth correction — and if vegetation
 or structures bias elevation upward, a *deficit* estimate is biased too.
 
-**No physics engine, no AI module, no PostGIS.** All out of scope for this phase
-and all named in the task plan.
+**No physics engine, no PostGIS.** Both out of scope for this phase and both
+named in the task plan. (An AI module does exist — see
+[Generative AI](#generative-ai) — but its limits are its own, below.)
+
+**The chat cannot invent a number the run did not produce — but it can still be
+wrong about what the number means.** Grounding checks arithmetic, not
+interpretation: a card can be fully grounded and still draw a silly conclusion
+from true figures. The confidence field and its one-line reason exist so the
+reader can judge that, and a card is never shown without them. The chat also
+holds no thread: a reload loses the conversation, and it never recomputes a
+scenario, so it cannot answer a question about a run that has not happened yet.
+
+**The free-model tier is slow and throttled.** Shared pools rate-limit without
+warning, so a live answer can take 40–55 s and can fall through to a slower
+fallback model. That is a property of the `:free` tier, not of the tool — a paid
+model id removes it. See [gap 20](STATUS.md).
 
 ### Next steps, in priority order
 

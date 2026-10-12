@@ -3,8 +3,9 @@
 What actually works, measured rather than asserted. Counts were produced by running the
 suites on **2026-10-12**; nothing here is a target.
 
-**Tests: 479 backend + 50 frontend**, with one known environment-dependent
-failure (see gap 14). Lint and typecheck are clean.
+**Tests: 488 backend + 55 frontend**, with one known environment-dependent
+failure (see gap 14). Lint and typecheck are clean. The chat agent is **not**
+covered by any suite — gap 22.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
@@ -66,6 +67,17 @@ server read as a pass.
   rasters are cached, since neither changes with a slider.
 - **GenAI plans** — NL to a draft FeatureCollection, with a badge that distinguishes
   "LLM ready", "no LLM key" and "LLM status unknown".
+- **Chat: grounded answer cards** — `POST /api/scenes/{id}/chat` and
+  `/chat/stream` (SSE). The run's own numbers are handed to the model as a FACTS
+  block; the answer comes back as a card (title / sentence / cause / todo / stats
+  / confidence / caveats / followups) that the UI renders field by field. Three
+  steps are streamed as they happen, and every number in the card is checked
+  against the run by code before it is shown. **Live against a real OpenRouter
+  key**: two consecutive calls returned `source: model` with real titles and
+  stats; one was fully grounded, the other had its derived "95 %" flagged as a
+  number the run did not produce. 40–55 s per answer on the free tier (gap 20).
+  With no model configured the same card is assembled by code and labelled
+  `source: "template"` — a printout, not an interpretation, and it says so.
 
 ### The three simulations
 
@@ -351,14 +363,38 @@ Ordered by what would hurt a user first.
     the same moment overwrite each other's overlay. Fine for one demo machine,
     wrong for two concurrent users; the fix is a per-run (or per-session)
     filename rather than a fixed one.
-18. **The explanation is one shot, not streamed.** The run returns a finished
-    paragraph (an LLM's when one is configured, a labelled template otherwise).
-    There is no "here is what I am checking" thread of the kind the Constellation
-    reference UI shows — but neither is there a fake one, which matters more.
+18. **~~The explanation is one shot, not streamed.~~** **Closed 12 Oct 2026.**
+    `/chat/stream` emits `run_started`, `step_started`/`step_finished` for all
+    three steps, `delta` per token, `grounding`, `answer` and `done`. All three
+    steps always start and finish, including on the template path, so the stepper
+    shows three ticks either way and the result line says which path produced the
+    card. Still true: `POST /run`'s own `explanation` field is a finished
+    paragraph — it is not streamed, because a run result is one response.
 19. **The run does not re-derive the terrain.** Priority-Flood conditioning and
     the D8 receiver stay as `make_wetgrid.py` wrote them (~9 s, once, offline).
     A run re-solves the water level on the conditioned surface; it does not
     re-condition it, so a change to the DEM needs the script re-run.
+
+### Gaps in the chat agent
+
+20. **The free tier is slow and throttled, and the fallback is slower.**
+    Measured 40–55 s per answer. Google's pool was returning `429 …
+    limit_source=upstream_provider_shared_pool` for `gemma-4-31b-it:free`, so
+    every live call fell through to `nemotron-3-ultra-550b-a55b:free`. Three
+    mitigations are in place — `MAX_TOKENS=2000` (900 starved reasoning
+    models: 382 thinking tokens, then `finish_reason=length` and a truncated
+    card), one unstreamed retry when a stream yields nothing, and
+    `LLM_FALLBACK_MODELS` — but a throttled primary still costs a wasted round
+    trip before the rescue runs. A paid model id removes all three.
+21. **Grounding can flag a correct number.** A percentage the model derived
+    (unstored ÷ runoff = 95 %) is not a number the run produced, so it is
+    reported as ungrounded. That is the check working, but it reads as a false
+    alarm. One revision round is attempted, then the card is shown with the
+    warning rather than looped.
+22. **The chat has no test suite and no persistence.** Nothing in `tests/`
+    covers `app/agent/`; it was verified by hand against a live key. Threads are
+    not stored — run state is sent by the client per request (ADR-024), so a
+    reload loses the thread.
 
 ## Honesty constraints that must survive future work
 
@@ -409,3 +445,15 @@ Ordered by what would hurt a user first.
   cleaning the store up broke a real check. Every guard must now build its own
   adversarial fixture and assert the guard fires on it. If deleting a file can
   turn a test red, the test was measuring the wrong thing.
+- **The chat explains a run; it never computes one.** `build_facts` reads the
+  run result the planner is looking at and hands it over verbatim. Recomputing a
+  simulation inside a Q&A would turn a fast reply into a 0.7 s run *and* let the
+  answer drift from the numbers on screen. No new arithmetic in `app/agent/`.
+- **Grounding is code, never the model.** A card's numbers are checked against
+  the facts by `grounding.check_card`, and a card that fails is either revised
+  once or shown with the problems named. The model is never asked whether its
+  own numbers are right.
+- **`source: "template"` is not a degraded mode to hide.** When no model is
+  configured the card is assembled by code from the run's own figures and the UI
+  says so. Every number in it is one the run actually produced, which is more
+  than a hallucinated model answer can claim.

@@ -2,6 +2,84 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-12 (part 4) — the chat agent: an answer you can audit
+
+The run loop answered "what happened" with one paragraph. A planner's next
+question is "why, and what should I do" — and that answer is only useful if the
+reader can tell which numbers came from the model and which came from the run.
+This adds a chat whose answer is a card, not prose, with every figure checked
+against the run before it is shown.
+
+Shape follows the Constellation reference (structured `Answer` card, provider-
+neutral client, SSE stream events, number grounding) minus the parts a sandbox
+run does not have: no skills, no model-chosen tools, no clarification cards, no
+thread persistence.
+
+### Backend — `app/agent/`
+
+- `answer.py` — `AnswerCard` and `template_card()`. The card is the unit: the
+  same fields are always present, so the UI renders them in the same place and a
+  missing cause shows as `cause: null` rather than as a paragraph that omits it.
+- `llm.py` — one client, two calls (`complete_json`, `stream_text`). Anthropic
+  forces the schema through `tool_choice`; OpenAI-compatible asks for
+  `response_format` and drops it on a 400.
+- `grounding.py` — every number in a card is checked against the run's facts at
+  any scale or rounding; small integers and years are exempt.
+- `prompts.py` — grounding rule #1 in the system prompt, no hedging, honest
+  confidence.
+- `chat_service.py` — three visible steps and **one** grounding revision, then
+  report. Constellation loops until the model converges; here a second failure is
+  surfaced rather than retried, because a planner shown an ungrounded number with
+  a note is better served than one watching a spinner.
+- `routers/chat.py` + `schemas/chat.py` — `POST /api/scenes/{id}/chat` and
+  `/chat/stream`. The run state is sent by the client per request (ADR-024), so
+  there is no server-side thread.
+
+### Frontend
+
+- `api/chatApi.ts` — `streamChat` over `fetch`, not `EventSource`, which cannot
+  POST. Abortable.
+- `ChatPanel.tsx` — rewritten as a card view plus a stepper. Partial JSON fields
+  are extracted by regex mid-stream so the headline appears while the model is
+  still writing. Interventions still route to the AI planner; questions go to the
+  chat. A stop button cancels the stream.
+
+### Free-tier compatibility
+
+Verified end to end against a live OpenRouter `:free` key. Four things broke and
+are now handled:
+
+1. `response_format` is rejected with a 400 by most `:free` models →
+   `LLM_JSON_MODE` (`auto` / `json` / `off`), and the JSON contract is in the
+   prompt so `off` still parses.
+2. Some models reject `stream: true`, and reasoning models can stream **zero**
+   `content` deltas (every token goes to the reasoning channel) → one unstreamed
+   retry, reported as `card drafted (unstreamed)`.
+3. `max_tokens=900` starved reasoning models — 382 tokens of thinking, then
+   `finish_reason: length` and a card truncated mid-object, which parses to
+   nothing. Measured: 1600 completes. `MAX_TOKENS` is now 2000.
+4. One `:free` model is a single point of failure — shared pools throttle without
+   warning → `LLM_FALLBACK_MODELS`, tried in order on 429/5xx/400/empty content.
+
+### Also
+
+- `scene_service.py` — resolve `cityModelUrl` and its provenance on `SceneRead`
+  too, not only on `/terrain`. A URL that is null on one endpoint and set on
+  another is the kind of half-truth that breaks a different consumer later.
+- `fix(view)` — the tactical view had washed out to a glowing white slab. Bloom
+  was not the cause: `u_lit` was 1 on all 2,639 materials because the `setLook`
+  effect ran while `cityModelHandle` was still null, so every material booted in
+  the survey branch. Fixed with a module-level `activeLook` plus applying the
+  store's look as soon as the handle lands. Bloom rebuilt on measured values
+  (contrast 4.5, brightness -0.3, delta 1.0, sigma 2.0 — the old 210 was a
+  threshold misread).
+- `fix(view)` — Run was killing the frame loop with "This object was destroyed":
+  `imageryLayers.remove(layer, true)` and `clippingPlanes.destroy()` both fired
+  mid-render. Both now detach and defer the destroy by 2 s.
+- `feat(ui)` — Constellation's design language: glass recipe, type scale, eyebrow
+  labels, the 1px-gap stats grid, the icon-button pill. Signal-green kept, so the
+  2D chrome and the 3D tactical renderer stay one palette.
+
 ## 2026-10-12 (part 3) — the run loop: the sliders now mean something
 
 The prototype had a 3D sandbox, a storage ledger and NL interventions, but no

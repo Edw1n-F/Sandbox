@@ -88,7 +88,12 @@ open data (fetch_*.py)  ->  backend/data/*.npy, *.png
       -> Cesium Viewer (terrain + imagery + overlays)
         -> GET /api/scenes/{sceneId}/plans
           -> GET /api/plans/{planId}/interventions -> GeoJSON FeatureCollection
+        -> POST /api/scenes/{sceneId}/run -> baseline-vs-scenario stats + overlays
+          -> POST /api/scenes/{sceneId}/chat/stream -> SSE: steps, deltas, card
 ```
+
+The chat is a **leaf**: it consumes a run result the client already holds and
+returns text. It holds no state and writes nothing.
 
 ### Layer responsibilities
 
@@ -97,6 +102,7 @@ open data (fetch_*.py)  ->  backend/data/*.npy, *.png
 | Routers | `app/routers/` | HTTP only. Parse, delegate, serialise. |
 | Schemas | `app/schemas/` | The wire contract. `RowModel` translates storage <-> wire. |
 | Services | `app/services/` | Business logic: cascade, bbox repair, URL resolution. |
+| Agent | `app/agent/` | The chat. Explains a run result; **never** recomputes one. |
 | Store | `app/db.py` | The **only** module that knows storage is files. |
 | Config | `app/config.py` | Settings; paths anchored to `backend/`, never cwd. |
 | Raster scripts | `scripts/` | Fetch + analysis. Attach results to a scene. |
@@ -215,6 +221,19 @@ registers itself against the seeded scene.
   back. A demo that quietly stops being AI is worse than one that says so.
 - **Derive constants, never hand-type them.** The bbox came from machine-retrieved
   OSM anchors recorded in `scene_hsk.json`, not from memory.
+- **`ANTHROPIC_API_KEY` wins over `LLM_BASE_URL`.** `agent/llm.py` checks
+  Anthropic first, so a leftover key there silently disables an OpenRouter /
+  Ollama setup. Leave it empty unless Anthropic is what you want.
+- **Free-tier models fail in three specific ways, all already handled.** They
+  reject `response_format` (→ `LLM_JSON_MODE=off`), they reject `stream: true`
+  *or* stream zero `content` deltas because every token went to the reasoning
+  channel (→ one unstreamed retry), and they run out of `max_tokens` while
+  thinking (→ `MAX_TOKENS=2000`; 900 was measured to truncate the card
+  mid-object). If a card comes back as `source: "template"`, check step 2's
+  result line before assuming the model is broken.
+- **A card that parses to nothing is a 200, not an error.** `finish_reason:
+  length` returns valid JSON with nothing in it. `_parse_card` returns `None`,
+  which the UI reports as "the model did not return a card".
 - **Guard every Cesium `Viewer` touch with `isLive()`.** StrictMode destroys the
   viewer in one effect's cleanup while sibling cleanups still hold a reference.
 

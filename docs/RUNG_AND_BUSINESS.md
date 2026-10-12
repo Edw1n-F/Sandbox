@@ -67,6 +67,15 @@ something:
 - **Sea-level scenarios against the official projections** — HKO's SSP2-4.5
   37–82 cm and SSP5-8.5 57–108 cm ranges, cited and retrieved, with the honest
   result that none of them changes the deficit at this site and the reason why.
+- **A chat that explains a run and shows its work.** The answer is a card, not a
+  paragraph, and every number in it is traced back to the run by code — a card
+  that cannot be grounded is sent back once and then shown *with* the warning.
+  This is the "can GenAI help planners explore responsibly" question the brief
+  asks, answered in the only way that survives contact with a real planner: the
+  model writes the prose, the code checks the arithmetic, and neither is allowed
+  to do the other's job. With no model configured the same card is assembled by
+  code and **labelled** as such, so the demo cannot pass a printoff as an
+  interpretation.
 
 ---
 

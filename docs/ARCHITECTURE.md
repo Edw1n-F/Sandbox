@@ -383,6 +383,55 @@ reimplementation for its own sake: the shipped DEM has **10.3% of its cells in
 closed depressions**, and without filling them the level-pool solver floods pits
 to arbitrary depth. That was the largest single weakness in the wet grid.
 
+## Decision 16 — The chat explains a run; it never computes one
+
+**Decision.** `app/agent/` answers questions about a run that **already
+happened**. The run result is handed to the model as a FACTS block, verbatim.
+The reply is a card, and every number in it is checked against those facts by
+code before it is shown.
+
+**Why.** Two temptations were refused.
+
+The first is recomputation. It is trivial to re-run the simulation inside a
+question handler, and it is wrong twice over: a fast reply becomes a 0.7 s
+simulation, and — worse — the explanation can then disagree with the numbers the
+planner is looking at. An answer that contradicts the panel is not an
+explanation of the panel.
+
+The second is asking the model to check its own work. "Are your numbers
+grounded?" is not a check, it is a second opinion with the same failure mode. So
+`grounding.check_card` does it in code, at any scale or rounding, and a card
+that fails is sent back **once** with the offending figures named. A second
+failure is reported on the card rather than retried: a planner shown an
+ungrounded number with a note on it is better served than one watching a
+spinner.
+
+**Why a card and not a paragraph.** The same fields are always present, so the
+UI renders them in the same place every time and the reader learns where to
+look. A paragraph can hide a missing cause; a card with `cause: null` shows one,
+which is the honest outcome when the numbers do not support one.
+
+**Structured output is forced, not requested.** A schema in the prompt is a
+suggestion. A tool the model must call (Anthropic `tool_choice`) or a
+`response_format` (OpenAI-compatible) is a guarantee, and the difference matters
+because the card is parsed by code and rendered by field. Where neither is
+available — a stream, or a free model that 400s on `response_format` — the
+contract is also in the prompt and the outermost `{…}` is taken, so a model that
+wraps its JSON in a sentence still parses.
+
+**Where the model is still trusted.** Site selection, not coordinates — that is
+Decision 11, and the chat inherits it unchanged. The chat has no tools of its
+own: it cannot write geometry, start a run, or change a plan. Interventions
+typed into the chat are routed to the AI planner, which is the module that owns
+geometry (and ADR-030's draft rule).
+
+**How it holds up.** With no provider configured the identical card is assembled
+by code from the run's own figures and labelled `source: "template"`. That is
+not a fallback to be hidden: every number in it is one the run actually
+produced, which is more than a hallucinated model answer can claim. The stepper
+always emits three finished steps, so the template path is visible rather than
+indistinguishable.
+
 ## Deliberately not used
 
 | Not used | Why |
@@ -412,6 +461,9 @@ If you are changing something, these are the places that must move together:
 | Real land cover | Drop in `landclass_hsk.npy`. Nothing else |
 | A new front-end layer | `view/` for rendering, `components/LayerToggle.tsx` for the switch |
 | A new massing operation | `MASSING_TOOL` + `parse_massing_intent` + `_massing_feature` + `applyMassingOps`, **and a test that an unrecognised scope is dropped rather than widened** |
+| A new field on the answer card | `agent/answer.py` (model **and** `ANSWER_SCHEMA`) + `CardView` in `ChatPanel.tsx` + anything `grounding.check_card` should now read |
+| A new stream event | `agent/chat_service.py` + the `Step`/event union in `api/chatApi.ts` + `ChatPanel.tsx`. The stream always ends with `done` |
+| A new LLM provider | `agent/llm.py` only — `complete_json` and `stream_text` are the whole surface |
 
 ---
 
