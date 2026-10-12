@@ -220,7 +220,8 @@ class Overlay:
     def cell_area_m2(self) -> float:
         """The cell area, as a plain float.
 
-        One spelling everywhere since 9 Oct 2026 (STATUS gap #13 closed): the
+        One spelling everywhere since 9 Oct 2026 (an earlier cleanup, since
+        closed and no longer numbered in STATUS.md): the
         attribute form ``ov.cell_area_m2``. The earlier wart -- a ``float``
         subclass that was also callable, bridging the scripts' method-call
         spelling ``ov.cell_area_m2()`` against the canonical attribute spelling
