@@ -1,10 +1,8 @@
 # Status
 
-The live state of the HSK / San Tin planning sandbox, **measured on 2026-10-13**
-rather than asserted. Nothing here is a target. History lives in
-[`CHANGELOG.md`](CHANGELOG.md); the *why* behind the architecture lives in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); this file holds only what is true
-now, what is broken, and who is fixing it.
+The live state of the HSK / San Tin planning sandbox, **measured on 2026-10-13**.
+Nothing here is a target. The architecture rationale is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -129,21 +127,17 @@ gap 9.
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding + fact assembly, no key |
 | frontend unit (`vitest`) | 56/56 | `npm test` |
-| frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` — **not re-run 13 Oct**; needs live servers |
-| frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` — **not re-run 13 Oct**; needs live servers |
+| frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` — needs live servers |
+| frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` — needs live servers |
 
 **498 backend assertions across fourteen suites, 56 frontend unit tests.** The two
 `verify-*` suites are **not** part of `npm test`: they need the dev server on
 `:5173` and the backend on `:8000`, and folding them in would let a missing server
-read as a pass. Their figures are carried from 12 Oct and marked, not re-measured.
+read as a pass. Their counts date from 12 Oct; the rest were run on 13 Oct.
 
-`scipy` is required by `test_ventilation` and `test_contract`; both were run with
-it present. Two timing assertions that were once absolute one-second bounds are now
-host-measured ratios, so they hold under parallel load.
-
-> **A count is a fact, and a fact has one home.** These numbers appear **only
-> here**. If another document needs a count it links to this table, because a
-> number typed into two places drifts.
+`scipy` is required by `test_ventilation` and `test_contract`. Two timing
+assertions use host-measured ratios rather than absolute wall-clock bounds, so they
+hold under parallel load.
 
 ### Deliberately absent, and why
 
@@ -170,9 +164,7 @@ Each of these is a design position, not an unfinished feature.
 ## Gaps
 
 Sixteen open items, ordered by what hurts a user first. Each states the issue and
-what closes it. When an item closes it is **removed** from this list rather than
-struck through, and its rationale is recorded in [`CHANGELOG.md`](CHANGELOG.md) —
-history belongs in the changelog, only live state belongs here.
+what closes it.
 
 ### 1. No validated parameter card, and user-written interventions never ask for missing assumptions
 
@@ -340,9 +332,9 @@ numbers. Meanwhile the same geometry is written down twice: `projected_width_m` 
 
 **What to do.** Surface wind as a third overlay endpoint and layer. Have
 `ventilation.py` **delegate** to `design_metrics.py`'s typed `Footprint` rather than
-grow a third encoding. Already closed at the *response* level: each corridor carries
-`entryEdge` and `firstObstructionMeanM`, so the two wind readings are no longer
-interchangeable even though the underlying paths still cannot separate NE from SW.
+grow a third encoding. Each corridor already carries `entryEdge` and
+`firstObstructionMeanM`, so the two wind readings stay distinguishable even though
+the underlying paths still cannot separate NE from SW.
 
 ### 12. The outlet water-level condition is unresolved
 
@@ -407,64 +399,46 @@ implied), or fund the physics it would take to make temperature move the numbers
 
 ## Who does what
 
-Three lanes, divided so that **nobody waits on anybody**. The one real handoff was
-the real 3D data — footprints, terrain — and the geometry that consumes it, so both
-now sit with the person who produces the data. Every task below is self-contained
-and can start today, in any order.
+Three lanes. Each gap below is self-contained, so any lane can start without
+waiting on another.
 
 | Owner | Gaps | The lane |
 |---|---|---|
-| **Lia** | 1, 2, 4, 12, 14, 16 | The model's numbers and the intervention geometry |
-| **Chenxu** | 3, 8, 13 | The real 3D and geospatial data, and the geometry built on it |
-| **Frontend / AI teammate** | 5, 6, 7, 9, 10, 11, 15 | The AI's reach and the interface |
+| **Lia** | 1, 4, 5, 6, 7, 11, 15 | The interface and the interaction |
+| **Chenxu** | 3, 8, 13 | The real 3D and geospatial data |
+| **Edwin** | 2, 9, 10, 12, 14, 16 | Model internals, storage and configuration |
 
-### Lia — the model's numbers and the intervention geometry
+### Lia — the interface and the interaction
 
 - **1** — the parameter card and the assumption questions.
-- **2** — `projects.json`: fixed footprints and stated assumptions, so runs are
-  reproducible.
 - **4** — contour the intervention's true cell mask and give each kind a real
   massing profile, so a reservoir is a basin and not a box.
-- **12** — the outlet water-level condition.
-- **14** — the PostGIS store behind the existing seam.
-- **16** — the temperature-slider scope call.
+- **5** — generated suggestion cards and Pin/Unpin.
+- **6** — the chat → ops bridge.
+- **7** — the water-pour animation.
+- **11** — surface wind as a third overlay and collapse the two geometry encodings.
+- **15** — the two uncovered view modules, the credit-link accessible name, and the
+  documented pan limit.
 
 ### Chenxu — the real 3D and geospatial data
 
-- **3** — the whole gap. Ingest and clean the real footprints (Overture and/or
-  Open3Dhk's LandsD 3D Digital Map), reproject to lon/lat, publish the **GeoJSON
-  contract** with a storeys-conditioned height, **and** replace the procedural
-  massing generator so it extrudes actual building shapes from those footprints
-  instead of tiling squares. His 3D render must ship *with* matching lon/lat
-  footprints — see the trap in gap 3 — or every analysis number silently reverts to
-  the fake blocks.
+- **3** — ingest and clean the real footprints (Overture and/or Open3Dhk's LandsD 3D
+  Digital Map), reproject to lon/lat, publish the **GeoJSON contract** with a
+  storeys-conditioned height, and replace the procedural massing generator so it
+  extrudes actual building shapes from those footprints instead of tiling squares.
 - **8** — the real Landsat LST scene over the site, which is the heat anchor, plus a
   provenance pass on `HEAT_INDEX`.
 - **13** — the real 5 m DTM / TIN terrain, on the same contract as gap 3.
 
-### Frontend / AI teammate — the AI's reach and the interface
+### Edwin — model internals, storage and configuration
 
-- **6** — the chat → ops bridge. The op vocabulary already exists; this is the
-  cheapest large win, and nothing blocks it.
-- **5** — generated suggestions and Pin/Unpin. The site pools already exist.
-- **11** — surface wind as a third overlay and collapse the two geometry encodings.
-  The FAD output already exists.
-- **7** — the water-pour animation.
+- **2** — `projects.json`: fixed footprints and stated assumptions, so runs are
+  reproducible.
 - **9** — the provider-client test.
 - **10** — the paid model id.
-- **15** — the two uncovered view modules, the credit-link accessible name, and the
-  documented pan limit.
-
-### Why nobody waits
-
-Every task above is self-contained, so any lane can start today without touching
-another. The two handoffs that used to exist — real footprints reaching the geometry
-that extrudes them, and the LST scene reaching the heat anchor — now sit inside one
-lane, so each is a sequence a single person runs rather than a dependency between
-two. The one interface that still matters is **the footprint contract** in gap 3:
-the mesh and the analysis must read the same lon/lat GeoJSON, or the numbers quietly
-revert to the fake blocks — and since one person owns both sides of it, it is agreed
-with himself.
+- **12** — the outlet water-level condition.
+- **14** — the PostGIS store behind the existing seam.
+- **16** — the temperature-slider scope call.
 
 ---
 
@@ -526,7 +500,7 @@ false.
 - **A test must never assert that bad data exists.** `test_ledger` once scanned the
   intervention store for badly-sited polygons and required the set to be non-empty —
   so it passed *because* stale test residue was lying around, and cleaning the store
-  up broke a real check. Every guard must now build its own adversarial fixture and
+  up broke a real check. Every guard must build its own adversarial fixture and
   assert the guard fires on it. If deleting a file can turn a test red, the test was
   measuring the wrong thing.
 - **The chat explains a run; it never computes one.** `build_facts` reads the run
