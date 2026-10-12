@@ -43,8 +43,9 @@ Nothing here is a target. The architecture rationale is in
    `source: "template"`.
 8. **Generate a plan (optional).** A sentence becomes a draft FeatureCollection via
    `ai_plan`, badged "LLM ready" / "no LLM key" / "LLM status unknown", and the NL
-   geometry ops (`scale_all`, `set_site`, `rotate`, `move`, `place`, `reset`) apply
-   scoped by a ring. Ops are idempotent — a second application cannot compound.
+   geometry ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `place`,
+   `reset`) apply scoped by a ring. This path is driven from the plan panel, not
+   from the chat. Ops are idempotent — a second application cannot compound.
 
 Empty states are named rather than blank: a scene with no terrain, or a plan with
 no interventions, renders a `SceneNotice` instead of an empty surface.
@@ -163,7 +164,7 @@ Each of these is a design position, not an unfinished feature.
 
 ## Gaps
 
-Sixteen open items, ordered by what hurts a user first. Each states the issue and
+Fifteen open items, ordered by what hurts a user first. Each states the issue and
 what closes it.
 
 ### 1. No validated parameter card, and user-written interventions never ask for missing assumptions
@@ -262,17 +263,41 @@ a grep for `pin` returns zero hits anywhere.
 status). Add `pinned: bool` to `InterventionRow`, and drop unpinned + untoggled
 features on the next run.
 
-### 6. The chat cannot change the model
+### 6. No one owns the natural-language → sandbox loop
 
-**The issue.** `app/agent/chat_service.py` answers but exposes no tools — "no
-skills, no tools the model can call" is deliberate. NL → geometry *does* exist
-(`parse_massing_intent` → `massingOps` → `applyMassingOps`) but is reachable only
-via `POST /scenes/{id}/ai-plan`, so the chat panel and the geometry engine are
-unconnected.
+**The issue.** The loop the brief asks for — a planner types *"add this"*, *"turn
+this"*, *"remove this"* and the sandbox reflects it — has no owner end to end, and
+two of the three verbs have nothing behind them.
 
-**What to do.** Bridge them. **One op vocabulary serves all four cases** — existing
-buildings, project toggles, AI suggestions and generated glTF — so this is one
-path, not four, and the op shape already exists. That is what makes it the cheapest
+`app/agent/chat_service.py` answers but exposes no tools ("no skills, no tools the
+model can call" is deliberate), and `POST /chat` / `POST /chat/stream` return a
+card and nothing else. NL → geometry *does* exist (`parse_massing_intent` →
+`massingOps` → `applyMassingOps`) but is reachable only via `POST
+/scenes/{id}/ai-plan`, so the chat panel and the geometry engine are unconnected.
+
+Then the vocabulary itself. It is seven ops — `scale_all`, `set_site`, `rotate`,
+`move`, `resize`, `place`, `reset` — and **not one of them removes anything**, so
+*"remove this"* cannot be expressed at all. And `place` adds a procedural massing
+envelope: the flat extrusion of gap 4, not a shaped object, so *"add this"*
+produces a slab where the brief asks for a concept object. The only glTF in the
+repo is the three hardcoded Khronos samples in `view/onlineProps.ts` — a loader,
+not a generator, and not connected to any instruction.
+
+**What to do.** Close the loop as one path. Expose the existing ops as
+chat-callable, so the op shape the panel's buttons emit is the same shape the model
+emits. Add the missing **`remove`** op — until it exists the vocabulary cannot say
+*"take this away"*, and the brief asks for removal as plainly as for addition. Make
+`place` build an object rather than extrude a slab (the per-kind profile is gap 4's
+half; the point here is that an addition is *shaped*). Where an addition is
+generated rather than drawn, it lands labelled `draft_pending_human_review` like
+every AI suggestion, so a generated object is honest as a proposal and never as
+existing state.
+
+**One op vocabulary serves all four cases** — existing buildings, project toggles,
+AI suggestions and generated objects — so this is one path, not four, and the op
+shape already exists. The manipulation ops are **target-agnostic**: they act on the
+massing, not on a pillar, so the loop is buildable and testable against today's
+model and does not wait on real footprints. That is what makes it the cheapest
 large win on this list.
 
 ### 7. No water-pour animation
@@ -405,7 +430,8 @@ waiting on another.
 - **4** — contour the intervention's true cell mask and give each kind a real
   massing profile, so a reservoir is a basin and not a box.
 - **5** — generated suggestion cards and Pin/Unpin.
-- **6** — the chat → ops bridge.
+- **6** — the natural-language → sandbox loop: chat-callable ops, the missing
+  `remove` op, and shaped additions.
 - **7** — the water-pour animation.
 - **14** — the two uncovered view modules, the credit-link accessible name, and the
   documented pan limit.
