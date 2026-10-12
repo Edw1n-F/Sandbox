@@ -151,6 +151,32 @@ def intervention_features(plan_id: str | None) -> list[dict]:
     return out
 
 
+def intervention_features_many(plan_ids: list[str]) -> list[dict]:
+    """Merge several plans' interventions into one scenario's feature list.
+
+    This is what makes a cumulative run possible: the brief's goal is comparing
+    combined projects, and the ledger already takes a list, so composing the
+    list here is the whole change on the backend.
+
+    Duplicates are dropped by id. Two projects can legitimately share an
+    intervention row (an earlier version of the catalog re-used seeded ids), and
+    applying the same polygon twice would double its coverage in the guard while
+    changing nothing on the grid -- a silent way to trip the cumulative cap with
+    one physical feature.
+    """
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for plan_id in plan_ids:
+        for feature in intervention_features(plan_id):
+            key = str(feature.get("id"))
+            if feature.get("id") and key in seen:
+                continue
+            if feature.get("id"):
+                seen.add(key)
+            merged.append(feature)
+    return merged
+
+
 @router.get("/scenes/{scene_id}/buildings/{building_id}/fit")
 def get_building_fit(
     scene_id: str,
@@ -1124,22 +1150,31 @@ def post_run(scene_id: str, body: RunRequest) -> dict:
     deterministic template otherwise.
 
     ``planId: null`` is a baseline run: today's land cover, no interventions.
-    The heavy terrain conditioning and the sky-view/shade rasters are cached
-    (they change with the offline scripts and the massing respectively, never
-    with a slider), so a run is seconds, not minutes.
+    Send ``planIds`` to compose several projects into one cumulative scenario --
+    the brief's headline goal. The heavy terrain conditioning and the
+    sky-view/shade rasters are cached (they change with the offline scripts and
+    the massing respectively, never with a slider), so a run is seconds, not
+    minutes.
 
     Screening-level, always: the response's ``status``/``warning`` say so, and
     so do the sidecars written beside the PNGs in ``data/rasters/run/``.
     """
     from app.services import run_service
 
+    # plan_ids wins when both are sent; a single-plan client keeps working
+    # unchanged through the same path.
+    plan_ids = [p for p in (body.plan_ids or []) if p]
+    if not plan_ids and body.plan_id:
+        plan_ids = [body.plan_id]
+
     try:
         return run_service.run_scenario(
             scene_id,
             rainfall_mm=body.rainfall_mm,
             temperature_c=body.temperature_c,
-            plan_id=body.plan_id,
-            features=intervention_features(body.plan_id),
+            plan_id=plan_ids[0] if plan_ids else None,
+            features=intervention_features_many(plan_ids),
+            plan_ids=plan_ids,
         )
     except run_service.RunInputsError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

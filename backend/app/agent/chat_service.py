@@ -58,6 +58,9 @@ def build_facts(run_result: dict[str, Any] | None) -> dict[str, Any]:
         "scenario": stats.get("scenario") or {},
         "baseline": stats.get("baseline") or {},
         "delta": stats.get("delta") or {},
+        # Forwarded, never computed here: the run derives these shares so a card
+        # can quote "95 % unstored" and still pass grounding.
+        "ratios": stats.get("ratios") or {},
         "applied": run_result.get("interventionsApplied") or [],
         "skipped": run_result.get("interventionsSkipped") or [],
     }

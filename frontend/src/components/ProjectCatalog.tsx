@@ -1,24 +1,37 @@
 /**
- * Top-right project catalog (placeholder).
+ * Top-right project catalog.
  *
  * A small, predefined set of the "buildings the planner can place in the
- * sandbox" — schools, facilities, a filled pond — each with two phase
- * variants. Toggling a phase generates a plan via the existing AI pipeline and
- * selects it, so the 3D view and the next run reflect the choice.
+ * sandbox" — schools, facilities, a filled pond — each with two phase variants.
+ * Toggling a phase generates a plan via the existing AI pipeline; every toggled
+ * phase stays selected, and the next run scores them **together**.
  *
- * ## What's a placeholder
+ * ## Cumulative selection
+ *
+ * The brief's problem statement is explicitly about the combined effect
+ * ("rather than only assessing each project individually"), so this panel
+ * multi-selects. The selected plans' intervention features are merged server-side
+ * into one scenario by `intervention_features_many`, and the backend refuses the
+ * run if the reworked land passes 40% of the study area — five legal 24%
+ * interventions must not compose into a district-wide land-use swap.
+ *
+ * `activePlanId` (which plan the 3D view highlights) and `selectedPlanIds`
+ * (which plans the run scores) are deliberately separate store fields: with
+ * cumulative projects they genuinely differ.
+ *
+ * ## What's still a placeholder
  *
  * The footprints are templated natural-language instructions sent to `ai_plan`,
- * not surveyed project data. Multi-project accumulation is not supported yet
- * (each toggle replaces the active plan) — that is flagged in the panel rather
- * than hidden, so a planner is not left expecting a composite scenario.
+ * not surveyed project data, so placement is re-derived on every toggle rather
+ * than read from a fixed footprint. That is STATUS gap 2 and it is flagged in
+ * the panel rather than hidden.
  */
 import Box from '@mui/material/Box'
 import Collapse from '@mui/material/Collapse'
 import IconButton from '@mui/material/IconButton'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import HudPanel from '@/components/HudPanel'
 import { createAiPlan } from '@/api/planApi'
@@ -81,38 +94,65 @@ export default function ProjectCatalog() {
   const sceneId = useSceneStore((s) => s.sceneId)
   const selectPlan = usePlanStore((s) => s.selectPlan)
   const refreshPlans = usePlanStore((s) => s.refreshPlans)
-  // The active project+phase. null = baseline (nothing placed).
-  const [active, setActive] = useState<string | null>(null)
+  const setSelectedPlanIds = usePlanStore((s) => s.setSelectedPlanIds)
+  const selectedCount = usePlanStore((s) => s.selectedPlanIds.length)
+
+  // key ("<project>:<phase>") -> the plan id that toggle produced. Keeping the
+  // plan id rather than a boolean means toggling off does not have to re-derive
+  // anything, and the run can send exactly the plans on screen.
+  const [active, setActive] = useState<Record<string, string>>({})
   const [expanded, setExpanded] = useState<string | null>(PROJECTS[0]?.id ?? null)
   const [busy, setBusy] = useState(false)
+
+  /** Point the 3D view at the newest selection, or back to today when empty. */
+  const resyncViewer = useCallback(
+    async (planIds: string[]) => {
+      if (!sceneId) return
+      if (planIds.length) {
+        await selectPlan(planIds[planIds.length - 1])
+        return
+      }
+      // Nothing selected -> show today. The store picks the plan whose type is
+      // 'baseline' on load, so re-fetching and picking the first baseline
+      // restores "today" without a dedicated clear endpoint.
+      await refreshPlans(sceneId)
+      const plans = usePlanStore.getState().plans
+      const baseline = plans.find((p) => p.planType === 'baseline')
+      if (baseline) await selectPlan(baseline.planId)
+    },
+    [sceneId, selectPlan, refreshPlans],
+  )
 
   const toggle = async (project: Project, phase: Phase) => {
     if (!sceneId || busy) return
     const key = `${project.id}:${phase.id}`
-    // Toggling the active phase off → back to baseline (nothing placed).
-    if (key === active) {
+
+    // Toggling an active phase off: drop it, and re-run with the rest.
+    if (key in active) {
+      const next = { ...active }
+      delete next[key]
+      setActive(next)
+      const planIds = Object.values(next)
+      setSelectedPlanIds(planIds)
       setBusy(true)
       try {
-        // Select the baseline plan: the store picks the one whose type is
-        // 'baseline' on load, so re-fetching and picking the first baseline
-        // restores "today" without a dedicated clear endpoint.
-        await refreshPlans(sceneId)
-        const plans = usePlanStore.getState().plans
-        const baseline = plans.find((p) => p.planType === 'baseline')
-        if (baseline) await selectPlan(baseline.planId)
-        setActive(null)
+        await resyncViewer(planIds)
       } finally {
         setBusy(false)
       }
       return
     }
+
     setBusy(true)
     try {
       const r = await createAiPlan(sceneId, phase.instruction)
       if (r.planId) {
+        const next = { ...active, [key]: r.planId }
+        setActive(next)
+        const planIds = Object.values(next)
+        setSelectedPlanIds(planIds)
         await refreshPlans(sceneId)
-        await selectPlan(r.planId)
-        setActive(key)
+        await resyncViewer(planIds)
       }
     } finally {
       setBusy(false)
@@ -120,12 +160,24 @@ export default function ProjectCatalog() {
   }
 
   return (
-    <HudPanel title="Projects" sx={{ width: '100%' }}>
+    <HudPanel
+      title="Projects"
+      right={
+        selectedCount > 0 ? (
+          <Typography className="hud-mono" sx={{ fontSize: 9, color: '#5cff9d' }}>
+            {selectedCount} active
+          </Typography>
+        ) : undefined
+      }
+      sx={{ width: '100%' }}
+    >
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-        Place a proposed project in the sandbox. One active per run (placeholder).
+        Toggle projects to score them <strong>together</strong>. Runs combine every
+        active project, up to 40% of the study area. Placeholder catalog.
       </Typography>
       {PROJECTS.map((project) => {
         const isOpen = expanded === project.id
+        const onPhases = project.phases.filter((p) => `${project.id}:${p.id}` in active)
         return (
           <Box key={project.id} sx={{ mb: 0.5, border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
             <Stack
@@ -139,7 +191,7 @@ export default function ProjectCatalog() {
                 <Typography variant="body2" sx={{ fontWeight: 600, fontSize: 12.5 }}>
                   {project.name}
                 </Typography>
-                {project.phases.some((p) => `${project.id}:${p.id}` === active) && (
+                {onPhases.length > 0 && (
                   <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#5cff9d', boxShadow: '0 0 6px #5cff9d' }} />
                 )}
               </Stack>
@@ -155,7 +207,7 @@ export default function ProjectCatalog() {
                 <Stack spacing={0.5}>
                   {project.phases.map((phase) => {
                     const key = `${project.id}:${phase.id}`
-                    const on = key === active
+                    const on = key in active
                     return (
                       <Stack
                         key={phase.id}

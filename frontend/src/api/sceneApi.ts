@@ -31,12 +31,22 @@ export async function updateScene(
  * `POST /api/scenes/{sceneId}/run` — one live simulation run.
  *
  * The sliders' values travel here rather than onto the scene (ADR-024), so a
- * run never mutates the object every plan hangs off. `planId: null` scores
+ * run never mutates the object every plan hangs off. `planIds: []` scores
  * today's land cover with no interventions.
+ *
+ * `planIds` is the cumulative selection: every active project's plan, merged
+ * server-side into one scenario. The brief's goal is comparing combined
+ * projects ("rather than only assessing each project individually"), and one
+ * `planId` cannot express that.
  */
 export async function runSimulation(
   sceneId: string,
-  body: { rainfallMm: number; temperatureC: number; planId: string | null },
+  body: {
+    rainfallMm: number
+    temperatureC: number
+    planId: string | null
+    planIds?: string[]
+  },
 ): Promise<RunResult> {
   const { data } = await http.post<RunResult>(`/scenes/${sceneId}/run`, body)
   return data

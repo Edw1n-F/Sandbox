@@ -157,13 +157,13 @@ function setOverlayStatus(key: 'wetGrid' | 'heatmap', status: string): void {
   useOverlayStatus.setState((s) => ({ ...s, [key]: status }))
 }
 
-/** Overlay load status, keyed by layer. Consumed by `LayerToggle`. */
+/** Overlay load status, keyed by layer. Read by the layer pills in `ViewButtons`. */
 export const useOverlayStatus = create<Record<'wetGrid' | 'heatmap', string>>(() => ({
   wetGrid: 'idle',
   heatmap: 'idle',
 }))
 
-/** Camera actions for `CameraController`, without prop drilling. */
+/** Camera actions, callable from `ViewButtons` without prop drilling. */
 export const cameraControl: {
   /** Frame the bbox in 3D. The default, and what the app opens on. */
   flyToBbox: () => void

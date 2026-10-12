@@ -18,6 +18,14 @@ for extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
     if str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
 
+# This suite creates plans and interventions, so it writes into a throwaway copy
+# of the store rather than the real one. Must run before the app
+# imports below so `settings.data_dir` is redirected when they resolve paths.
+sys.path.insert(0, str(BACKEND_DIR / "tests"))
+from _tmpstore import isolate_store  # noqa: E402
+
+isolate_store()
+
 from app.services.ai_plan import (
     ANTHROPIC_URL,
     CHOOSE_TOOL,

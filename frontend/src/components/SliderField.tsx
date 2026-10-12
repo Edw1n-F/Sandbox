@@ -1,8 +1,8 @@
 /**
  * Labelled slider with a live value readout.
  *
- * Extracted rather than inlined so `ScenePanel` and any future scenario control
- * share one accessible implementation -- MUI's `aria-labelledby` wiring is easy
+ * Extracted rather than inlined so every scenario control shares one accessible
+ * implementation -- MUI's `aria-labelledby` wiring is easy
  * to get subtly wrong and impossible to notice by eye.
  */
 import Box from '@mui/material/Box'

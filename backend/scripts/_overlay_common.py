@@ -31,7 +31,14 @@ from app.config import settings  # noqa: E402
 from app.services.geo_import import build_grid, load_study_area, polygon_bounds  # noqa: E402
 
 # Ordered: the first match wins when classes are painted in order.
-LAND_CLASSES = ("water", "wetland", "green", "bare", "paved")
+#
+# `floodable` and `tank` were APPENDED (12 Oct 2026) rather than inserted, so
+# every existing class keeps its index -- which means every committed raster
+# (wetgrid_hsk.npy, heatmap, the land-class grids) stays valid without a
+# regeneration, and no published number moves. Inserting them would have
+# silently relabelled the whole map.
+LAND_CLASSES = ("water", "wetland", "green", "bare", "paved",
+                "floodable", "tank")
 
 # Relative heat-exposure index, 0-1. Paved and bare hold heat; water and
 # wetland cool through evaporation. A *relative* screening index, not degrees.
@@ -41,6 +48,18 @@ HEAT_INDEX: dict[str, float] = {
     "green": 0.40,
     "wetland": 0.20,
     "water": 0.05,
+    # A floodable park is landscaped ground that is *intermittently* wet, so it
+    # gets the vegetated value: the class is grass that occasionally stores
+    # water, not a permanent water body. Giving it the water value would be the
+    # error this class exists to remove -- it made a floodable park score as a
+    # lake, understating its heat and overstating the green loss.
+    "floodable": 0.40,
+    # An underground tank leaves the surface as it was. The model cannot express
+    # "unchanged", so it carries the paved value, which is correct for the
+    # typical Hong Kong case (a service reservoir under a paved platform) and is
+    # the conservative choice -- claiming cooling for a buried tank would be
+    # inventing a mechanism. See the tank note under STORAGE_DEPTH_M.
+    "tank": 1.00,
 }
 
 # SCS Curve Number by land class, hydrologic soil group D (conservative).
@@ -83,6 +102,16 @@ CN_CITATIONS: dict[str, str] = {
         "CN is never used. Wetland is modelled as storage, not as a source."
     ),
     "water": "Open water; everything falls as runoff. ~100, the conventional maximum.",
+    "floodable": (
+        "No TR-55 row. Retained for transparency only -- like wetland, this class "
+        "is COUNTED_AS retention, so its CN is never read. 80 is the HSG D open "
+        "space (good) row and is recorded solely so the table has no hole."
+    ),
+    "tank": (
+        "No TR-55 row. Retained for transparency only -- underground storage is "
+        "COUNTED_AS retention, so its CN is never read. 98 is the paved row and is "
+        "recorded solely so the table has no hole."
+    ),
 }
 
 CURVE_NUMBER_HSG_D: dict[str, float] = {
@@ -91,6 +120,8 @@ CURVE_NUMBER_HSG_D: dict[str, float] = {
     "green": 80.0,
     "wetland": 90.0,  # unused; see CN_CITATIONS
     "water": 100.0,
+    "floodable": 80.0,  # unused; see CN_CITATIONS
+    "tank": 98.0,  # unused; see CN_CITATIONS
 }
 
 # Water and wetland are excluded from the *generation* term and counted in the
@@ -108,6 +139,16 @@ COUNTED_AS: dict[str, str] = {
     "green": "generation",
     "wetland": "retention",
     "water": "retention",
+    # Both new classes are retention for the same reason as water and wetland:
+    # the intervention IS the storage, so counting the cell as a runoff source
+    # as well would be the ADR-015 double count. For `floodable` this is a
+    # defensible conservative choice rather than a measurement -- a floodable
+    # park is grass between storms and would generate some runoff at CN 80, so
+    # treating it as pure storage is optimistic. Stated rather than hidden; the
+    # alternative (generation + a separate storage term) needs a rule for which
+    # part is counted where, which is exactly what this table exists to fix.
+    "floodable": "retention",
+    "tank": "retention",
 }
 
 # Depth (m) a water or wetland cell is assumed to already hold, plus the
@@ -123,7 +164,21 @@ COUNTED_AS: dict[str, str] = {
 # and the script have to agree exactly -- a second copy of this table would be a
 # silent way to produce a delta the project would not report -- so there is now
 # one definition and both import it.
-STORAGE_DEPTH_M: dict[str, float] = {"water": 1.50, "wetland": 0.60}
+STORAGE_DEPTH_M: dict[str, float] = {
+    "water": 1.50,
+    "wetland": 0.60,
+    # A floodable park is a shallow landscaped depression, not a basin: 0.30 m
+    # is the designed ponding depth of a typical floodable open space. An
+    # assumption, not a measurement, and overridable per intervention via a
+    # `storageDepthM` param.
+    "floodable": 0.30,
+    # An underground tank/shaft is deep and narrow relative to the surface it
+    # occupies: 2.00 m is a service-reservoir working depth. Because the brief
+    # defines storage as `intervention area x depth`, this figure is meaningful
+    # only when the tank's footprint is the tank, not the site above it -- which
+    # is why it is the most important thing to override per intervention.
+    "tank": 2.00,
+}
 DEPRESSION_STORAGE_M = 0.02
 
 

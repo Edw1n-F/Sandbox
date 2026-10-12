@@ -143,15 +143,30 @@ describe('run', () => {
     warning: 'w',
   } as unknown as RunResult
 
-  it('sends the slider values and the selected plan, not the scene defaults', async () => {
+  it('sends the slider values and the selected plans, not the scene defaults', async () => {
     useSceneStore.setState({ sceneId: 's1', scene })
     useSceneStore.getState().setEnvParams({ precipitation: 600, temperature: 38 })
     runSimulation.mockResolvedValue(result)
-    await useSceneStore.getState().run('plan-1')
+    await useSceneStore.getState().run(['plan-1'])
     expect(runSimulation).toHaveBeenCalledWith('s1', {
       rainfallMm: 600,
       temperatureC: 38,
       planId: 'plan-1',
+      planIds: ['plan-1'],
+    })
+  })
+
+  it('sends every selected plan, so the run is cumulative', async () => {
+    // The brief's goal is the combined effect, so the whole selection travels --
+    // not just the plan the viewer happens to highlight.
+    useSceneStore.setState({ sceneId: 's1', scene })
+    runSimulation.mockResolvedValue(result)
+    await useSceneStore.getState().run(['plan-1', 'plan-2', 'plan-3'])
+    expect(runSimulation).toHaveBeenCalledWith('s1', {
+      rainfallMm: 450,
+      temperatureC: 30,
+      planId: 'plan-1',
+      planIds: ['plan-1', 'plan-2', 'plan-3'],
     })
   })
 
@@ -163,6 +178,7 @@ describe('run', () => {
       rainfallMm: 450,
       temperatureC: 30,
       planId: null,
+      planIds: [],
     })
   })
 

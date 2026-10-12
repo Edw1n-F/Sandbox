@@ -4,17 +4,19 @@ The headline number is only worth anything if it is the same number the wet-grid
 script produced, and only useful if a scenario delta means something. Both are
 pinned here.
 
-The refusal tests matter as much as the application tests: three of the four
-seeded interventions in the shipped store are badly sited -- one "retention
-basin" polygon covers 47% of the study area and one permeable-paving polygon
-covers 100% -- and a ledger that applied them would report a fictitious 63%
-reduction in the deficit while looking entirely healthy.
+The refusal tests matter as much as the application tests: a ledger that applied
+a site-covering polygon would report a large fictitious reduction in the deficit
+while looking entirely healthy. Those absurd geometries are built **here**, in
+code, rather than read out of the store -- `data/interventions/` and
+`data/plans/` also collect residue from hand-poking the API, and a guard tested
+by whatever happens to be lying around is not a guard.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -56,6 +58,29 @@ def _feature(kind: str, ring, fid: str = "t1") -> dict:
     return {"id": fid, "intervention_type": kind,
             "geometry": {"type": "Polygon", "coordinates": [ring]},
             "params": {"basis": "test"}}
+
+
+def _shipped_plan_files() -> list[Path]:
+    """The plan documents git actually tracks, newest-first order irrelevant.
+
+    `data/plans/` is a runtime directory: it holds the two seeded plans AND
+    whatever a hand poke with the API wrote there, which `.gitignore` excludes.
+    A check about the repo's *shipped* fixtures has to name that distinction
+    explicitly or it ends up asserting something about this machine's store.
+    When git cannot answer (no repo, no git binary) the function returns an
+    empty list and the caller's `bool(shipped)` guard reports a failure rather
+    than a silent pass.
+    """
+    plans = sorted((BACKEND_DIR / "data" / "plans").glob("*.json"))
+    try:
+        listed = subprocess.run(
+            ["git", "ls-files", "--", "data/plans/*.json"],
+            cwd=BACKEND_DIR, capture_output=True, text=True, check=True,
+        ).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    tracked = {(BACKEND_DIR / p).resolve() for p in listed}
+    return [p for p in plans if p.resolve() in tracked]
 
 
 def main() -> int:
@@ -181,20 +206,25 @@ def main() -> int:
           ["interventionsSkipped"],
           f"the {len(_polygon_cells(grids, ring))}-cell ring was applied")
 
-    # --- and no shipped seed is itself over-large, now that the store is clean -- #
+    # --- and no *shipped* seed is itself over-large --- #
+    #
+    # "Shipped" is not the same as "on disk". `data/plans/` also holds residue:
+    # documents a hand poke with the API left behind, which .gitignore keeps out
+    # of the repo on purpose. A residue plan makes a residue intervention "live",
+    # so a check that globs the directory fails for the *store* rather than for
+    # the code -- the exact coupling this file stopped making above. Git is the
+    # definition of shipped, so ask it who is actually in the repo.
     store = BACKEND_DIR / "data" / "interventions"
     rows = [json.loads(p.read_text(encoding="utf-8")) for p in store.glob("*.json")]
+    shipped = _shipped_plan_files()
     live_ids = set()
-    for plan_path in (BACKEND_DIR / "data" / "plans").glob("*.json"):
+    for plan_path in shipped:
         plan = json.loads(plan_path.read_text(encoding="utf-8"))
         for item in plan.get("interventions") or []:
             live_ids.add(item.get("id"))
     absurd_live = []
     for row in rows:
-        # Only documents a plan still references are live; an unreferenced file
-        # is store residue, not a seeded intervention, and saying so here keeps
-        # this check from being re-coupled to it a second time.
-        if live_ids and row.get("id") not in live_ids:
+        if row.get("id") not in live_ids:
             continue
         coords = (row.get("geometry") or {}).get("coordinates") or []
         ring_i = coords[0] if coords and isinstance(coords[0], list) else []
@@ -207,10 +237,10 @@ def main() -> int:
                 row.get("intervention_type") in INTERVENTION_EFFECTS and \
                 INTERVENTION_EFFECTS[row["intervention_type"]].get("to"):
             absurd_live.append((row["intervention_type"], round(frac, 3)))
-    check("no live seeded intervention is over-large",
-          not absurd_live,
-          f"{len(rows)} documents, {len(live_ids & {r.get('id') for r in rows})} "
-          f"live, {len(absurd_live)} over-large")
+    check("no shipped seed is itself over-large",
+          bool(shipped) and not absurd_live,
+          f"{len(rows)} documents on disk, {len(shipped)} shipment(s) in git, "
+          f"{len(live_ids)} live id(s), {len(absurd_live)} over-large")
 
     # --- the base ledger still matches the script after all of this --- #
     led = storage_ledger(grids, grids.land_class)

@@ -67,6 +67,14 @@ export default function StatsPanel() {
         ? 'error.main'
         : 'success.main'
 
+  const ha = (m2: number) => (m2 / 10_000).toFixed(1)
+  const signed = (value: number, unit: string, digits = 0) =>
+    `${value > 0 ? '+' : ''}${value.toFixed(digits)}${unit}`
+  const scenario = stats.scenario
+  const checks = runResult.sanityChecks ?? []
+  const noInterventions =
+    (inputs.planIds?.length ?? 0) > 0 && runResult.interventionsApplied.length === 0
+
   return (
     <HudPanel
       title="Stats"
@@ -102,14 +110,71 @@ export default function StatsPanel() {
           {stats.scenario.heatBlendedMean.toFixed(3)}
         </Typography>
       </Stack>
-      <Stack direction="row" justifyContent="space-between">
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
         <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Green · paved</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
           {(delta.greenAreaM2 / 10_000).toFixed(1)} · {(delta.pavedAreaM2 / 10_000).toFixed(1)} ha
         </Typography>
       </Stack>
+
+      {/* The three the brief asks for that the panel did not show. */}
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Storage capacity</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {m3(scenario.storageCapacityM3 ?? 0)} m³
+          {delta.storageCapacityM3 !== undefined && (
+            <span style={{ color: 'text.secondary' }}>
+              {' '}({signed(delta.storageCapacityM3, '')})
+            </span>
+          )}
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Impervious share</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {((scenario.imperviousShare ?? 0) * 100).toFixed(1)} %
+          {delta.imperviousShare !== undefined && (
+            <span style={{ color: 'text.secondary' }}>
+              {' '}({signed(delta.imperviousShare * 100, ' pt', 2)})
+            </span>
+          )}
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between">
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Green + water</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {ha(scenario.greenWaterAreaM2 ?? 0)} ha
+          {delta.greenWaterAreaM2 !== undefined && (
+            <span style={{ color: 'text.secondary' }}>
+              {' '}({signed(delta.greenWaterAreaM2 / 10_000, ' ha', 1)})
+            </span>
+          )}
+        </Typography>
+      </Stack>
+
+      {/* Sanity checks (brief step 3g). Shown, never silently swallowed. */}
+      {noInterventions && (
+        <Typography variant="caption" display="block" sx={{ mt: 1, fontSize: 9, color: 'warning.main' }}>
+          Projects are selected but no intervention reached the grid — see the
+          run's skipped list.
+        </Typography>
+      )}
+      {checks.map((c) => (
+        <Typography
+          key={c.id}
+          variant="caption"
+          display="block"
+          sx={{ mt: 0.5, fontSize: 9, color: 'warning.main' }}
+        >
+          ⚠ {c.message}
+        </Typography>
+      ))}
+
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1, fontSize: 9 }}>
         {inputs.heatPreset === 'heatwave' ? 'Heatwave display preset. ' : ''}
+        {(inputs.planIds?.length ?? 0) > 1
+          ? `Cumulative: ${inputs.planIds?.length} projects combined. `
+          : ''}
         Screening figures, not a drainage simulation.
       </Typography>
     </HudPanel>

@@ -51,6 +51,7 @@ from app.services.sandbox_model import (  # noqa: E402
     apply_interventions,
     cn_grid_for,
     load_grids,
+    sanity_checks,
     storage_ledger,
     _scenario_ledger,
 )
@@ -328,14 +329,20 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
 
 def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                  plan_id: str | None,
-                 features: list[dict[str, Any]]) -> dict[str, Any]:
+                 features: list[dict[str, Any]],
+                 plan_ids: list[str] | None = None) -> dict[str, Any]:
     """One live run: scenario grid -> overlays on disk -> stats + explanation.
 
-    ``features`` are the ledger-ready intervention dicts for the chosen plan
-    (the router unwraps them, as it does for ``GET .../ledger``); an empty list
-    is a baseline run. The PNGs are written beside the committed artefacts in
-    ``data/rasters/run/`` -- never over them: the offline outputs stay the
-    canonical baseline and a live run is a render of one scenario.
+    ``features`` are the ledger-ready intervention dicts for the chosen plans
+    (the router unwraps them, merging every selected plan's features into one
+    list, as it does for ``GET .../ledger``); an empty list is a baseline run.
+    ``plan_ids`` is the full selection, recorded so a cumulative run can say
+    which projects it composed -- ``plan_id`` stays for a single-plan caller.
+
+    The PNGs are written under a per-run name in ``data/rasters/run/`` -- never
+    over the committed artefacts: the offline outputs stay the canonical baseline
+    and a live run is a render of one scenario. The per-run name is what lets two
+    planners run at the same time without overwriting each other.
     """
     scene_service.get_scene(scene_id)
     if not 0.0 <= rainfall_mm <= MAX_RAINFALL_MM:
@@ -347,11 +354,13 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     cell_area = grids.cell_area_m2
 
     # ---- scenario grid -----------------------------------------------------
-    trial, cn_over, applied, skipped = apply_interventions(grids, features)
+    trial, cn_over, storage_over, applied, skipped = apply_interventions(
+        grids, features)
 
     # ---- wet grid: the ledger's own per-cell arithmetic, then the fill -----
     cn_grid = cn_grid_for(trial, cn_over) if cn_over else None
-    _, unstored_m = _runoff_and_unstored(trial, rainfall_mm, cn_grid=cn_grid)
+    _, unstored_m = _runoff_and_unstored(trial, rainfall_mm, cn_grid=cn_grid,
+                                         storage_over=storage_over or None)
     volume_m3 = float(unstored_m.sum() * cell_area)
     depth_field, water_level = _fill_to_volume(
         np.asarray(grids.elevation_5m, dtype=np.float64), volume_m3, cell_area
@@ -376,7 +385,8 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     base_heat = _heat_field(grids, grids.land_class, terms, heatwave)
 
     # ---- stats ---------------------------------------------------------------
-    scen_ledger = _scenario_ledger(grids, trial, cn_over, rainfall_mm)
+    scen_ledger = _scenario_ledger(grids, trial, cn_over, rainfall_mm,
+                                   storage_over or None)
     base_ledger = storage_ledger(grids, grids.land_class, rainfall_mm)
 
     stats = {
@@ -404,21 +414,71 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                 scen_ledger["greenAreaM2"] - base_ledger["greenAreaM2"], 1),
             "pavedAreaM2": round(
                 scen_ledger["pavedAreaM2"] - base_ledger["pavedAreaM2"], 1),
+            # The three figures the brief asks for that the panel was missing. Signed the
+            # same way as the rest: capacity is positive when the scenario adds
+            # storage, share is the change in impervious fraction, area is the
+            # change in green-and-water land.
+            "storageCapacityM3": round(
+                scen_ledger["storageCapacityM3"]
+                - base_ledger["storageCapacityM3"], 1),
+            "imperviousShare": round(
+                scen_ledger["imperviousShare"] - base_ledger["imperviousShare"],
+                4),
+            "greenWaterAreaM2": round(
+                scen_ledger["greenWaterAreaM2"]
+                - base_ledger["greenWaterAreaM2"], 1),
         },
     }
+
+    # ---- derived ratios --------------------------------------------------------
+    # A card likes to say "95 % of runoff has nowhere to go", and 95 is not a
+    # number the run produced -- it is unstored / runoff. Grounding rightly
+    # refused it, which read as a false alarm. The fix is NOT to loosen the
+    # check: `app/agent/` does no arithmetic, so the run computes the shares it
+    # is willing to stand behind and hands them over verbatim, and grounding then
+    # accepts them because they are facts like any other.
+    ratios: dict[str, float] = {}
+    for name, numerator, denominator in (
+        ("unstoredOverRunoff",
+         scen_ledger["unstoredM3"], scen_ledger["runoffM3"]),
+        ("unstoredOverRunoffBaseline",
+         base_ledger["unstoredM3"], base_ledger["runoffM3"]),
+        ("unstoredDeltaOverBaseline",
+         scen_ledger["unstoredM3"] - base_ledger["unstoredM3"],
+         base_ledger["unstoredM3"]),
+        ("greenDeltaOverBaseline",
+         scen_ledger["greenAreaM2"] - base_ledger["greenAreaM2"],
+         base_ledger["greenAreaM2"]),
+        ("pavedDeltaOverBaseline",
+         scen_ledger["pavedAreaM2"] - base_ledger["pavedAreaM2"],
+         base_ledger["pavedAreaM2"]),
+    ):
+        if denominator:
+            ratios[name] = round(numerator / denominator, 6)
+    stats["ratios"] = ratios
+
+    # ---- sanity checks (brief step 3g) ---------------------------------------
+    # Attached to the run rather than raising: a check that can break the run it
+    # is checking would be worse than no check.
+    checks = sanity_checks(grids, trial, rainfall_mm, wet_area_ha=wet_area_ha,
+                           applied=applied, storage_over=storage_over or None)
 
     # ---- render ---------------------------------------------------------------
     run_id = uuid.uuid4().hex[:8]
     run_dir = settings.rasters_dir / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    wet_png = run_dir / "wetgrid.png"
-    heat_png = run_dir / "heatmap.png"
+    # Per-run names. A fixed `wetgrid.png` meant two planners running at the same
+    # moment silently overwrote each other's overlay, so the second planner saw
+    # the first planner's picture under their own numbers. The run id was already
+    # in the URL as a cache-buster, which hid the collision rather than fixing it.
+    wet_png = run_dir / f"wetgrid_{run_id}.png"
+    heat_png = run_dir / f"heatmap_{run_id}.png"
     Image.fromarray(to_rgba(depth_field), mode="RGBA").save(wet_png)
     Image.fromarray(ramp_rgba(scen_heat), mode="RGBA").save(heat_png)
 
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    (run_dir / "wetgrid.json").write_text(json.dumps({
+    (run_dir / f"wetgrid_{run_id}.json").write_text(json.dumps({
         "artefact": "wetgrid-live-run",
         "runId": run_id,
         "generated": generated,
@@ -426,7 +486,8 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "warning": RUN_WARNING,
         "terrainSource": grids.terrain_source,
         "landCoverSource": grids.landcover_source,
-        "inputs": {"rainfallMm": rainfall_mm, "planId": plan_id},
+        "inputs": {"rainfallMm": rainfall_mm, "planId": plan_id,
+                   "planIds": plan_ids or ([plan_id] if plan_id else [])},
         "results": {
             "unstoredVolumeM3": round(volume_m3, 1),
             "wetAreaHa": round(wet_area_ha, 2),
@@ -435,7 +496,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                 volume_m3 / max(wet_cells * cell_area, 1e-9), 4),
         },
     }, indent=2), encoding="utf-8")
-    (run_dir / "heatmap.json").write_text(json.dumps({
+    (run_dir / f"heatmap_{run_id}.json").write_text(json.dumps({
         "artefact": "heatmap-live-run",
         "runId": run_id,
         "generated": generated,
@@ -448,12 +509,15 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "temperatureC": temperature_c,
             "heatwaveDisplayPreset": heatwave,
             "planId": plan_id,
+            "planIds": plan_ids or ([plan_id] if plan_id else []),
         },
         "results": {
             "meanIndex": round(float(scen_heat.mean()), 4),
             "deltaVsBaseline": stats["delta"]["heatBlendedMean"],
         },
     }, indent=2), encoding="utf-8")
+
+    _prune_run_dir(run_dir)
 
     # ---- explanation -----------------------------------------------------------
     llm = _llm_explanation(stats, rainfall_mm, temperature_c, heatwave,
@@ -465,8 +529,8 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                                             applied, skipped)
         source = "template"
 
-    wet_url = settings.public_url("rasters/run/wetgrid.png")
-    heat_url = settings.public_url("rasters/run/heatmap.png")
+    wet_url = settings.public_url(f"rasters/run/wetgrid_{run_id}.png")
+    heat_url = settings.public_url(f"rasters/run/heatmap_{run_id}.png")
     return {
         "runId": run_id,
         "sceneId": scene_id,
@@ -475,12 +539,14 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "temperatureC": temperature_c,
             "heatPreset": "heatwave" if heatwave else "normal",
             "planId": plan_id,
+            "planIds": plan_ids or ([plan_id] if plan_id else []),
         },
         "overlays": {
             "wetGridUrl": f"{wet_url}?v={run_id}",
             "heatmapUrl": f"{heat_url}?v={run_id}",
         },
         "stats": stats,
+        "sanityChecks": checks,
         "worsens": stats["delta"]["unstoredM3"] > 1.0,
         "interventionsApplied": applied,
         "interventionsSkipped": skipped,
@@ -489,3 +555,23 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "status": RUN_STATUS,
         "warning": RUN_WARNING,
     }
+
+
+def _prune_run_dir(run_dir: Path, keep: int = 20) -> None:
+    """Keep the newest `keep` runs, delete older ones.
+
+    Per-run filenames mean the directory grows without bound on a long demo.
+    Twenty is enough that a planner can still flip back through recent runs
+    (and enough that the sheets a demo touches stay on disk), while keeping the
+    directory small enough to ignore. Deletion is by mtime and best-effort: a
+    failed unlink must never fail the run that already produced its overlay.
+    """
+    for pattern in ("wetgrid_*.png", "heatmap_*.png",
+                    "wetgrid_*.json", "heatmap_*.json"):
+        files = sorted(run_dir.glob(pattern),
+                       key=lambda p: p.stat().st_mtime, reverse=True)
+        for stale in files[keep:]:
+            try:
+                stale.unlink()
+            except OSError:
+                pass

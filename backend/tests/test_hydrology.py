@@ -171,7 +171,7 @@ def main() -> int:
               f"{int(zero_non_drainage.sum())} zeros, "
               f"{int((zero_non_drainage & outlets).sum())} of them outlets")
 
-        # --- gap 8: the reconciliation block (two readings, one view) --- #
+        # --- gap 12: the reconciliation block (two readings, one view) --- #
         # The routed cascade and the level-pool headline are different pictures
         # of the same water and are never merged -- but they must be shown side
         # by side, under the same rainfall, with their one shared identity

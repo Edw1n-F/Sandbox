@@ -31,6 +31,14 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
     if str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
 
+# A run writes overlay PNGs and sidecars under data/rasters/run/, so this suite
+# writes into a throwaway copy of the store rather than the real one. Must
+# precede the app imports so paths resolve late.
+sys.path.insert(0, str(BACKEND_DIR / "tests"))
+from _tmpstore import isolate_store  # noqa: E402
+
+isolate_store()
+
 from app.config import settings  # noqa: E402
 from app.services import run_service  # noqa: E402
 from app.services.sandbox_model import load_grids  # noqa: E402
@@ -97,6 +105,14 @@ def main() -> int:
           and abs(base["stats"]["delta"]["wetAreaHa"]) < 0.05, "")
     check("and it reports no interventions as applied or skipped",
           not base["interventionsApplied"] and not base["interventionsSkipped"])
+    # The run publishes the shares a card may quote, so a derived
+    # percentage grounds instead of being flagged as ungrounded.
+    ratios = base["stats"]["ratios"]
+    check("the run publishes its derived shares",
+          abs(ratios["unstoredOverRunoff"]
+              - base["stats"]["scenario"]["unstoredM3"]
+              / base["stats"]["scenario"]["runoffM3"]) < 1e-5,
+          f"unstoredOverRunoff={ratios['unstoredOverRunoff']:.4f}")
 
     # ---- 2. rainfall moves the answer, one way -----------------------------
     wet = run_service.run_scenario(SCENE_ID, 300.0, 30.0, None, [])
@@ -172,17 +188,21 @@ def main() -> int:
     check("and it changes no water",
           abs(run_noop["stats"]["delta"]["unstoredM3"]) < 1.0)
 
-    # ---- 6. the overlays are real files, cache-busted ----------------------
-    for key, name in (("wetGridUrl", "wetgrid.png"),
-                      ("heatmapUrl", "heatmap.png")):
+    # ---- 6. the overlays are real files, cache-busted, per-run -------------
+    #
+    # Per-run names (not a fixed `wetgrid.png`) because a fixed name let two
+    # planners running at once overwrite each other's overlay. The run id is in
+    # the filename AND the query string, so this pins both.
+    for key, prefix in (("wetGridUrl", "wetgrid"), ("heatmapUrl", "heatmap")):
         url = base["overlays"][key]
+        name = f"{prefix}_{base['runId']}.png"
         check(f"{key} points at the live render",
               name in url and f"?v={base['runId']}" in url, url)
         path = settings.rasters_dir / "run" / name
         check(f"{name} is a PNG on disk",
               path.exists() and path.read_bytes()[:4] == b"\x89PNG",
               f"{path.stat().st_size:,} bytes")
-    sidecar = (settings.rasters_dir / "run" / "wetgrid.json")
+    sidecar = (settings.rasters_dir / "run" / f"wetgrid_{base['runId']}.json")
     check("the wet-grid sidecar records the run's inputs",
           json.loads(sidecar.read_text())["inputs"]["rainfallMm"] == 450.0)
 

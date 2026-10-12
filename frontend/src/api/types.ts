@@ -126,7 +126,7 @@ export interface FeatureCollection {
  */
 export type ViewMode = 'survey' | 'tactical'
 
-/** Which overlay layers are switched on. Rendered by `LayerToggle`. */
+/** Which overlay layers are switched on, rendered by the viewer's layer pills. */
 export interface LayerVisibility {  imagery: boolean
   boundary: boolean
   wetGrid: boolean
@@ -176,6 +176,12 @@ export interface RunLedgerSide {
   pavedAreaM2: number
   wetAreaHa: number
   heatBlendedMean: number
+  /** Total assumed usable storage across the grid, in m3. */
+  storageCapacityM3?: number
+  /** Paved share of all cells, 0-1. */
+  imperviousShare?: number
+  /** Green + water + wetland + floodable area, in m2. */
+  greenWaterAreaM2?: number
 }
 
 /** The result of one live simulation run (`POST /scenes/{id}/run`). */
@@ -187,8 +193,10 @@ export interface RunResult {
     temperatureC: number
     heatPreset: 'normal' | 'heatwave'
     planId: string | null
+    /** The cumulative selection this run composed. Empty for a baseline run. */
+    planIds?: string[]
   }
-  /** Cache-busted by `runId`, so a new run always repaints. */
+  /** Cache-busted by `runId`, and named per run, so a new run always repaints. */
   overlays: { wetGridUrl: string; heatmapUrl: string }
   stats: {
     baseline: RunLedgerSide
@@ -201,8 +209,21 @@ export interface RunResult {
       heatBlendedMean: number
       greenAreaM2: number
       pavedAreaM2: number
+      /** Change in total available storage: positive means the scenario adds it. */
+      storageCapacityM3?: number
+      /** Change in impervious fraction, 0-1. */
+      imperviousShare?: number
+      /** Change in green-and-water area (green + water + wetland + floodable). */
+      greenWaterAreaM2?: number
     }
+    /**
+     * Derived shares the run publishes so a card can quote a percentage that
+     * still traces back to the run. Computed in the run, never in the agent.
+     */
+    ratios?: Record<string, number>
   }
+  /** Combinations that are legal but not credible (brief step 3g). */
+  sanityChecks?: Array<{ id: string; severity: string; message: string }>
   worsens: boolean
   interventionsApplied: Array<{
     id: string | null

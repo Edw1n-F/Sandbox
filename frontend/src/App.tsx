@@ -21,6 +21,7 @@ import Typography from '@mui/material/Typography'
 import AppErrorBoundary from './components/AppErrorBoundary'
 import ChatPanel from './components/ChatPanel'
 import ProjectCatalog from './components/ProjectCatalog'
+import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
 import StatsPanel from './components/StatsPanel'
 import ViewButtons from './components/ViewButtons'
@@ -58,6 +59,11 @@ export default function App() {
     <AppErrorBoundary>
       <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
         <SandboxViewer />
+
+        {/* Names the missing artefact when the sandbox cannot draw:
+            no terrain, no scene id, or a failed load. Without it the failure
+            mode is a blank canvas with working chrome, which reads as broken. */}
+        <SceneNotice />
 
         {chatOpen && <ChatPanel />}
 

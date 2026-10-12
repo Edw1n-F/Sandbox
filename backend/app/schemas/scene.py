@@ -318,8 +318,16 @@ class RunRequest(WireModel):
     to a run, not to the object every plan hangs off. ``plan_id`` selects the
     scenario; ``None`` is a baseline run (today's land cover, no
     interventions).
+
+    ``plan_ids`` is the cumulative selection: every active project's plan, whose
+    interventions are merged into one scenario. It exists because the brief's
+    whole point is *cumulative* effect -- "rather than only assessing each
+    project individually" -- and a single-plan run cannot express that. When
+    both are sent ``plan_ids`` wins and ``plan_id`` is treated as its first
+    entry, so a single-project client and a cumulative one share one code path.
     """
 
     rainfall_mm: float = Field(default=450.0, ge=0.0, le=800.0)
     temperature_c: float = Field(default=30.0, ge=-10.0, le=50.0)
     plan_id: str | None = None
+    plan_ids: list[str] = Field(default_factory=list)

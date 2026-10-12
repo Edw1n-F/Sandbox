@@ -1,9 +1,9 @@
 /**
  * Top-right scenario panel: the two run sliders and the Run button.
  *
- * Pulled out of the old `ScenePanel` for the layout reorg. The sliders write to
- * per-run local state (ADR-024: never persisted onto the scene); Run sends them
- * and the active plan to the live simulation endpoint.
+ * The sliders write to per-run local state (ADR-024: never persisted onto the
+ * scene); Run sends them and the **whole project selection** to the live
+ * simulation endpoint, so a run scores every active project together.
  */
 import Alert from '@mui/material/Alert'
 import Button from '@mui/material/Button'
@@ -21,7 +21,10 @@ export default function SlidersPanel() {
   const run = useSceneStore((s) => s.run)
   const running = useSceneStore((s) => s.running)
   const runError = useSceneStore((s) => s.runError)
-  const activePlanId = usePlanStore((s) => s.activePlanId)
+  // Every project selected in the catalog, not just the highlighted one: the
+  // brief's goal is cumulative effect, and the backend composes this list into
+  // one scenario.
+  const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
 
   return (
     <HudPanel title="Scenario Inputs">
@@ -47,12 +50,21 @@ export default function SlidersPanel() {
           variant="contained"
           fullWidth
           disabled={!scene || running}
-          onClick={() => void run(activePlanId)}
+          onClick={() => void run(selectedPlanIds)}
           sx={{ mt: 0.5 }}
         >
-          {running ? 'Running…' : '▶ Run Simulation'}
+          {running
+            ? 'Running…'
+            : selectedPlanIds.length > 1
+              ? `▶ Run ${selectedPlanIds.length} projects`
+              : '▶ Run Simulation'}
         </Button>
 
+        {selectedPlanIds.length === 0 && !running && (
+          <Typography variant="caption" color="text.secondary">
+            No projects selected — this scores today's land cover.
+          </Typography>
+        )}
         {running && (
           <Typography variant="caption" color="text.secondary">
             Re-running runoff + retention at{' '}

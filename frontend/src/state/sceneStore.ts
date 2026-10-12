@@ -74,7 +74,7 @@ export interface SceneState {
   viewMode: ViewMode
   load: (sceneId: string) => Promise<void>
   setEnvParams: (patch: Partial<EnvParams>) => void
-  run: (planId: string | null) => Promise<void>
+  run: (planIds: string[] | null) => Promise<void>
   toggleLayer: (layer: keyof LayerVisibility) => void
   setLayers: (layers: Partial<LayerVisibility>) => void
   setViewMode: (mode: ViewMode) => void
@@ -158,16 +158,19 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     }),
 
   /**
-   * Run the simulation with the current slider values and the given plan.
+   * Run the simulation with the current slider values and the selected plans.
    *
-   * `planId: null` is a baseline run. The response's overlay URLs are pushed
-   * onto `terrain` because that is what the viewer reads, and both overlays
-   * are switched on: a run whose result the planner cannot see is
-   * indistinguishable from a run that failed.
+   * `planIds: null` (or empty) is a baseline run. Every selected plan's
+   * interventions are merged server-side into one scenario, which is what makes
+   * cumulative comparison possible -- the brief's whole goal. The response's
+   * overlay URLs are pushed onto `terrain` because that is what the viewer
+   * reads, and both overlays are switched on: a run whose result the planner
+   * cannot see is indistinguishable from a run that failed.
    */
-  run: async (planId) => {
+  run: async (planIds) => {
     const { sceneId, scene } = get()
     if (!sceneId) return
+    const selected = (planIds ?? []).filter(Boolean)
     set({ running: true, runError: null })
     try {
       const result = await runSimulation(sceneId, {
@@ -177,7 +180,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         temperatureC: Number(
           scene?.envParams.temperature ?? DEFAULT_TEMPERATURE_C,
         ),
-        planId,
+        planId: selected[0] ?? null,
+        planIds: selected,
       })
       set((state) => ({
         runResult: result,

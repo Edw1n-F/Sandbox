@@ -446,6 +446,7 @@ def _runoff_and_unstored(
     land_class: np.ndarray,
     rainfall_mm: float,
     cn_grid: np.ndarray | None = None,
+    storage_over: dict[tuple[int, int], float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generation and the unstored volume, per cell, in metres.
 
@@ -464,6 +465,12 @@ def _runoff_and_unstored(
     permeable paving, which changes the runoff coefficient without changing the
     land class, and for the live run service, which fills the level pool from
     the same per-cell field the ledger sums.
+
+    ``storage_over`` overrides the class-derived storage depth per cell, so a
+    planner's own "usable storage depth" for one intervention is honoured
+    without inventing a land class per depth. It mirrors
+    ``cn_over`` deliberately: the two per-intervention overrides take the same
+    shape, so a caller who understands one understands the other.
     """
     if cn_grid is None:
         cn = cn_grid_for(land_class)
@@ -475,6 +482,9 @@ def _runoff_and_unstored(
     storage_m = np.full(land_class.shape, DEPRESSION_STORAGE_M, dtype=np.float32)
     for name, depth in STORAGE_DEPTH_M.items():
         storage_m[land_class == LAND_CLASSES.index(name)] = depth
+    if storage_over:
+        for (r, c), depth in storage_over.items():
+            storage_m[r, c] = depth
 
     # A retention cell generates nothing: its contribution is already inside its
     # storage term, and counting it twice is the ADR-015 double count. Driven off
@@ -488,10 +498,58 @@ def _runoff_and_unstored(
     return runoff_m, unstored_m
 
 
+def _area_stats(grids: Grids,
+                land_class: np.ndarray,
+                storage_over: dict[tuple[int, int], float] | None = None,
+                ) -> dict[str, float]:
+    """The area and capacity terms the stats panel needs.
+
+    Factored so :func:`storage_ledger` and :func:`_ledger_from_cn` report the
+    *same* three extra figures. They are two entry points to one ledger, and a
+    second copy of the impervious-share sum is exactly how the panel and the
+    number would come to disagree.
+
+    - ``storageCapacityM3`` -- total available storage, i.e. the sum of every
+      cell's assumed usable depth times its area. This is the "remaining explicit
+      storage capacity" the brief asks for: it is what the scenario has left to
+      hold water, not what it used.
+    - ``imperviousShare`` -- paved cells over all cells, 0-1. Named for the
+      brief's "new impervious share from buildings, roads, and paved land".
+      Bare ground is deliberately NOT counted: TR-55 treats "fallow, bare soil"
+      as a separate, less impervious row, and adding it would inflate the figure
+      past what the class table supports.
+    - ``greenWaterAreaM2`` -- green + water + wetland + floodable, the brief's
+      "green-and-water area". Floodable counts here because it is landscaped
+      ground, which is the whole reason it is not `water`.
+    """
+    cell_area = grids.cell_area_m2
+    total = float(land_class.size)
+
+    storage_m = np.full(land_class.shape, DEPRESSION_STORAGE_M, dtype=np.float32)
+    for name, depth in STORAGE_DEPTH_M.items():
+        storage_m[land_class == LAND_CLASSES.index(name)] = depth
+    if storage_over:
+        for (r, c), depth in storage_over.items():
+            storage_m[r, c] = depth
+
+    paved_cells = int((land_class == LAND_CLASSES.index("paved")).sum())
+    green_water_cells = sum(
+        int((land_class == LAND_CLASSES.index(name)).sum())
+        for name in ("green", "water", "wetland", "floodable")
+    )
+
+    return {
+        "storageCapacityM3": float(storage_m.sum() * cell_area),
+        "imperviousShare": float(paved_cells / total) if total else 0.0,
+        "greenWaterAreaM2": float(green_water_cells * cell_area),
+    }
+
+
 def storage_ledger(
     grids: Grids,
     land_class: np.ndarray,
     rainfall_mm: float = DEFAULT_RAINFALL_MM,
+    storage_over: dict[tuple[int, int], float] | None = None,
 ) -> dict[str, float]:
     """Runoff, retention and the unstored volume for one land-class grid.
 
@@ -504,7 +562,8 @@ def storage_ledger(
     needs volumes. So this returns volumes and the caller compares those. Depths
     come from the already-solved field.
     """
-    runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm)
+    runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm,
+                                                storage_over=storage_over)
     cell_area = grids.cell_area_m2
 
     heat = np.zeros(land_class.shape, dtype=np.float32)
@@ -519,6 +578,7 @@ def storage_ledger(
         "heatMean": float(heat.mean()),
         "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
         "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
+        **_area_stats(grids, land_class, storage_over),
     }
 
 
@@ -591,7 +651,7 @@ def routed_ledger(
     hand_drainage = hand_result["handM"] == 0
     agreement = float((routed_wet == hand_drainage).mean())
 
-    # --- The reconciliation block (gap 8's "one view" half) --- #
+    # --- The reconciliation block (gap 12's "one view" half) --- #
     # Two drainage readings coexist by design: the routed cascade here and the
     # level-pool headline in storage_ledger / wetgrid_hsk.npy. They are different
     # pictures of the same water and are never merged -- but until now they were
@@ -993,7 +1053,19 @@ def hourly_storm_simulation(
 # is, rather than being smeared into the nearest class.
 INTERVENTION_EFFECTS: dict[str, dict[str, Any]] = {
     "water_reservoir": {"to": "water", "why": "an open water surface stores water"},
-    "flood_storage": {"to": "water", "why": "explicit flood storage is a water body"},
+    # `flood_storage` used to map to `water`, which modelled a floodable park as
+    # a permanent lake: wrong green loss (it deleted the vegetated area), wrong
+    # heat score (it got the 0.05 water value instead of 0.40), and the wrong
+    # storage depth (1.50 m instead of a shallow depression). It now has its own
+    # class. This DOES move the numbers for any plan already using it, which is
+    # the point -- the old figure described a lake nobody proposed.
+    "flood_storage": {"to": "floodable",
+                      "why": "a floodable park stores water intermittently; the "
+                             "surface stays landscaped ground"},
+    "underground_tank": {"to": "tank",
+                         "why": "an underground tank stores water beneath an "
+                                "unchanged surface; its depth is a per-"
+                                "intervention assumption, not a land class"},
     "green_space": {"to": "green", "why": "vegetated ground generates less runoff"},
     "urban_green": {"to": "green", "why": "urban green is vegetated ground"},
     "permeable_paving": {"cn": 72.0,
@@ -1014,6 +1086,22 @@ DEFAULT_PERMEABLE_CN = 72.0
 # is describing a land-use change rather than a feature someone would build, and
 # applying it would let a single polygon erase the district's hydrology.
 MAX_INTERVENTION_COVERAGE = 0.25
+
+# ...and the largest share ALL the active interventions together may rework.
+# The per-intervention cap alone does not bound the scenario: five 24%
+# interventions are each legal and together rewrite the district. 40% is chosen
+# as "a large but still recognisable set of works" -- the published Second Phase
+# programmes are the scale of thing this needs to admit, and the point of the
+# sandbox is cumulative comparison, so the limit has to be well above one
+# project. Measured on the union of reworked cells.
+MAX_TOTAL_COVERAGE = 0.40
+
+# Bounds on a planner-declared usable storage depth. The lower bound keeps a
+# zero or near-zero declaration from being read as "this stores nothing, but
+# count it anyway"; the upper bound refuses a figure that would make one
+# intervention hold more water than any structure at this scale could.
+MIN_STORAGE_DEPTH_M = 0.05
+MAX_STORAGE_DEPTH_M = 10.0
 
 
 def _polygon_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int]]:
@@ -1092,8 +1180,9 @@ def ledger_for_scenario(
     water has nowhere to go*, and *how much worse than today*.
     """
     base = storage_ledger(grids, grids.land_class, rainfall_mm)
-    trial, cn_over, applied, skipped = apply_interventions(grids, features)
-    scen = _scenario_ledger(grids, trial, cn_over, rainfall_mm)
+    trial, cn_over, storage_over, applied, skipped = apply_interventions(
+        grids, features)
+    scen = _scenario_ledger(grids, trial, cn_over, rainfall_mm, storage_over)
 
     d_unstored = scen["unstoredM3"] - base["unstoredM3"]
     return {
@@ -1118,24 +1207,125 @@ def ledger_for_scenario(
     }
 
 
+# --------------------------------------------------------------------------- #
+# Sanity checks (brief step 3g)
+# --------------------------------------------------------------------------- #
+
+def sanity_checks(
+    grids: Grids,
+    land_class: np.ndarray,
+    rainfall_mm: float,
+    wet_area_ha: float | None = None,
+    applied: list[dict[str, Any]] | None = None,
+    storage_over: dict[tuple[int, int], float] | None = None,
+) -> list[dict[str, Any]]:
+    """Warnings for combinations that are arithmetically legal but not credible.
+
+    The brief asks for a sanity-check step and the honest reason for one is
+    specific: every guard in this module is a *range* check (rainfall within
+    0-800, coverage under a cap, storage depth within bounds), and a set of
+    in-range inputs can still compose into a result no one should believe. These
+    are the compositions worth catching:
+
+    1. **Storage exceeds runoff.** If the scenario holds more water than the
+       assumed rainfall generates, then either the storage figures are being
+       double-counted or the intervention is sized for a storm that was not
+       asked for. Both are worth saying out loud.
+    2. **Wet area exceeds the site.** A level-pool allocation cannot put water on
+       more land than exists; if it does, the fill or the cell area is wrong.
+    3. **Total reworked land over the cumulative cap.** Belt and braces: the
+       guard in :func:`apply_interventions` already refuses this, so a warning
+       here means the guard was bypassed.
+    4. **Curve Number out of range.** TR-55's table spans roughly 30-100; a value
+       outside it means a table entry or an override went wrong.
+
+    Returned as a list of ``{"id", "severity", "message"}``. This function never
+    raises: a sanity check that can break the run it is checking is worse than no
+    check. The run always completes; these are attached to it.
+    """
+    out: list[dict[str, Any]] = []
+
+    def warn(check_id: str, message: str) -> None:
+        out.append({"id": check_id, "severity": "warning", "message": message})
+
+    # 4. Curve Number range.
+    cn = cn_grid_for(land_class)
+    cn_min, cn_max = float(cn.min()), float(cn.max())
+    if cn_min < 30.0 or cn_max > 100.0:
+        warn("cn-out-of-range",
+             f"Curve Number spans {cn_min:.1f}-{cn_max:.1f}; TR-55's table runs "
+             f"about 30-100, so a table entry or a per-cell override is wrong")
+
+    runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm,
+                                                cn_grid=cn,
+                                                storage_over=storage_over)
+    cell_area = grids.cell_area_m2
+    runoff_m3 = float(runoff_m.sum() * cell_area)
+    capacity = _area_stats(grids, land_class, storage_over)["storageCapacityM3"]
+
+    # 1. Storage greater than the water it is meant to hold.
+    if runoff_m3 > 0 and capacity > runoff_m3:
+        warn("storage-exceeds-runoff",
+             f"available storage {capacity:,.0f} m3 exceeds the "
+             f"{runoff_m3:,.0f} m3 of runoff generated at {rainfall_mm:.0f} mm; "
+             f"either the storage is double-counted or the intervention is sized "
+             f"for a larger storm than the one being simulated")
+
+    # 2. Wet area larger than the site.
+    if wet_area_ha is not None:
+        site_ha = grids.rows * grids.cols * cell_area / 10_000.0
+        if wet_area_ha > site_ha:
+            warn("wet-area-exceeds-site",
+                 f"wet area {wet_area_ha:.1f} ha exceeds the {site_ha:.1f} ha "
+                 f"study area; a level-pool fill cannot flood more land than "
+                 f"exists, so the fill or the cell area is wrong")
+
+    # 3. Cumulative coverage, re-checked from the audit list.
+    if applied:
+        worst = max((a.get("totalCoverageFraction") or 0.0) for a in applied)
+        if worst > MAX_TOTAL_COVERAGE:
+            warn("coverage-over-cap",
+                 f"total reworked land reached {worst:.1%}, over the "
+                 f"{MAX_TOTAL_COVERAGE:.0%} cumulative limit; the guard in "
+                 f"apply_interventions should already have refused this")
+
+    return out
+
+
 def apply_interventions(
     grids: Grids,
     features: list[dict[str, Any]],
-) -> tuple[np.ndarray, dict[tuple[int, int], float], list[dict[str, Any]],
+) -> tuple[np.ndarray, dict[tuple[int, int], float],
+           dict[tuple[int, int], float], list[dict[str, Any]],
            list[dict[str, Any]]]:
     """Translate stored intervention features into a modified land-class grid.
 
-    Returns ``(trial, cn_over, applied, skipped)``: the scenario land-class
-    grid, per-cell Curve Number overrides (permeable paving changes runoff
-    without changing class), and the two audit lists. Factored out of
-    :func:`ledger_for_scenario` so the live run service renders a wet grid and
-    heatmap from *exactly* the grid the ledger scores -- one definition, no
-    possibility of the picture and the number disagreeing.
+    Returns ``(trial, cn_over, storage_over, applied, skipped)``: the scenario
+    land-class grid, per-cell Curve Number overrides (permeable paving changes
+    runoff without changing class), per-cell storage-depth overrides (the
+    planner's own usable depth for one intervention), and the two audit lists.
+    Factored out of :func:`ledger_for_scenario` so the live run service renders a
+    wet grid and heatmap from *exactly* the grid the ledger scores -- one
+    definition, no possibility of the picture and the number disagreeing.
+
+    ``features`` is a *list*, and the guards are written for that: each
+    intervention is bounded individually, and the scenario is bounded
+    cumulatively, because a list of legal interventions can compose into an
+    illegal land-use change.
     """
     trial = grids.land_class.copy()
     cn_over: dict[tuple[int, int], float] = {}
+    storage_over: dict[tuple[int, int], float] = {}
     applied: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+
+    # Every cell an earlier intervention already reworked. Two guards read it:
+    # the per-intervention cap below, and the cumulative one. Without the second,
+    # five individually-legal 24% interventions compose into a 100% land-cover
+    # swap, which is the failure the first cap was written to stop -- just spread
+    # across a list instead of sitting in one polygon.
+    claimed: set[tuple[int, int]] = set()
+    site_cells = float(grids.rows * grids.cols)
 
     for feature in features:
         kind = str(feature.get("intervention_type")
@@ -1173,7 +1363,7 @@ def apply_interventions(
         # fictitious 63% reduction in the deficit. A single intervention that
         # reworks a quarter of the area is a land-use change, not an intervention,
         # so it is refused and reported rather than quietly applied.
-        coverage = len(cells) / float(grids.rows * grids.cols)
+        coverage = len(cells) / site_cells
         if coverage > MAX_INTERVENTION_COVERAGE:
             skipped.append({
                 "id": fid, "kind": kind,
@@ -1184,6 +1374,44 @@ def apply_interventions(
                 "coverageFraction": round(coverage, 4),
             })
             continue
+
+        # Cumulative guard. Measured on the UNION, so overlapping interventions
+        # are not double-counted -- three basins stacked on the same basin are
+        # still one basin's worth of land.
+        total_coverage = len(claimed | set(cells)) / site_cells
+        if total_coverage > MAX_TOTAL_COVERAGE:
+            skipped.append({
+                "id": fid, "kind": kind,
+                "why": (f"applying this would bring the scenario's total reworked "
+                        f"land to {total_coverage:.1%}, over the "
+                        f"{MAX_TOTAL_COVERAGE:.0%} cumulative limit; the "
+                        f"interventions already selected use "
+                        f"{len(claimed) / site_cells:.1%}"),
+                "coverageFraction": round(coverage, 4),
+                "totalCoverageFraction": round(total_coverage, 4),
+            })
+            continue
+
+        # The planner's own usable storage depth for this intervention, if given.
+        # Validated rather than trusted: a depth of 40 m over a hectare is not a
+        # tank, and silently accepting it would produce a storage figure no
+        # one could defend.
+        depth_raw = params.get("storageDepthM", params.get("storage_depth_m"))
+        depth: float | None = None
+        if depth_raw is not None:
+            try:
+                depth = float(depth_raw)
+            except (TypeError, ValueError):
+                depth = None
+            if depth is not None and not (
+                    MIN_STORAGE_DEPTH_M <= depth <= MAX_STORAGE_DEPTH_M):
+                skipped.append({
+                    "id": fid, "kind": kind,
+                    "why": (f"storageDepthM {depth} m is outside the "
+                            f"{MIN_STORAGE_DEPTH_M}-{MAX_STORAGE_DEPTH_M} m "
+                            f"range this screening model will accept"),
+                })
+                continue
 
         changed = 0
         if effect.get("to") is not None:
@@ -1199,35 +1427,50 @@ def apply_interventions(
                     cn_over[(r, c)] = cn
                     changed += 1
 
+        # Applied on either path: a tank's depth is a property of the tank, not
+        # of the class it happens to paint.
+        if depth is not None:
+            for r, c in cells:
+                storage_over[(r, c)] = depth
+
+        claimed.update(cells)
         applied.append({
             "id": fid,
             "kind": kind,
             "cellsChanged": changed,
             "areaM2": round(changed * grids.cell_area_m2, 1),
             "coverageFraction": round(coverage, 5),
+            "totalCoverageFraction": round(total_coverage, 5),
+            "storageDepthM": depth,
             "why": effect["why"],
             "basis": params.get("basis"),
         })
 
-    return trial, cn_over, applied, skipped
+    return trial, cn_over, storage_over, applied, skipped
 
 
 def _scenario_ledger(grids: Grids, trial: np.ndarray,
                      cn_over: dict[tuple[int, int], float],
-                     rainfall_mm: float) -> dict[str, float]:
+                     rainfall_mm: float,
+                     storage_over: dict[tuple[int, int], float] | None = None,
+                     ) -> dict[str, float]:
     """Score the grid :func:`apply_interventions` produced.
 
     A per-cell CN override (permeable paving) needs the explicit-CN ledger;
-    everything else is the class-driven one.
+    everything else is the class-driven one. Either way the per-cell storage
+    override travels with it, so a tank's declared depth is scored on the same
+    path that rendered its overlay.
     """
     if cn_over:
         return _ledger_from_cn(grids, trial, cn_grid_for(trial, cn_over),
-                               rainfall_mm)
-    return storage_ledger(grids, trial, rainfall_mm)
+                               rainfall_mm, storage_over)
+    return storage_ledger(grids, trial, rainfall_mm, storage_over)
 
 
 def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
-                    rainfall_mm: float) -> dict[str, float]:
+                    rainfall_mm: float,
+                    storage_over: dict[tuple[int, int], float] | None = None,
+                    ) -> dict[str, float]:
     """The same ledger, but with an explicit Curve Number grid.
 
     Needed for permeable paving, which changes the runoff coefficient without
@@ -1236,7 +1479,8 @@ def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
     the ADR-015 partition here would be the double count, again.
     """
     runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm,
-                                                cn_grid=cn)
+                                                cn_grid=cn,
+                                                storage_over=storage_over)
     cell_area = grids.cell_area_m2
 
     heat = np.zeros(land_class.shape, dtype=np.float32)
@@ -1251,6 +1495,7 @@ def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
         "heatMean": float(heat.mean()),
         "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
         "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
+        **_area_stats(grids, land_class, storage_over),
     }
 
 
