@@ -167,23 +167,43 @@ Each of these is a design position, not an unfinished feature.
 Fifteen open items, ordered by what hurts a user first. Each states the issue and
 what closes it.
 
-### 1. No validated parameter card, and user-written interventions never ask for missing assumptions
+### 1. No validated parameter card, and nothing estimates a user intervention's own numbers
 
 **The issue.** The brief puts a validated parameter object between "read scenario"
 and "calculate", and nothing of it exists. The numbers are scattered across the
 ledger and the stats dict: there is no single object carrying total site area,
 pond/wetland retained or removed, bare ground, explicit storage, soil group, or a
-source + date + confidence per assumption. The second half is what such an object
-is *for*: `ai_plan` silently assumes where a user-written intervention replaced
-land, what surface it is, how deep the storage goes and where it overflows. Today
-the instruction applies directly — no review step, and none of the runs that follow
-carry the "Preliminary, user-defined scenario" label the brief asks for.
+source + date + confidence per assumption.
+
+The second half is what such an object is *for*. A user-written intervention is a
+hypothesis, and its numbers are not written down anywhere to be read — a basin's
+usable depth, the permeability of proposed paving, the area actually reworked — so
+something has to **estimate** them. Nothing does. `ai_plan` emits `params` for the
+operations (`multiplier`, `heightM`, `degrees`, `dx_m`/`dy_m`, `targetLon`/
+`targetLat`, `widthScale`/`depthScale`, `count`) and never a storage depth, a
+permeability or an area, so every intervention falls back to the fixed value in
+`INTERVENTION_EFFECTS`. The sink is wired and empty: `apply_interventions` reads
+`params.storageDepthM`, validates it against 0.05–10 m, and emits the per-cell
+storage override the run scores, while `run_service` renders the wet grid and the
+heat map from that same grid. So an estimated number moves the stats and both
+overlays at once. Today the instruction applies with none of it, no review step,
+and none of the runs that follow carry the "Preliminary, user-defined scenario"
+label the brief asks for.
 
 **What to do.** Add `parameter_card.py` plus an endpoint, cached on (plan ids +
-intervention hash) so a rainfall-only change reuses the land-cover half. Have
-`ai_plan` return `questions[]` (location, footprint, land replaced, surface type,
-usable depth, overflow, vegetation), render a confirm/edit card, and label the run
-that follows. One entry because the card **is** the container the answers belong in.
+intervention hash) so a rainfall-only change reuses the land-cover half. The card
+is the container, and it holds two kinds of field: the **plan-level** figures (site
+area, soil group, pond and wetland retained or removed, bare ground, explicit
+storage) and the **per-intervention estimates** (location, footprint, land
+replaced, surface type, usable depth, overflow, vegetation), each carrying a
+source, a date and a confidence.
+
+Have `ai_plan` produce those estimates as the intervention's `params`, and return
+`questions[]` for the ones it cannot ground, so the card confirms and edits rather
+than asking from nothing. **The model supplies an assumption, never a result** —
+it states a depth, and the code multiplies it by the area it computed and keeps
+the arithmetic, which is the same boundary Decision 14 draws. Then label the run
+that follows.
 
 ### 2. The project catalog is a placeholder
 
@@ -288,10 +308,16 @@ chat-callable, so the op shape the panel's buttons emit is the same shape the mo
 emits. Add the missing **`remove`** op — until it exists the vocabulary cannot say
 *"take this away"*, and the brief asks for removal as plainly as for addition. Make
 `place` build an object rather than extrude a slab (the per-kind profile is gap 4's
-half; the point here is that an addition is *shaped*). Where an addition is
-generated rather than drawn, it lands labelled `draft_pending_human_review` like
-every AI suggestion, so a generated object is honest as a proposal and never as
-existing state.
+half; the point here is that an addition is *shaped*).
+
+**The seam, so nothing waits.** An op already carries a `params` dict and
+`apply_interventions` already consumes it: a storage depth becomes the per-cell
+storage override, and an empty one falls back to the intervention kind's fixed
+value. So this path transports the numbers gap 1 estimates without depending on
+gap 1 — the loop applies whatever it is handed, and an op carrying no estimates
+behaves exactly as it does today. An addition that is generated rather than drawn
+lands labelled `draft_pending_human_review`, like every AI suggestion, so a
+generated object is honest as a proposal and never as existing state.
 
 **One op vocabulary serves all four cases** — existing buildings, project toggles,
 AI suggestions and generated objects — so this is one path, not four, and the op
@@ -450,7 +476,8 @@ waiting on another.
 
 ### Edwin — model internals, storage and configuration
 
-- **1** — the parameter card and the assumption questions.
+- **1** — the parameter card, and the estimate of a user intervention's own
+  numbers: the assumptions the run is scored on, with their provenance.
 - **2** — `projects.json`: fixed footprints and stated assumptions, so runs are
   reproducible.
 - **9** — the provider-client test.

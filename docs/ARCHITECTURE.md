@@ -364,6 +364,21 @@ cover at a height the model asked for in a region the model named. The panel say
 `added by the plan` and the README says provisional, because a coloured block on
 a map is otherwise indistinguishable from a design decision.
 
+**The numbers, not only the geometry.** The same boundary covers the figures an
+intervention needs and nobody has published: a basin's usable depth, a paving's
+permeability, the area it reworks. These are design assumptions, not computed
+results, so the model may state them — and it should, because a user-written
+intervention is a hypothesis whose numbers do not exist anywhere to be read.
+Three things keep that honest. The code **bounds** them (`MIN_STORAGE_DEPTH_M`
+0.05 m to `MAX_STORAGE_DEPTH_M` 10 m, and the coverage caps beside them), so an
+absurd depth is refused and reported rather than applied. The parameter card
+carries each one with a **source, a date and a confidence**, so an estimate is
+never mistaken for a measurement. And the run that follows is labelled
+"Preliminary, user-defined scenario". The model never multiplies a depth by an
+area; the code does the arithmetic, as everywhere else. This is why a
+model-supplied number is not a breach of "the model emits no arithmetic": an
+assumption is the *input* to arithmetic, not a substitute for it.
+
 ## Decision 15 — Verify the reference implementation, then reimplement if it will not install
 
 **Decision.** `richdem` and `hydrotools` are the standard open-source tools for
