@@ -651,7 +651,7 @@ def routed_ledger(
     hand_drainage = hand_result["handM"] == 0
     agreement = float((routed_wet == hand_drainage).mean())
 
-    # --- The reconciliation block (gap 12's "one view" half) --- #
+    # --- The reconciliation block (gap 11's "one view" half) --- #
     # Two drainage readings coexist by design: the routed cascade here and the
     # level-pool headline in storage_ledger / wetgrid_hsk.npy. They are different
     # pictures of the same water and are never merged -- but until now they were

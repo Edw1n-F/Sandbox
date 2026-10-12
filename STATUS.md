@@ -225,7 +225,7 @@ height stays modelled, but conditioned on real area and storeys.
 - **The data half:** ingest the real footprints (Overture, and/or Open3Dhk's
   LandsD 3D Digital Map that Chenxu is already cleaning), reproject to lon/lat, and
   publish them as a **GeoJSON contract** with a storeys-conditioned height. Also
-  the real terrain (gap 13) ships on the same contract.
+  the real terrain (gap 12) ships on the same contract.
 - **The geometry half:** replace the procedural massing generator so it consumes
   real footprints and extrudes actual building shapes — outline, orientation, a
   height conditioned on storeys — instead of tiling squares.
@@ -321,22 +321,7 @@ costs a wasted round trip before the rescue runs.
 **What to do.** A paid model id — a one-line `.env` change — removes all three
 problems.
 
-### 11. Wind is built but not surfaced, and its geometry has two encodings
-
-**The issue.** `ventilation.py` (frontal area density + least-cost corridors)
-computes and tests, but nothing surfaces it in the UI or the run; the brief marks
-this optional — wire it in as a **third overlay**, kept out of the flood/heat
-numbers. Meanwhile the same geometry is written down twice: `projected_width_m` and
-`frontal_area_density` exist in both `ventilation.py` (dict-based) and
-`design_metrics.py` (typed `Footprint`), and `ch05` says the typed one is canonical.
-
-**What to do.** Surface wind as a third overlay endpoint and layer. Have
-`ventilation.py` **delegate** to `design_metrics.py`'s typed `Footprint` rather than
-grow a third encoding. Each corridor already carries `entryEdge` and
-`firstObstructionMeanM`, so the two wind readings stay distinguishable even though
-the underlying paths still cannot separate NE from SW.
-
-### 12. The outlet water-level condition is unresolved
+### 11. The outlet water-level condition is unresolved
 
 **The issue.** `sea_level_scenario` models retention *submergence* rather than
 outfall capacity, which is where sea level would actually bite at this site; it
@@ -348,7 +333,7 @@ solve — shown side by side with a `reconciliation` block, and the headline
 **What to do.** Declare it rather than invent the network. The routed cascade now
 exists and could host the outfall question; the headline stays where it is.
 
-### 13. The terrain is ~90 m SRTM-derived, and the docs are stale about the fix
+### 12. The terrain is ~90 m SRTM-derived, and the docs are stale about the fix
 
 **The issue.** `ch05 §5.4` calls the 5 m DTM "request-gated", but it is now freely
 available — and Open3Dhk's set includes a TIN terrain model. Also: a run re-solves
@@ -359,7 +344,7 @@ Priority-Flood conditioning and the D8 receiver once, ~9 s, offline).
 **What to do.** Ingest the real 5 m DTM / TIN terrain and document the re-condition
 step. Gates every drainage number.
 
-### 14. Storage is JSON files, not PostGIS
+### 13. Storage is JSON files, not PostGIS
 
 **The issue.** The documented target store is not started; the seam is `app/db.py`
 and `scene_service.py` only.
@@ -367,7 +352,7 @@ and `scene_service.py` only.
 **What to do.** Implement the PostGIS store behind the existing seam. File mode
 already satisfies the same API contract, so this is a swap, not a rewrite.
 
-### 15. Coverage stops short of two view modules, and two known limits stand
+### 14. Coverage stops short of two view modules, and two known limits stand
 
 **The issue.** Unit coverage does not reach `view/onlineProps.ts` (the online 3D
 assets loader) or `view/interventionLayer.ts`; the 56 unit tests cover the DEM
@@ -382,18 +367,25 @@ two-finger scroll does not pan in Cesium 3D (a cursor-anchored ground pan measur
 accessible name if it can be done without breaking the attribution terms. Keep the
 pan workaround documented.
 
-### 16. The temperature slider is a display preset, not physics
+### 15. The temperature slider drives the heat display only, and has to say so
 
 **The issue.** Above 35 °C the run applies `make_heatmap`'s documented heatwave
 stretch — a render transform on the same field; the land-class heat index does not
 know about air temperature, and `test_run` asserts it is bit-identical across
-presets. A planner who drags temperature and sees no rainfall-side change is looking
-at a model that is being honest, not at a broken slider — but the brief says
-temperature "simulates heatwaves", so it is a scope risk if read literally.
+presets. That is the right behaviour, because temperature cannot drive SCS-CN at
+all without an evapotranspiration term (Penman-Monteith or equivalent), which is a
+surface energy balance this project does not have and should not imply. What is
+wrong is that the prototype is silent about it: a planner drags temperature, sees
+no rainfall-side change, and gets no explanation.
 
-**What to do.** A scope call, not a build: keep it as a clearly-labelled preset
-(recommended — a real energy-balance term is out of scope and should not be
-implied), or fund the physics it would take to make temperature move the numbers.
+**What to do.** Constrain the slider to the band the anchor actually supports — the
+HKO Lau Fau Shan July 2015–2024 range `[26.4, 32.7] °C`, so roughly **24–42 °C** —
+because outside it the number is extrapolation with no basis. Mark **35 °C** as the
+threshold where the documented heatwave stretch engages, so the mechanism is
+discoverable rather than mysterious. And state beside the slider, where the planner
+is already looking, that moving it **stretches the heat scale and changes no
+rainfall or runoff figure**. The underlying behaviour stays as it is; what closes
+this gap is that the tool stops being silent about what the slider does.
 
 ---
 
@@ -404,21 +396,21 @@ waiting on another.
 
 | Owner | Gaps | The lane |
 |---|---|---|
-| **Lia** | 1, 4, 5, 6, 7, 11, 15 | The interface and the interaction |
-| **Chenxu** | 3, 8, 13 | The real 3D and geospatial data |
-| **Edwin** | 2, 9, 10, 12, 14, 16 | Model internals, storage and configuration |
+| **Lia** | 4, 5, 6, 7, 14, 15 | The interface and the interaction |
+| **Chenxu** | 3, 8, 12 | The real 3D and geospatial data |
+| **Edwin** | 1, 2, 9, 10, 11, 13 | Model internals, storage and configuration |
 
 ### Lia — the interface and the interaction
 
-- **1** — the parameter card and the assumption questions.
 - **4** — contour the intervention's true cell mask and give each kind a real
   massing profile, so a reservoir is a basin and not a box.
 - **5** — generated suggestion cards and Pin/Unpin.
 - **6** — the chat → ops bridge.
 - **7** — the water-pour animation.
-- **11** — surface wind as a third overlay and collapse the two geometry encodings.
-- **15** — the two uncovered view modules, the credit-link accessible name, and the
+- **14** — the two uncovered view modules, the credit-link accessible name, and the
   documented pan limit.
+- **15** — the temperature slider: the constrained range, the 35 °C threshold marker,
+  and the label saying what the slider does and does not change.
 
 ### Chenxu — the real 3D and geospatial data
 
@@ -428,17 +420,17 @@ waiting on another.
   extrudes actual building shapes from those footprints instead of tiling squares.
 - **8** — the real Landsat LST scene over the site, which is the heat anchor, plus a
   provenance pass on `HEAT_INDEX`.
-- **13** — the real 5 m DTM / TIN terrain, on the same contract as gap 3.
+- **12** — the real 5 m DTM / TIN terrain, on the same contract as gap 3.
 
 ### Edwin — model internals, storage and configuration
 
+- **1** — the parameter card and the assumption questions.
 - **2** — `projects.json`: fixed footprints and stated assumptions, so runs are
   reproducible.
 - **9** — the provider-client test.
 - **10** — the paid model id.
-- **12** — the outlet water-level condition.
-- **14** — the PostGIS store behind the existing seam.
-- **16** — the temperature-slider scope call.
+- **11** — the outlet water-level condition.
+- **13** — the PostGIS store behind the existing seam.
 
 ---
 
