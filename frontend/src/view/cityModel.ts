@@ -44,7 +44,6 @@
  *   plan is selected and never on how many times React has re-run the effect.
  */
 import {
-  Cartesian2,
   Cartesian3,
   Color,
   ConstantProperty,
@@ -53,7 +52,6 @@ import {
   HeightReference,
   PolygonHierarchy,
   ScreenSpaceEventHandler,
-  ScreenSpaceEventType,
   type MaterialProperty,
   type Viewer,
 } from 'cesium'
@@ -508,14 +506,14 @@ export async function addCityModel(
     viewer.scene.requestRender()
   }
 
-  // Click-to-select. Left drag is excluded so panning the globe still works.
+  // Click-to-select is deliberately disabled. Per-building selection and
+  // height editing was removed from the UI (the prototype is a sandbox you run
+  // scenarios on, not a per-building sculptor), and `scene.pick` across 2,639
+  // entities on every click was a measurable source of input lag. The handler
+  // is still constructed so the rest of the dispose path is unchanged; it just
+  // attaches no LEFT_CLICK action.
   const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
-  handler.setInputAction((movement: ScreenSpaceEventHandler.PositionedEvent) => {
-    const picked = viewer.scene.pick(movement.position as Cartesian2)
-    const entity = picked?.id
-    const id = entity instanceof Entity ? idByEntity.get(entity) : undefined
-    select(id ?? null)
-  }, ScreenSpaceEventType.LEFT_CLICK)
+  void handler
 
   return {
     entities,

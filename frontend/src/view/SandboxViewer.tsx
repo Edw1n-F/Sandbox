@@ -12,11 +12,16 @@ import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import {
   Cartesian3,
+  Cartesian4,
+  ClippingPlane,
+  ClippingPlaneCollection,
   Color,
   ConstantProperty,
   Math as CesiumMath,
   Material,
+  Matrix4,
   Rectangle,
+  Transforms,
   Viewer,
   type ImageryLayer,
 } from 'cesium'
@@ -298,6 +303,12 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       // against by isLive().
       if (cancelled || !isLive(viewer)) return
       viewer.terrainProvider = binding.terrainProvider
+      // Clip the globe to the study area: the "child's sandbox" frame is a
+      // floating slab clipped hard at the bbox, with the terrain's own cut
+      // face as the slab edge. No walls, no globe beyond the box. The four
+      // clipping planes use outward normals so the *outside* is removed and
+      // the inside stays — see `clipGlobeToBBox`.
+      clipGlobeToBBox(viewer, bbox)
       // Disclose the fallback rather than hiding it; ScenePanel renders this.
       useSceneStore.setState((s) => ({
         scene: s.scene
@@ -796,4 +807,71 @@ function extentOf(rectangle: Rectangle): Extent {
     east: CesiumMath.toDegrees(rectangle.east),
     north: CesiumMath.toDegrees(rectangle.north),
   }
+}
+
+/**
+ * Clip the globe to the study-area bbox — the "floating sandbox slab".
+ *
+ * Four vertical planes, one per bbox edge, with **outward** normals (pointing
+ * away from the area). `unionClippingRegions: true` means a point on the
+ * positive side of any plane is clipped, so everything outside the box is
+ * removed and the inside stays — the slab you see, with the terrain's own cut
+ * face as the slab edge (Cesium draws `edgeColor`/`edgeWidth` on the cut).
+ *
+ * For a ~2 km study area the curvature is negligible, so flat planes at the
+ * edge midpoints are within a metre of the true geodesic edge — invisible at
+ * this zoom. The normals are derived from a local ENU frame at each edge
+ * midpoint, so they're exactly tangent to the ellipsoid there.
+ */
+function clipGlobeToBBox(viewer: Viewer, bbox: { type: 'Polygon'; coordinates: number[][][] } | null): void {
+  if (!isLive(viewer) || !bbox) return
+  const ring = bbox.coordinates[0]
+  if (!ring || ring.length < 4) return
+  // The ring is [[w,s],[e,s],[e,n],[w,n],[w,s]].
+  const w = ring[0][0]
+  const s = ring[0][1]
+  const e = ring[2][0]
+  const n = ring[2][1]
+  const midLon = (w + e) / 2
+  const midLat = (s + n) / 2
+
+  const planes: ClippingPlane[] = []
+  const add = (lon: number, lat: number, dir: 'east' | 'west' | 'north' | 'south') => {
+    const origin = Cartesian3.fromDegrees(lon, lat)
+    const frame = Transforms.eastNorthUpToFixedFrame(origin)
+    // Matrix4 columns are Cartesian4; the ENU frame's first two columns are the
+    // unit east and north directions (w = 0). Take x/y/z into a Cartesian3.
+    const east4 = Matrix4.getColumn(frame, 0, new Cartesian4())
+    const north4 = Matrix4.getColumn(frame, 1, new Cartesian4())
+    const east = new Cartesian3(east4.x, east4.y, east4.z)
+    const north = new Cartesian3(north4.x, north4.y, north4.z)
+    let normal: Cartesian3
+    if (dir === 'east') normal = east
+    else if (dir === 'west') normal = Cartesian3.negate(east, new Cartesian3())
+    else if (dir === 'north') normal = north
+    else normal = Cartesian3.negate(north, new Cartesian3())
+    // Plane passes through `origin`: dot(n, p) = dot(n, origin) → distance = -dot(n, origin).
+    const distance = -Cartesian3.dot(normal, origin)
+    planes.push(new ClippingPlane(normal, distance))
+  }
+  add(w, midLat, 'west') // west edge, outward = west
+  add(e, midLat, 'east') // east edge, outward = east
+  add(midLon, s, 'south') // south edge, outward = south
+  add(midLon, n, 'north') // north edge, outward = north
+
+  const globe = viewer.scene.globe
+  // Replace any prior collection (a re-run / re-seed can call this again).
+  const previous = globe.clippingPlanes
+  if (previous && !previous.isDestroyed()) previous.destroy()
+
+  globe.clippingPlanes = new ClippingPlaneCollection({
+    planes,
+    // True → points on the positive side of any plane are clipped. With outward
+    // normals the positive side is "outside the box", so outside is removed.
+    unionClippingRegions: true,
+    enabled: true,
+    edgeWidth: 1.5,
+    edgeColor: Color.fromCssColorString('#0a1410'),
+  })
+  viewer.scene.requestRender()
 }

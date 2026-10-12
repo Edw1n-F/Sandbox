@@ -46,12 +46,12 @@ const theme = createTheme({
       focus: 'rgba(92, 255, 157, 0.12)',
     },
   },
-  shape: { borderRadius: 3 },
+  shape: { borderRadius: 10 },
   typography: {
     fontFamily: SANS,
     h6: { fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' },
     subtitle2: { fontSize: 12.5, fontWeight: 600 },
-    body2: { fontSize: 12.5, lineHeight: 1.55 },
+    body2: { fontSize: 13, lineHeight: 1.6 },
     overline: {
       fontFamily: MONO,
       fontSize: 9.5,
@@ -61,7 +61,7 @@ const theme = createTheme({
       color: '#7d928a',
     },
     caption: {
-      fontSize: 11,
+      fontSize: 11.5,
       lineHeight: 1.5,
       fontFamily: MONO,
       fontFeatureSettings: "'tnum'",
@@ -85,6 +85,7 @@ const theme = createTheme({
         outlined: {
           borderColor: HAIRLINE,
           backgroundImage: 'none',
+          borderRadius: 10,
         },
         root: {
           backgroundImage: 'none',
@@ -102,7 +103,7 @@ const theme = createTheme({
     },
     MuiButton: {
       styleOverrides: {
-        root: { borderRadius: 2 },
+        root: { borderRadius: 8, textTransform: 'none' as const },
         contained: {
           backgroundColor: SIGNAL.green,
           color: '#04120a',
@@ -126,10 +127,10 @@ const theme = createTheme({
         root: {
           fontFamily: MONO,
           fontSize: 10,
-          letterSpacing: '0.08em',
+          letterSpacing: '0.06em',
           textTransform: 'uppercase' as const,
-          height: 20,
-          borderRadius: 2,
+          height: 22,
+          borderRadius: 11,
         },
         outlined: { borderColor: HAIRLINE },
         filled: { backgroundColor: 'rgba(92,255,157,0.12)', color: SIGNAL.green },

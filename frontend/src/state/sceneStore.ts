@@ -101,7 +101,7 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   loading: false,
   error: null,
   layers: { ...DEFAULT_LAYERS },
-  viewMode: 'survey',
+  viewMode: 'tactical',
   runResult: null,
   running: false,
   runError: null,

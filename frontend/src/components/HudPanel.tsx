@@ -1,35 +1,18 @@
 /**
- * A HUD-framed section: hairline box, corner brackets, uppercase mono title.
+ * A clean rounded section card.
  *
- * Replaces `Paper variant="outlined"` everywhere in the panel. The corner
- * brackets are the one flourish borrowed whole from the reference frame —
- * four 8 px L-shapes, accent-tinted, purely decorative.
+ * Replaces `Paper variant="outlined"` across the panel. Constellation-style:
+ * near-black translucent body, hairline border, rounded corners, an optional
+ * uppercase mono title row with a right-aligned slot. The earlier corner-bracket
+ * militaristic flourish was dropped per the restyle brief — legible and calm
+ * over decorated.
  */
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 
-import type { CSSProperties, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { SxProps, Theme } from '@mui/material/styles'
-
-/** One L-shaped corner. */
-function Corner({ pos }: { pos: 'tl' | 'tr' | 'bl' | 'br' }) {
-  const base: CSSProperties = {
-    position: 'absolute',
-    width: 8,
-    height: 8,
-    borderColor: 'rgba(92, 255, 157, 0.55)',
-    borderStyle: 'solid',
-    borderWidth: 0,
-  }
-  const where: Record<typeof pos, CSSProperties> = {
-    tl: { top: -1, left: -1, borderTopWidth: 1, borderLeftWidth: 1 },
-    tr: { top: -1, right: -1, borderTopWidth: 1, borderRightWidth: 1 },
-    bl: { bottom: -1, left: -1, borderBottomWidth: 1, borderLeftWidth: 1 },
-    br: { bottom: -1, right: -1, borderBottomWidth: 1, borderRightWidth: 1 },
-  }
-  return <Box aria-hidden sx={{ ...base, ...where[pos] }} />
-}
 
 interface Props {
   title?: string
@@ -46,22 +29,19 @@ export default function HudPanel({ title, right, children, sx }: Props) {
         position: 'relative',
         border: '1px solid',
         borderColor: 'divider',
-        backgroundColor: 'rgba(5, 8, 10, 0.45)',
-        p: 1.5,
+        borderRadius: 10,
+        backgroundColor: 'rgba(8, 13, 12, 0.72)',
+        backdropFilter: 'blur(10px)',
+        p: 1.75,
         ...sx,
       }}
     >
-      <Corner pos="tl" />
-      <Corner pos="tr" />
-      <Corner pos="bl" />
-      <Corner pos="br" />
-
       {(title || right) && (
         <Stack
           direction="row"
           justifyContent="space-between"
           alignItems="center"
-          sx={{ mb: title ? 1 : 0 }}
+          sx={{ mb: title ? 1.25 : 0 }}
         >
           {title ? (
             <Typography className="hud-label" component="div">
