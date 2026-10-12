@@ -53,10 +53,10 @@ export type BuildingState = 'base' | 'selected' | 'edited' | 'placed'
 
 /** Rim colour and glow per state. */
 export const TECH_STATES: Record<BuildingState, { edge: string; glow: number }> = {
-  base: { edge: '#3fe0ff', glow: 0.85 },
-  selected: { edge: '#ffffff', glow: 1.5 },
-  edited: { edge: '#ff9d2e', glow: 1.05 },
-  placed: { edge: '#5cff9d', glow: 1.15 },
+  base: { edge: '#3fe0ff', glow: 0.7 },
+  selected: { edge: '#ffffff', glow: 1.4 },
+  edited: { edge: '#ff9d2e', glow: 0.95 },
+  placed: { edge: '#5cff9d', glow: 1.05 },
 }
 
 export interface BuildingStyle {
@@ -171,17 +171,14 @@ czm_material czm_getMaterial(czm_materialInput materialInput)
     float glow = rim * u_glow + grid * u_grid * 0.5;
 
     material.diffuse = vec3(0.0);
-    // Brightness budget: with no tone mapping, anything over 1.0 clips to white, so
-    // the rim alone is allowed near the top and the body stays well under it. That
-    // split is the whole effect -- dark masses, bright edges.
-    //
-    // The band term on the end is not decoration. Scaling every envelope by the same
-    // factor leaves a district of similar-height blocks as one flat colour, which is
-    // the thing the ramp exists to prevent: the tall end has to be allowed to
-    // dominate, so a 130 m tower reads as a landmark from the district framing rather
-    // than as one more dark box.
-    material.emission = body * (0.16 + 0.62 * fresnel) * mix(1.0, 1.25, roofness)
-        * (0.8 + 0.6 * band) + u_edge * glow;
+    // Brightness budget: with no tone mapping, anything over 1.0 clips to white,
+    // and a district of white blocks is unreadable -- the user's "every building
+    // glowing like the sun". The original multipliers let tall tower bodies reach
+    // ~1.4; the first fix (0.07/0.20) over-corrected into flat grey. These sit
+    // halfway: the body peaks around 0.85 on the tallest towers, so the height
+    // ramp still reads blue-to-warm and only the rim (u_edge * glow) saturates.
+    material.emission = body * (0.10 + 0.35 * fresnel) * mix(1.0, 1.15, roofness)
+        * (0.6 + 0.45 * band) + u_edge * glow;
     return material;
 }
 `
@@ -275,12 +272,17 @@ export function createBuildingMaterial(style: BuildingStyle): BuildingMaterial {
 
   // Cloned, never aliased: `setStyle` mutates these in place, and the caller's
   // Color is also a palette entry shared with every other envelope.
+  // u_lit / u_grid seed from the *active* look, not from hardcoded defaults:
+  // `applyViewMode` runs before the city model's async GeoJSON load finishes,
+  // so a material created afterwards would otherwise boot in the survey branch
+  // while the app believes it is in tactical -- every building grey, no rims,
+  // exactly the "glowing white square" misrender.
   const uniforms: UniformBag = {
-    u_lit: { type: 'float', value: 1 },
+    u_lit: { type: 'float', value: activeLook.lit ? 1 : 0 },
     u_body: { type: 'vec3', value: Color.clone(style.body) },
     u_edge: { type: 'vec3', value: Color.clone(style.edge) },
     u_glow: { type: 'float', value: style.glow },
-    u_grid: { type: 'float', value: 0 },
+    u_grid: { type: 'float', value: activeLook.grid },
     u_height01: { type: 'float', value: style.height01 },
   }
 
@@ -330,5 +332,15 @@ export function setModelLook(
   materials: Map<string, BuildingMaterial>,
   look: MaterialLook,
 ): void {
+  activeLook = { ...look }
   for (const entry of materials.values()) entry.setLook(look)
 }
+
+/**
+ * The last look applied through `setModelLook`, seeded survey-lit.
+ *
+ * Read by `createBuildingMaterial` so materials born after a mode switch
+ * (the city model loads asynchronously) start in the mode the app is actually
+ * in, not in the default.
+ */
+let activeLook: MaterialLook = { lit: true, grid: 0 }

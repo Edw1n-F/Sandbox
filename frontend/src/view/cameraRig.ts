@@ -264,49 +264,41 @@ export function tuneNavigation(viewer: Viewer): void {
 }
 
 /**
- * Rebind the mouse so the gestures people reach for do what they expect.
- *
- * ## What Cesium actually does, measured on this viewer
+ * Rebind the mouse/trackpad so the gestures people reach for do what they expect.
  *
  * | gesture       | stock behaviour | after this |
  * |---------------|-----------------|------------|
- * | left-drag     | pan + spin      | pan + spin |
- * | right-drag    | **zoom**        | orbit      |
- * | middle-drag   | orbit           | tilt       |
- * | Ctrl + drag   | orbit           | tilt       |
- * | Shift + drag  | look            | look       |
- * | wheel / pinch | zoom            | zoom       |
+ * | left-drag     | pan + spin      | pan + spin (move the slab) |
+ * | right-drag    | zoom            | **tilt** |
+ * | middle-drag   | orbit           | tilt |
+ * | wheel / 2-finger trackpad drag | zoom | **tilt** |
+ * | pinch / ctrl+scroll | zoom    | zoom |
  *
- * Rotation was therefore available but hidden behind middle-drag and Ctrl+drag, while
- * the gesture almost everyone tries first -- right-drag, to turn the model -- silently
- * zoomed instead.
+ * Tilt is the gesture a trackpad user reaches for first (two-finger drag) and
+ * the one a mouse user tries second (right-drag, since left is already "move").
+ * Cesium's stock right-drag zooms, which duplicated the wheel and the buttons;
+ * it now tilts instead. Plain wheel (which on a trackpad *is* the two-finger
+ * drag) is mapped to tilt too, so the same gesture works with or without a
+ * modifier. Pinch and ctrl+scroll stay zoom.
  *
- * ## Why right-drag is *added* to the rotate list rather than moved onto it
+ * ## Why right-drag is taken off the rotate list
  *
- * Because in Cesium's 3D mode there is no separate translate handler at all:
- * `ScreenSpaceCameraController.update3D` reacts to rotate, zoom, tilt and look, and
- * panning is something `spin3D` does as part of rotating. So `rotateEventTypes` is not
- * "the rotate gesture", it is *the drag gesture*, and left-drag stops panning the
- * moment it is taken off that list -- measured, not assumed: reassigning it to
- * right-drag alone left the district completely immovable under left-drag.
+ * In Cesium 3D there is no separate translate handler: `rotateEventTypes` is
+ * *the drag gesture*, and panning is what `spin3D` does as part of rotating. So
+ * left-drag stays on that list (it is the "move the slab" gesture the user
+ * confirmed works); right-drag is removed so it can own tilt outright instead
+ * of tilting *and* orbiting at once.
  */
 export function bindOrbitGestures(viewer: Viewer): void {
   const controller = viewer.scene.screenSpaceCameraController
-  controller.rotateEventTypes = [
-    CameraEventType.LEFT_DRAG,
+  controller.rotateEventTypes = [CameraEventType.LEFT_DRAG]
+  // RIGHT_DRAG and MIDDLE_DRAG both tilt. PINCH is left on zoom (a two-finger
+  // pinch is a zoom gesture, not a drag), and CTRL+LEFT_DRAG is dropped so a
+  // stray modifier does not silently change what the drag does.
+  controller.tiltEventTypes = [
     CameraEventType.RIGHT_DRAG,
+    CameraEventType.MIDDLE_DRAG,
   ]
-  // RIGHT_DRAG is removed from the zoom list, which is the whole point: left to stock it
-  // would zoom *and* orbit at once, so the camera would dive while it turned. Measured:
-  // the same gesture moved the camera from 3,761 m to 7,471 m of altitude while the
-  // heading barely changed.
-  //
-  // Plain WHEEL is removed too, at the user's request: on a trackpad the two-finger
-  // swipe is the gesture people expect to move the map, and since it cannot be panned
-  // reliably here (a 2 km cursor-anchored pan arrived as 39 m -- see the note in
-  // `CameraController`) it now does nothing at all rather than zooming unexpectedly.
-  // Pinch and Ctrl/Cmd+scroll still zoom: browsers deliver a trackpad pinch *as* a
-  // Ctrl+wheel event, so one binding covers both.
   controller.zoomEventTypes = [
     CameraEventType.PINCH,
     { eventType: CameraEventType.WHEEL, modifier: KeyboardEventModifier.CTRL },
@@ -314,25 +306,23 @@ export function bindOrbitGestures(viewer: Viewer): void {
   // Faster zoom for what remains. Cesium's default is 5, and the district is 3 km
   // across, so at the stock rate a pinch took several flicks to change scale usefully.
   controller.zoomFactor = 12
-  controller.tiltEventTypes = [
-    CameraEventType.MIDDLE_DRAG,
-    CameraEventType.PINCH,
-    { eventType: CameraEventType.LEFT_DRAG, modifier: KeyboardEventModifier.CTRL },
-  ]
 
-  // Swallow the plain-wheel events that no longer zoom, so the page cannot scroll
-  // behind the canvas and leave the viewer offset from the window. Attached to the
-  // canvas, so it dies with the viewer and needs no teardown.
-  //
-  // The trade-off is stated rather than hidden: because a two-finger swipe and a mouse
-  // wheel are the same DOM event, disabling the trackpad gesture necessarily disables
-  // wheel zoom for a mouse too. Zoom stays reachable by pinch, Cmd/Ctrl+scroll, the
-  // +/− buttons and the +/− keys.
+  // Two-finger trackpad drag → tilt (vertical) + rotate (horizontal). A
+  // trackpad two-finger drag arrives as a `wheel` event carrying both deltaX
+  // and deltaY, so a single diagonal drag can tilt and rotate at once: up/down
+  // tilts, left/right orbits. A mouse scroll wheel tilts too (deltaY only).
+  // ctrl+wheel is left for Cesium's zoom binding above (the early return lets
+  // that through). `orbitBy(..., 0)` is an instant `setView`, not a `flyTo`,
+  // so a stream of wheel events does not queue animations. `Math.sign` gives a
+  // fixed step per notch regardless of deltaY magnitude, which varies by device.
   viewer.scene.canvas?.addEventListener(
     'wheel',
     (event: WheelEvent) => {
       if (event.ctrlKey) return
       event.preventDefault()
+      const tilt = -Math.sign(event.deltaY) * 5
+      const rot = Math.sign(event.deltaX) * 12
+      if (tilt !== 0 || rot !== 0) orbitBy(viewer, rot, tilt, 0)
     },
     { passive: false },
   )

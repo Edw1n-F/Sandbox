@@ -149,18 +149,26 @@ export function applyViewMode(
   // no longer has a sky to explain it.
   swap(() => scene.globe.enableLighting, (v) => (scene.globe.enableLighting = v), false)
 
-  // ---- the basemap, kept but pushed back -----------------------------------
-  // Not removed: the wet-grid and heatmap overlays are georeferenced against this
-  // imagery, and a flood map with no basemap under it is harder to place, not
-  // easier. Dimmed and desaturated towards the accent hue instead, so it still
-  // reads as terrain rather than as a photograph.
+  // ---- the basemap, kept coloured under the slab --------------------------
+  // The globe is clipped to the bbox, so this imagery only shows *under the
+  // slab* — there is no photographic basemap bleeding past the neon buildings
+  // to look like a mistake. Earlier the layer was dimmed and desaturated
+  // (saturation 0.15) to force a near-monochrome instrument look; with the
+  // surrounding map clipped away that is no longer wanted, so the floor is
+  // kept at full colour and only slightly toned so the building edges still
+  // read. Brightness stays a touch under 1.0 so the coloured map does not
+  // out-shout the rim glow.
   const layer = context.baseLayer
   if (layer) {
-    swap(() => layer.brightness, (v) => (layer.brightness = v), 0.34)
-    swap(() => layer.contrast, (v) => (layer.contrast = v), 1.35)
-    swap(() => layer.saturation, (v) => (layer.saturation = v), 0.15)
-    swap(() => layer.gamma, (v) => (layer.gamma = v), 1.9)
-    swap(() => layer.hue, (v) => (layer.hue = v), Math.PI / 0.55)
+    // Coloured floor, not the old near-monochrome (0.34 / 0.15), but kept
+    // under the bloom threshold: at brightness 0.8+ the map itself caught the
+    // bloom pass and the whole slab washed to white. 0.6 stays legible as a
+    // real map without feeding the glow.
+    swap(() => layer.brightness, (v) => (layer.brightness = v), 0.6)
+    swap(() => layer.contrast, (v) => (layer.contrast = v), 1.1)
+    swap(() => layer.saturation, (v) => (layer.saturation = v), 0.95)
+    swap(() => layer.gamma, (v) => (layer.gamma = v), 1.15)
+    swap(() => layer.hue, (v) => (layer.hue = v), 0.0)
   }
 
   // ---- the glow ------------------------------------------------------------
@@ -168,21 +176,20 @@ export function applyViewMode(
   // something the user has to be told about. It hangs off the stage collection,
   // not off `Scene`, in this version.
   //
-  // `contrast` is the threshold, and it is the one number that decides whether
-  // this looks like an instrument or like a smeared photograph: pushed up so
-  // only the emissive rims cross it and the dimmed basemap does not.
+  // The stock-looking "high contrast = threshold" reading is wrong for this
+  // stage: at contrast 210 the curve amplified *everything* bright — bodies and
+  // map alike — and the whole slab read as one glowing white square. These
+  // values are measured on the live scene, not derived: a low contrast with a
+  // negative brightness keeps the halo on the rims only, which is the look the
+  // mode wants ("buildings should glow, but not like this").
   const bloom = scene.postProcessStages.bloom
   swap(() => bloom.enabled, (v) => (bloom.enabled = v), true)
   if (bloom.uniforms) {
     const u = bloom.uniforms as Record<string, number | boolean>
-    // Tight, not wide. A broad sigma over 2,639 bright envelopes does not read as
-    // glow, it reads as a cyan fog laid over the district — which is worse than no
-    // bloom at all, because it flattens exactly the height ramp the mode exists to
-    // show. These values keep the halo on the rim it belongs to.
-    swap(() => u.contrast, (v) => (u.contrast = v), 210)
-    swap(() => u.brightness, (v) => (u.brightness = v), -0.22)
-    swap(() => u.delta, (v) => (u.delta = v), 0.8)
-    swap(() => u.sigma, (v) => (u.sigma = v), 3.0)
+    swap(() => u.contrast, (v) => (u.contrast = v), 4.5)
+    swap(() => u.brightness, (v) => (u.brightness = v), -0.3)
+    swap(() => u.delta, (v) => (u.delta = v), 1.0)
+    swap(() => u.sigma, (v) => (u.sigma = v), 2.0)
     swap(() => u.stepSize, (v) => (u.stepSize = v), 1.0)
     swap(() => u.glowOnly, (v) => (u.glowOnly = v), false)
   }

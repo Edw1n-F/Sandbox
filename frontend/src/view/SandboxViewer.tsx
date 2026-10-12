@@ -276,7 +276,11 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     bindOrbitGestures(viewer)
     cameraControl.flyToBbox = () => flyTo(viewer, 'oblique')
     cameraControl.topDown = () => flyTo(viewer, 'nadir')
-    cameraControl.reset = () => flyTo(viewer, 'scene')
+    // Reset = the opening oblique framing, not the scene's stored defaultCamera
+    // (heading 0 / pitch -48 / 4,200 m): that one is a near-flat north view
+    // that, with the slab's relief, reads as "the box disappeared". Re-framing
+    // to the oblique view is what "reset framing" actually means here.
+    cameraControl.reset = () => flyTo(viewer, 'oblique')
     cameraControl.orbit = (headingDeg, pitchDeg) => orbitBy(viewer, headingDeg, pitchDeg)
     cameraControl.zoom = (factor) => zoomBy(viewer, factor)
 
@@ -303,13 +307,13 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       // against by isLive().
       if (cancelled || !isLive(viewer)) return
       viewer.terrainProvider = binding.terrainProvider
-      // Clip the globe to the study area: the "child's sandbox" frame is a
-      // floating slab clipped hard at the bbox, with the terrain's own cut
-      // face as the slab edge. No walls, no globe beyond the box. The four
-      // clipping planes use outward normals so the *outside* is removed and
-      // the inside stays — see `clipGlobeToBBox`.
+      // Clip the globe to the study-area slab: only the sandbox shows, the
+      // surrounding map is removed and the dark scene background reads as the
+      // void the slab floats in. The slab's own floor is the base imagery,
+      // which the view mode now keeps coloured (not desaturated) so the map
+      // under the box reads as terrain. No walls: the clip is a hard vertical
+      // cut at the bbox, with the terrain's own relief as the slab edge.
       clipGlobeToBBox(viewer, bbox)
-      // Disclose the fallback rather than hiding it; ScenePanel renders this.
       useSceneStore.setState((s) => ({
         scene: s.scene
           ? {
@@ -438,12 +442,28 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
     let cancelled = false
 
+    // Drop a layer without pulling its textures out from under a frame that is
+    // still rendering them. `remove(layer, true)` destroys immediately, and when
+    // a Run swaps overlays the destroy landed mid-render -- the scene then died
+    // with "This object was destroyed" and the whole viewer went dark. Detach
+    // now, destroy once the frames that could reference it have passed.
+    const retireLayer = (layer: ImageryLayer) => {
+      viewer.imageryLayers.remove(layer, false)
+      setTimeout(() => {
+        try {
+          layer.destroy()
+        } catch {
+          // Already destroyed by a viewer teardown; nothing to do.
+        }
+      }, 2000)
+    }
+
     for (const [key, url, alpha] of wanted) {
       let existing = overlaysRef.current[key]
       if (existing && url && existing.url !== url) {
         // A run produced a new overlay: drop the stale provider so the new
         // PNG is fetched, not just re-shown.
-        viewer.imageryLayers.remove(existing.layer, true)
+        retireLayer(existing.layer)
         overlaysRef.current[key] = null
         existing = null
       }
@@ -615,6 +635,18 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           return
         }
         cityModelHandle = handle
+        // Apply the *current* view mode's look immediately. The setLook effect
+        // above ran while `cityModelHandle` was still null -- the model loads
+        // asynchronously, so on a cold start it always loses that race -- and
+        // nothing else would ever tell the fresh materials which mode the app
+        // is in. Read from the store, not the closure: `viewMode` is not a
+        // dependency here and listing it would rebuild all 2,639 entities on
+        // every mode switch.
+        handle?.setLook(
+          useSceneStore.getState().viewMode === 'tactical'
+            ? { lit: false, grid: 0.6 }
+            : { lit: true, grid: 0 },
+        )
         // The plan may have been selected before the model finished loading, in
         // which case its massing ops were parked. Apply them now.
         if (pendingMassingOps.current.length) {
@@ -810,18 +842,18 @@ function extentOf(rectangle: Rectangle): Extent {
 }
 
 /**
- * Clip the globe to the study-area bbox — the "floating sandbox slab".
+ * Clip the globe to the study-area bbox — the floating sandbox slab.
  *
  * Four vertical planes, one per bbox edge, with **outward** normals (pointing
  * away from the area). `unionClippingRegions: true` means a point on the
  * positive side of any plane is clipped, so everything outside the box is
  * removed and the inside stays — the slab you see, with the terrain's own cut
- * face as the slab edge (Cesium draws `edgeColor`/`edgeWidth` on the cut).
+ * face as the slab edge.
  *
- * For a ~2 km study area the curvature is negligible, so flat planes at the
- * edge midpoints are within a metre of the true geodesic edge — invisible at
- * this zoom. The normals are derived from a local ENU frame at each edge
- * midpoint, so they're exactly tangent to the ellipsoid there.
+ * The surrounding globe is gone (dark void), which is the point: the slab
+ * floats. The floor of the slab is the base imagery, kept coloured by the
+ * view mode. For a ~2 km study area the curvature is negligible, so flat
+ * planes at the edge midpoints are within a metre of the true geodesic edge.
  */
 function clipGlobeToBBox(viewer: Viewer, bbox: { type: 'Polygon'; coordinates: number[][][] } | null): void {
   if (!isLive(viewer) || !bbox) return
@@ -839,8 +871,6 @@ function clipGlobeToBBox(viewer: Viewer, bbox: { type: 'Polygon'; coordinates: n
   const add = (lon: number, lat: number, dir: 'east' | 'west' | 'north' | 'south') => {
     const origin = Cartesian3.fromDegrees(lon, lat)
     const frame = Transforms.eastNorthUpToFixedFrame(origin)
-    // Matrix4 columns are Cartesian4; the ENU frame's first two columns are the
-    // unit east and north directions (w = 0). Take x/y/z into a Cartesian3.
     const east4 = Matrix4.getColumn(frame, 0, new Cartesian4())
     const north4 = Matrix4.getColumn(frame, 1, new Cartesian4())
     const east = new Cartesian3(east4.x, east4.y, east4.z)
@@ -850,24 +880,38 @@ function clipGlobeToBBox(viewer: Viewer, bbox: { type: 'Polygon'; coordinates: n
     else if (dir === 'west') normal = Cartesian3.negate(east, new Cartesian3())
     else if (dir === 'north') normal = north
     else normal = Cartesian3.negate(north, new Cartesian3())
-    // Plane passes through `origin`: dot(n, p) = dot(n, origin) → distance = -dot(n, origin).
     const distance = -Cartesian3.dot(normal, origin)
     planes.push(new ClippingPlane(normal, distance))
   }
-  add(w, midLat, 'west') // west edge, outward = west
-  add(e, midLat, 'east') // east edge, outward = east
-  add(midLon, s, 'south') // south edge, outward = south
-  add(midLon, n, 'north') // north edge, outward = north
+  // Normals point INWARD. This is read off Cesium's own shader, not guessed:
+  // `clippingFunctionUnion` discards a fragment when
+  // `dot(normal, position) + distance <= 0`, so the half-space the normal
+  // points *towards* is the one that survives. Outward normals -- the
+  // intuitive reading -- put every point behind at least one plane, so the
+  // entire globe vanished, including the map floor under the slab. That was
+  // the black void the slab used to sit in.
+  add(w, midLat, 'east') // west edge, inward = east
+  add(e, midLat, 'west') // east edge, inward = west
+  add(midLon, s, 'north') // south edge, inward = north
+  add(midLon, n, 'south') // north edge, inward = south
 
   const globe = viewer.scene.globe
-  // Replace any prior collection (a re-run / re-seed can call this again).
   const previous = globe.clippingPlanes
-  if (previous && !previous.isDestroyed()) previous.destroy()
+  // Deferred for the same reason `retireLayer` is: destroying the previous
+  // collection while the frame that sampled it is still in flight killed the
+  // render loop with "This object was destroyed".
+  if (previous && !previous.isDestroyed()) {
+    setTimeout(() => {
+      try {
+        previous.destroy()
+      } catch {
+        // Viewer torn down in the meantime.
+      }
+    }, 2000)
+  }
 
   globe.clippingPlanes = new ClippingPlaneCollection({
     planes,
-    // True → points on the positive side of any plane are clipped. With outward
-    // normals the positive side is "outside the box", so outside is removed.
     unionClippingRegions: true,
     enabled: true,
     edgeWidth: 1.5,
