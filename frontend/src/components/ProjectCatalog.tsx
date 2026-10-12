@@ -120,7 +120,7 @@ export default function ProjectCatalog() {
   }
 
   return (
-    <HudPanel title="Projects" sx={{ width: 280 }}>
+    <HudPanel title="Projects" sx={{ width: '100%' }}>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         Place a proposed project in the sandbox. One active per run (placeholder).
       </Typography>

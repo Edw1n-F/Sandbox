@@ -40,7 +40,7 @@ export default function StatsPanel() {
 
   if (!runResult && !running) {
     return (
-      <HudPanel title="Stats" sx={{ width: 220 }}>
+      <HudPanel title="Stats" sx={{ width: '100%' }}>
         <Typography variant="caption" color="text.secondary">
           Press <strong style={{ color: '#5cff9d' }}>Run</strong> to compute the
           buffer deficit, wet area and heat index at the chosen rainfall.
@@ -51,7 +51,7 @@ export default function StatsPanel() {
 
   if (running && !runResult) {
     return (
-      <HudPanel title="Stats" sx={{ width: 220 }}>
+      <HudPanel title="Stats" sx={{ width: '100%' }}>
         <Typography variant="caption" color="text.secondary">Computing…</Typography>
       </HudPanel>
     )
@@ -75,7 +75,7 @@ export default function StatsPanel() {
           {inputs.rainfallMm.toFixed(0)}mm
         </Typography>
       }
-      sx={{ width: 240 }}
+      sx={{ width: '100%' }}
     >
       <Stack direction="row" spacing={2} sx={{ mb: 1.25 }}>
         <Stat

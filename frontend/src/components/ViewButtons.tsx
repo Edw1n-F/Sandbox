@@ -1,14 +1,13 @@
 /**
  * Bottom-centre view-control pill.
  *
- * The camera controls that used to live in the left drawer, floated over the
- * map as a single rounded pill — the reference film's "instruments on the map"
- * posture. Replaces both the old `CameraController` and the prompt pill that
- * sat here before the reorg (the intervention input moved into `ChatPanel`).
+ * Tilt is now a gesture (right-drag or two-finger trackpad drag — see
+ * `cameraRig.bindOrbitGestures`), so the pill carries only the controls a
+ * gesture cannot do: orbit left/right, zoom in/out, jump to top-down, and
+ * re-frame. Fewer buttons, less redundancy, no tilt-vs-drag conflict.
  */
 import Box from '@mui/material/Box'
 import IconButton from '@mui/material/IconButton'
-import Tooltip from '@mui/material/Tooltip'
 
 import { cameraControl } from '@/view/SandboxViewer'
 
@@ -23,22 +22,21 @@ function Btn({
   onClick: () => void
 }) {
   return (
-    <Tooltip title={label} arrow>
-      <IconButton
-        aria-label={label}
-        onClick={onClick}
-        size="small"
-        sx={{
-          width: 32,
-          height: 32,
-          borderRadius: '8px',
-          color: '#dce8e2',
-          '&:hover': { backgroundColor: 'rgba(92,255,157,0.12)', color: '#5cff9d' },
-        }}
-      >
-        <span style={{ fontSize: 16, lineHeight: 1 }}>{glyph}</span>
-      </IconButton>
-    </Tooltip>
+    <IconButton
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      size="small"
+      sx={{
+        width: 32,
+        height: 32,
+        borderRadius: '6px',
+        color: '#dce8e2',
+        '&:hover': { backgroundColor: 'rgba(92,255,157,0.12)', color: '#5cff9d' },
+      }}
+    >
+      <span style={{ fontSize: 16, lineHeight: 1 }}>{glyph}</span>
+    </IconButton>
   )
 }
 
@@ -56,7 +54,7 @@ export default function ViewButtons() {
         gap: 0.5,
         px: 1,
         py: 0.5,
-        borderRadius: '12px',
+        borderRadius: '10px',
         border: '1px solid',
         borderColor: 'divider',
         backgroundColor: 'rgba(8, 13, 12, 0.88)',
@@ -64,11 +62,8 @@ export default function ViewButtons() {
         boxShadow: '0 8px 32px rgba(0,0,0,0.55)',
       }}
     >
-      <Btn label="Rotate left" glyph="⟲" onClick={() => cameraControl.orbit(-24, 0)} />
-      <Btn label="Rotate right" glyph="⟳" onClick={() => cameraControl.orbit(24, 0)} />
-      <Box sx={{ width: 1, height: 20, bgcolor: 'divider', mx: 0.5 }} />
-      <Btn label="Tilt up" glyph="⤴" onClick={() => cameraControl.orbit(0, 12)} />
-      <Btn label="Tilt down" glyph="⤵" onClick={() => cameraControl.orbit(0, -12)} />
+      <Btn label="Orbit left" glyph="⟲" onClick={() => cameraControl.orbit(-24, 0)} />
+      <Btn label="Orbit right" glyph="⟳" onClick={() => cameraControl.orbit(24, 0)} />
       <Box sx={{ width: 1, height: 20, bgcolor: 'divider', mx: 0.5 }} />
       <Btn label="Zoom in" glyph="＋" onClick={() => cameraControl.zoom(0.55)} />
       <Btn label="Zoom out" glyph="－" onClick={() => cameraControl.zoom(1.8)} />

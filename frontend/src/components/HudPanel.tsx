@@ -29,10 +29,14 @@ export default function HudPanel({ title, right, children, sx }: Props) {
         position: 'relative',
         border: '1px solid',
         borderColor: 'divider',
-        borderRadius: 10,
+        // Literal px: a numeric value would be multiplied by theme.shape.borderRadius.
+        borderRadius: '8px',
         backgroundColor: 'rgba(8, 13, 12, 0.72)',
         backdropFilter: 'blur(10px)',
-        p: 1.75,
+        // 'auto' so a pointer-events:none parent column still lets the panel
+        // receive drags/clicks; empty space around it falls through to the canvas.
+        pointerEvents: 'auto',
+        p: 1.5,
         ...sx,
       }}
     >

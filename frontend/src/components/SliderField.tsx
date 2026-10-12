@@ -32,10 +32,11 @@ export default function SliderField({
   const id = `${label.toLowerCase()}-slider`
   return (
     <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-        <Typography className="hud-label">{label}</Typography>
-        <Typography className="hud-mono" sx={{ fontSize: 12, color: 'success.main' }}>
-          {value} <Box component="span" sx={{ fontSize: 9.5, color: 'text.secondary' }}>{unit}</Box>
+      <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 0.25 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>{label}</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 15, fontWeight: 600, lineHeight: 1, color: 'success.main' }}>
+          {value}
+          <Box component="span" sx={{ fontSize: 9, color: 'text.secondary', ml: 0.3, fontWeight: 400 }}>{unit}</Box>
         </Typography>
       </Stack>
       <Slider

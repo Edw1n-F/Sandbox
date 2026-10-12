@@ -46,7 +46,11 @@ const theme = createTheme({
       focus: 'rgba(92, 255, 157, 0.12)',
     },
   },
-  shape: { borderRadius: 10 },
+  // 4 px, not 10: in MUI's `sx`, a numeric `borderRadius` is multiplied by
+  // `shape.borderRadius`, so `borderRadius: 10` used to render at 100 px —
+  // the pill-shaped panels in the screenshot. 4 keeps every numeric sx radius
+  // in the 6–16 px range; literals ('8px') are unaffected.
+  shape: { borderRadius: 4 },
   typography: {
     fontFamily: SANS,
     h6: { fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' },
