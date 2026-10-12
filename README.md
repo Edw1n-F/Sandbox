@@ -10,8 +10,8 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 > decision chain, not to produce numbers you can defend in a statutory
 > submission. The UI says so on screen, every generated raster carries a
 > `.json` sidecar recording its assumptions, and
-> [`docs/OCT6_STATUS.md`](docs/OCT6_STATUS.md) keeps an explicit real /
-> placeholder / assumed split. Please read the
+> [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) separates what is real from
+> what is assumed. Please read the
 > [Limitations](#limitations--what-this-is-not) section before quoting any figure.
 
 ---
@@ -397,143 +397,55 @@ database; the backend never knows what Cesium is.
 
 ## Design decisions and why
 
-### 1. Store mode is configuration, not architecture
+The reasoning behind every structural choice lives in
+**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — 15 numbered decisions, each
+with the alternative that was rejected and why. It is the single home for that
+material; this section used to restate eight of them and had drifted out of
+agreement with the other seven.
 
-The target is PostGIS + MinIO. This host has no Docker, no Postgres and no
-Homebrew, so the store is JSON on disk.
+Four points are worth having on the front page.
 
-The point of doing it this way is that **`STORE_MODE` is a switch, not a
-rewrite.** The boundary is drawn at exactly two modules — `app/db.py` and
-`app/services/scene_service.py`. No route, no schema and no frontend code knows
-which store is active. A contract test runs the full suite against file mode;
-the same suite runs unchanged against PostGIS when it exists.
+**Store mode is a switch, not a rewrite.** The target is PostGIS + MinIO. This
+host has no Docker or Postgres, so the store is JSON on disk, with the boundary
+drawn at exactly two modules — `app/db.py` and `app/services/scene_service.py`.
+No route, no schema and no frontend code knows which store is active.
 
-Had the routes known about storage, "temporarily" would have become permanent by
-the third endpoint.
+**Honesty is a feature, not a disclaimer.** Every raster writes a `.json`
+sidecar next to its `.png` listing every constant, assumption and source. The
+viewer reports a failed overlay in the panel instead of swallowing it. This is
+not decoration: three separate bugs presented as "the toggle does nothing" — an
+unregistered Vite alias, a StrictMode-destroyed viewer, and an image that failed
+to decode — and the first two were invisible to the type checker. Making failure
+visible is what turned a guess into a diagnosis.
 
-### 2. Degrees on the wire, metres in the maths
-
-Every coordinate that crosses the API is EPSG:4326, because the spec mandates it
-and because Cesium and GeoJSON both speak it. But degrees are not a unit of
-length, and summing rainfall over "a degree" is meaningless.
-
-So there is exactly **one** place where degrees become metres:
-`build_grid()` in `backend/app/services/geo_import.py`. It converts using a local
-equirectangular approximation about the extent centre — at a 3 km extent the
-error against HK1980 Grid is far below the 5 m cell size. Every raster script
-calls it and nothing else converts units.
-
-For volume reporting, swap HK1980 Grid (EPSG:2326). The comment says so at the
-choke point.
-
-### 3. `RowModel` — one translation point for the wire contract
-
-Storage uses `id` (the spec's DDL) while the API uses `sceneId` / `planId`. This
-is an **alias, not a rename**: storage keeps the column name from the schema.
-
-Both live in `RowModel.from_row`, so there is one function to read and one to
-change. The alternative — a `@computed_field` or scattered `Field(alias=...)` —
-works until something bypasses it, and then storage IDs leak onto the wire
-without anyone noticing. `extra="forbid"` on the response models is what turned
-that from a silent leak into a startup error during the build.
-
-### 4. The spec contradicts itself in six places, and code resolves it
-
-`技术文档` §3 and §4 disagree. Rather than pick a reading and hope, each
-conflict is resolved in one named place:
-
-| Conflict | Resolution |
-|---|---|
-| §3.2.2 `bbox` example has 2 coordinates — not a valid ring | Normalised to a closed ring on ingress; the validator repairs short input |
-| §4.2.1 `defaultCamera` has `lon`/`lat`; §3.2.1 does not | Model is the **union**; `lon`/`lat` default to the scene centre, so the frontend always gets a complete camera |
-| DB column `id` vs API `sceneId`/`planId` | Alias via `RowModel` (§3 above) |
-| `plan_type` CHECK allows 5 values; nothing creates `economic`/`environmental` | Left legal and unreachable, noted in `models/plan.py` |
-| Both docs reference a `migrations/` directory that does not exist | **Still missing.** Unnecessary in file mode. Flagged, not faked |
-| §3.5 mandates both a FastAPI `detail` array and `{"error": {...}}` | **Both are emitted.** The frontend has one error branch |
-
-### 5. Real open data, with the source refused if it lies
-
-The single most important decision in the data pipeline: **a data source that
-cannot prove itself is rejected, not trusted.**
-
-The first DEM source tried was AWS's `elevation-tiles-prod` terrarium tiles. It
-returns HTTP 200 with plausible-looking PNGs — and the pixels are not
-terrarium-encoded. Everest decoded to ~1,000,000 m and the South Atlantic to
-792,940 m. Both the `terrarium` and `normal` paths failed the same check. It
-would have produced a beautiful, silent, wrong landscape.
-
-So `fetch_dem.py` asserts **Everest ≈ 8,000–9,500 m and the open ocean ≈ 0 m**
-before it will write a single file. A bad response fails loudly. The same script
-records the rejected bucket in its own output metadata so nobody re-derives it.
-
-The second lesson is quieter and cost more to catch. The DEM was requested on a
-**1 arc-second** lattice, which is the textbook answer for SRTM. The API does
-not serve SRTM at 1 arc-second — it serves a ~90 m global model. The response
-was a 78 × 110 array holding only **28 × 37 distinct samples**: three-fold
-oversampling, where the *data was correct* and the *metadata was wrong*.
-
-Nothing errored. The hillshade looked plausible. It only became visible by
-counting distinct values. The oversampling has since been removed
-losslessly, and every resolution claim in this repo now says **~90 m** —
-because that is what was measured. Re-sampling finer would have duplicated the
-same values again, not resolved them. Details in
-[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
-
-### 6. Honesty is a feature, not a disclaimer
-
-Every raster writes a `.json` sidecar next to its `.png` listing every constant,
-every assumption and its source. The viewer reports a failed overlay in the
-panel instead of swallowing it. The UI states the prototype limitation on
-screen.
-
-This is not decoration. Three separate bugs presented as "the toggle does
-nothing" — an unregistered Vite alias, a StrictMode-destroyed viewer, and an
-image that failed to decode. The first two were invisible to the type checker.
-Making failure visible is what turned a guess into a diagnosis.
-
-### 7. Rasters are generated artefacts, not source
-
-No PNG is committed as a source of truth. Each is reproducible:
+**Rasters are generated artefacts, not source.** No PNG is committed as a source
+of truth; each is reproducible, and `--check` asserts the committed file still
+does:
 
 ```bash
 python scripts/fetch_landcover.py                  # → landclass_hsk.npy
 python scripts/fetch_dem.py                       # → dem_hsk.npy
-python scripts/make_wetgrid.py --rainfall 450      # → wetgrid_hsk.png
+python scripts/make_wetgrid.py --rainfall 450# → wetgrid_hsk.png
 python scripts/make_heatmap.py                     # → heatmap_hsk.png
 python scripts/fetch_heat_anchor.py                # → reference/heat_anchor.json
-python scripts/fetch_heat_anchor.py --check        # asserts the committed file still reproduces
+python scripts/fetch_heat_anchor.py --check        # drift gate
 ```
 
-### 8. Three axes, never one score — and the tool refuses to grade
-
-The AVA policy behind Hong Kong's own guidance (Ng & Cheng, 2009) states that
-"whether the better design option meets a standard cannot be known", and TC 1/06
-§6 gives no absolute benchmark. So this tool **compares and never grades**:
-`verdict` is `null` on every response and nothing prints a pass or fail.
-
-The obvious thing to do with three axes — weight them and add them up — is the
-one thing refused, for three reasons. The units are incommensurable (a fraction
-of ground, a dimensionless blockage, cubic metres). The ventilation axis has no
-threshold to normalise against. And the axes **genuinely conflict**: making the
-western blocks 40% taller gives more shade *and* more wind blockage at the same
-time. A single number would settle that trade-off silently, in whichever
-direction the weights happened to lean.
-
-So `scenario/evaluate` returns three independent axes with their own units, and
-`scenario/compare` **refuses to rank without weights**. Given weights it will
-order — but it echoes them back, names the total `weightedFavourability` (never
-`score`), and keeps the three raw axes and their per-axis ranks on **every** row,
-so the cost of the weights is always visible. A default weight set would quietly
-become this project's opinion about which axis matters, which is the judgement
-the guidance says cannot be settled.
-
-Two more things the same instinct drives: the routed drainage cascade asserts
-`runoff in == stored + discharged` and **raises** rather than reporting a flag —
-a leak should be loud, not a field someone can ignore — and there is a second
-identity (`generation == local_retention + runoff_in`) so a double count cannot
-hide inside a balanced cascade.
-
----
+**Three axes, never one score — and the tool refuses to grade.** TC 1/06 §6 gives
+no absolute benchmark and the AVA policy behind it (Ng & Cheng, 2009) states that
+whether the better design option meets a standard "cannot be known". So this tool
+compares and never grades: `verdict` is `null` on every response and nothing prints
+a pass or fail. The obvious thing to do with three axes — weight them and add them
+up — is the one thing refused. The units are incommensurable (a fraction of ground,
+a dimensionless blockage, cubic metres), the ventilation axis has no threshold to
+normalise against, and the axes genuinely conflict: raising the western blocks 40%
+taller gives more shade *and* more wind blockage at once. So
+`scenario/compare` **refuses to rank without weights**; given weights it echoes
+them back, names the total `weightedFavourability` (never `score`) and keeps the
+three raw axes on every row. A default weight set would quietly become this
+project's opinion about which axis matters — the judgement the guidance says
+cannot be settled. The same instinct drives `mass_balance()` to **raise** rather
+than report a flag: a leak should be loud, not a field someone can ignore.
 
 ## Generative AI
 
@@ -983,8 +895,9 @@ either way.
 
 > **Known environment wart:** there are two Python environments on this
 > machine — `backend/.venv` (3.10, missing numpy and rasterio) and a managed
-> 3.13. Only the 3.13 one can run the raster scripts. Standardising this is an
-> outstanding task; see [`docs/OCT6_STATUS.md`](docs/OCT6_STATUS.md).
+> 3.13. Only the 3.13 one can run the raster scripts. `scripts/preflight.py`
+> reports which interpreter it is running under and exits 1 if the raster
+> stack is unavailable, so run it before debugging anything else.
 
 ---
 
@@ -993,11 +906,15 @@ either way.
 ```
 T1/
 ├── README.md                     ← you are here
+├── STATUS.md                     what actually works, measured
+├── CHANGELOG.md                  every non-trivial change, newest first
 ├── CLAUDE.md                     repo conventions for AI agents
 ├── docs/
-│   ├── OCT6_STATUS.md            dated evidence log: real / placeholder / assumed
-│   ├── ARCHITECTURE.md           design decisions in depth
+│   ├── ARCHITECTURE.md           the 15 design decisions, in depth
 │   ├── DATA_SOURCES.md           provenance, licences, rejected sources
+│   ├── RUNG_AND_BUSINESS.md      rung declaration + business model
+│   ├── FILE_STRUCTURE.md         module dependency map
+│   ├── research/                 the five cited research chapters
 │   ├── 技术文档.docx              the specification (Chinese, of record)
 │   └── _技术文档_clean.txt        extracted text, for grepping
 ├── backend/
@@ -1011,7 +928,6 @@ T1/
 │   │   └── routers/              HTTP only
 │   ├── scripts/
 │   │   ├── preflight.py          is this machine able to run it? exits 1 if not
-│   │   ├── preflight.py          can this machine run it? exits 1 if not
 │   │   ├── seed_scene.py         create the scene from the locked study area
 │   │   ├── seed_interventions.py derive intervention sites from the analysis
 │   │   ├── fetch_landcover.py    ESA WorldCover  → landclass_hsk.npy

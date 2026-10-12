@@ -1,6 +1,6 @@
 """Pydantic schemas for the scene contract (技术文档 §3.2, §4.2.1).
 
-Contract decisions taken here (docs/OCT6_STATUS.md, ADR-027):
+Contract decisions taken here (docs/ARCHITECTURE.md, ADR-027):
 
 1. **camelCase on the wire, snake_case in the store.**  The spec's own examples
    are camelCase while the DDL is snake_case, so every schema uses an alias
@@ -286,7 +286,7 @@ class TerrainRead(RowModel):
     center: Point | None = None
     # Not in the spec's three fields, but the frontend cannot build a
     # SingleTileImageryProvider rectangle without it, and re-deriving it from
-    # the bbox invites a client-side bug.  Documented in OCT6_STATUS.md.
+    # the bbox invites a client-side bug.  Documented in ARCHITECTURE.md.
     terrain_format: Literal["quantized-mesh", "heightmap-tiles", "arcinfo-ascii"] | None = None
     terrain_source: str | None = None
     wet_grid_url: str | None = None

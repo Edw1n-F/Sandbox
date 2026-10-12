@@ -1,7 +1,7 @@
 """Pydantic schemas for plans (技术文档 §3.3, §4.2.2).
 
 ``plan_type`` keeps the spec's 5-value CHECK verbatim.  Note the standing gap
-recorded in docs/OCT6_STATUS.md: nothing in today's product *creates* an
+recorded in docs/ARCHITECTURE.md: nothing in today's product *creates* an
 ``economic`` or ``environmental`` plan, so those two enum members are legal but
 unreachable until the AI generator lands.
 """

@@ -30,7 +30,7 @@ def load_study_area(path: Path | None = None) -> dict[str, Any]:
     if not target.exists():
         raise FileNotFoundError(
             f"Study-area file not found: {target}. "
-            "It is the single source of truth for the bbox -- see docs/OCT6_STATUS.md."
+            "It is the single source of truth for the bbox -- see docs/DATA_SOURCES.md."
         )
     with target.open("r", encoding="utf-8") as fh:
         return json.load(fh)

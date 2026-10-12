@@ -26,7 +26,8 @@ HSK/HT, which has the stronger public evidence base. Do not silently switch.
 is PostGIS + MinIO; the seam is `app/db.py` + `app/services/scene_service.py`
 only, so that migration is a swap rather than a rewrite. **No SQLAlchemy, no
 alembic, no migrations directory** — the spec references one, it does not exist,
-and it is flagged in `docs/OCT6_STATUS.md` rather than faked.
+and this file says so rather than faking it. Decision 1 in
+`docs/ARCHITECTURE.md` has the full argument.
 
 **No Cesium Ion token.** The Viewer sets `baseLayer: false` and supplies
 OpenStreetMap explicitly, so the app runs with zero credentials. Leave
@@ -47,14 +48,19 @@ python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python -m uvicorn app.main:app --reload      # :8000
-python tests/test_contract.py                # 11/11
-python tests/test_constants.py               # 16/16
-python tests/test_ai_plan.py                # 10/10
+
+# Every suite is a standalone script, not a pytest run. For the counts and what
+# each one covers, read STATUS.md -- do not trust a number typed into a comment.
+for f in tests/test_*.py; do python "$f"; done
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
 npx tsc --noEmit                             # must be clean
 ```
+
+Test counts move. `STATUS.md` carries the measured ones; if you add a check,
+update that table in the same commit rather than editing the inline counts in
+this file or `README.md`, which is how both went stale.
 
 `cp backend/.env.example backend/.env` on first run. `STATIC_BASE_URL=/static` is
 the one setting with no safe default.
@@ -123,6 +129,16 @@ mandates both. The frontend has one error branch.
 ## Storage shape
 
 `scene -> plan -> intervention`, with a cascade delete chain.
+
+`backend/data/{scenes,plans,interventions}/` is a **runtime store, not source.**
+Only three files in it are committed — the seeded scene, the baseline plan and
+`seed_interventions.py`'s output — and `.gitignore` allowlists exactly those.
+Everything else accumulates there when you run the suites or poke the API,
+because **the suites write into the real store**: none of them redirects
+`settings.*_dir` at a temporary directory. That is why 16 ad-hoc plans and 34
+orphaned intervention documents had to be deleted on 12 Oct 2026. If you add a
+suite that creates records, either clean up after it or fix it to use a temp
+dir; do not let the residue reach a commit.
 
 - **scene** -- geographic anchor. `center`, `bbox`, `terrain_url`,
   `imagery_url`, `default_camera`, `env_params`, plus `wet_grid_path` /
@@ -207,10 +223,19 @@ registers itself against the seeded scene.
 | Question | File |
 |---|---|
 | How do I run this? | [`README.md`](README.md) |
+| What actually works, measured? | [`STATUS.md`](STATUS.md) |
 | Why is it built this way? | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
 | Where did the data come from? | [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) |
-| What actually works? | [`docs/OCT6_STATUS.md`](docs/OCT6_STATUS.md) |
+| Why does the physics look like this? | [`docs/research/`](docs/research/README.md) |
+| What did we declare, and how does it pay? | [`docs/RUNG_AND_BUSINESS.md`](docs/RUNG_AND_BUSINESS.md) |
 | What does the spec say? | `docs/技术文档.docx`, `docs/_技术文档_clean.txt` |
+
+**One home per fact.** `STATUS.md` is the only live statement of what works.
+`ARCHITECTURE.md` is the only home for design rationale. `CHANGELOG.md` is the
+only history. Do not restate a fact in a second file — a claim repeated in two
+places is a claim that will disagree in one of them, which is exactly how the
+test counts, the stage table and the progress log all went stale before being
+merged on 12 Oct 2026.
 
 ## Git
 

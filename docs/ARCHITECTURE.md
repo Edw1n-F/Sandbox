@@ -497,7 +497,7 @@ three runtime bugs.
 ## Related documents
 
 - [`README.md`](../README.md) — setup guide, tech stack, troubleshooting
+- [`../STATUS.md`](../STATUS.md) — what works, measured
 - [`DATA_SOURCES.md`](DATA_SOURCES.md) — provenance, licences, rejected sources
-- [`OCT6_STATUS.md`](OCT6_STATUS.md) — dated evidence log; the real /
-  placeholder / assumed split
+- [`research/`](research/README.md) — the five cited research chapters
 - [`../CLAUDE.md`](../CLAUDE.md) — repo conventions

@@ -1,5 +1,5 @@
 {
-  "$comment": "Locked study area for the Oct 6 base prototype. READ docs/OCT6_STATUS.md before changing any number here -- every downstream artefact (DTM clip, land-class grid, wet grid, heatmap, camera) is derived from this file.",
+  "$comment": "Locked study area for the Oct 6 base prototype. READ docs/DATA_SOURCES.md before changing any number here -- every downstream artefact (DTM clip, land-class grid, wet grid, heatmap, camera) is derived from this file.",
   "id": "hsk-ht-nda",
   "name": "Hung Shui Kiu / Ha Tsuen New Development Area",
   "nameZh": "洪水橋 / 厦村新發展區",
@@ -80,7 +80,7 @@
   "dataSources": {
     "terrain": {
       "mode": "SYNTHETIC_FALLBACK",
-      "note": "No real DTM is shipped. The Lands Dept 5 m DTM (Whole_HK_DTM_5m.zip, ~290 MB) was NOT downloaded: it needs explicit permission and it is not bare-earth (it carries elevated roads and depicts vegetation height). The wet grid therefore runs on a synthetic surface, and that limitation is stated in the UI. See docs/OCT6_STATUS.md D1.",
+      "note": "Elevation is REAL, not synthetic: sampled from the Open-Meteo elevation API at a measured ~90 m posting and verified against Everest and open-ocean control points on every run (see data/dem_hsk.json). The Lands Dept 5 m DTM (Whole_HK_DTM_5m.zip, ~290 MB) was NOT used: it needs explicit permission and it is not bare-earth (it carries elevated roads and depicts vegetation height). A real bare-earth survey DTM is still the strongest available terrain and this remains a declared rung C substitution -- see docs/DATA_SOURCES.md.",
       "configKey": "DEM_SOURCE"
     },
     "imagery": {
@@ -89,7 +89,7 @@
     },
     "landClass": {
       "mode": "PLACEHOLDER",
-      "note": "Awaiting Lia's independent land-class grid. Until it lands, make_heatmap.py classifies from a coarse synthetic/OSM-derived surrogate and labels itself as such."
+      "note": "Land cover is REAL: ESA WorldCover 10 m v200, an existing pretrained global product -- this project did not train a perception encoder. See docs/DATA_SOURCES.md for the provenance, licence and the tile-boundary nodata handling."
     }
   },
   "attribution": [

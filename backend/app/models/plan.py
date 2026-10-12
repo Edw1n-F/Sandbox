@@ -7,7 +7,7 @@ class PlanRow(TypedDict):
     """One row of the ``plan`` table.
 
     ``plan_type`` reproduces the DDL CHECK verbatim.  Note the known gap recorded
-    in docs/OCT6_STATUS.md: ``economic`` and ``environmental`` are legal values
+    in docs/ARCHITECTURE.md: ``economic`` and ``environmental`` are legal values
     that nothing in today's product creates -- they exist for the AI generator,
     which is out of scope until the physics engine lands.
     """

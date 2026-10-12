@@ -87,6 +87,20 @@ def main() -> int:
     camera = area.get("defaultCamera") or {}
     bbox = area.get("bbox")
 
+    # The terrain-RGB raster is written by scripts/fetch_dem.py, not by this
+    # script, so its presence is a fact on disk rather than something we can
+    # assume. Setting terrain_url to a file that does not exist would give the
+    # viewer a URL that 404s on every tile request; leaving it null makes the
+    # frontend fall back to EllipsoidTerrainProvider, which is visibly flat and
+    # therefore honestly so. Either way the scene records what is actually
+    # there. (This used to be hard-coded to null with a comment saying no real
+    # DEM existed -- it does, and the committed scene carries its URL.)
+    terrain_png = settings.data_dir / "dem_terrain_rgb.png"
+    terrain_url = "dem_terrain_rgb.png" if terrain_png.exists() else None
+    if terrain_url is None:
+        print("[seed] no dem_terrain_rgb.png -- run scripts/fetch_dem.py first; "
+              "the scene will boot on a flat ellipsoid", file=sys.stderr)
+
     if existing:
         scene_id = existing
         scene_service.update_scene(
@@ -95,6 +109,7 @@ def main() -> int:
                 name=area["name"],
                 center=area["center"],
                 bbox=bbox,
+                terrain_url=terrain_url,
                 imagery_url=OSM_TILE_TEMPLATE,
                 default_camera=DefaultCamera(**camera) if camera else None,
                 env_params=EnvParams(**env_params) if env_params else None,
@@ -107,10 +122,7 @@ def main() -> int:
                 name=area["name"],
                 center=area["center"],
                 bbox=bbox,
-                # No real DEM is shipped on Oct 6 (see scene_hsk.json dataSources).
-                # terrainUrl stays null and the frontend falls back to
-                # EllipsoidTerrainProvider -- an honest null beats a fake one.
-                terrain_url=None,
+                terrain_url=terrain_url,
                 imagery_url=OSM_TILE_TEMPLATE,
                 default_camera=DefaultCamera(**camera) if camera else DefaultCamera(),
                 env_params=EnvParams(**env_params) if env_params else EnvParams(),

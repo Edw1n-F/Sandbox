@@ -91,9 +91,29 @@ Both `verify-*` need the dev server on `:5173` **and** the backend on `:8000`. T
 not part of `npm test`, which is unit-only, so a missing server cannot silently turn
 them green.
 
+## What is *not* source
+
+Three directories under `backend/data/` are a **runtime store**, not part of the
+build. Exactly three files in them are committed — the seeded scene, the baseline
+plan and `seed_interventions.py`'s output — and `.gitignore` allowlists precisely
+those by id.
+
+Everything else there is residue. The suites write into these directories directly
+(none of them redirects `settings.*_dir` at a tmp dir), so `scenes/`, `plans/` and
+`interventions/` each accumulate a record per run. `list_interventions()` reads
+features out of the **plan document**, so a loose file in `interventions/` that no
+plan references is unreachable — 34 of them had accumulated. Deleting residue is
+safe; deleting a fixture is not.
+
+Rasters (`backend/data/rasters/`) are the opposite case: generated artefacts that
+*are* committed because the tests pin their md5s and the API serves them. Depths
+come from the `.npy`, never the `.png`.
+
 ## Adding a module
 
 1. Put it in the layer matching the table above and respect the dependency direction.
 2. If it is pure and decides geometry, export it and write tests for it.
 3. Add it to this table.
 4. Add a `CHANGELOG.md` entry — every non-trivial change gets one.
+5. If it creates records in the store, make the test clean up after itself. The
+   residue is invisible until someone counts the files.

@@ -45,7 +45,7 @@ HEAT_INDEX: dict[str, float] = {
 
 # SCS Curve Number by land class, hydrologic soil group D (conservative).
 # Source: USDA NRCS TR-55 tables. HSG D is assumed for HSK/HT and still needs
-# Lia's independent check -- docs/OCT6_STATUS.md 2.3.
+# Lia's independent check -- docs/DATA_SOURCES.md.
 # ---------------------------------------------------------------------------
 # Curve Numbers, hydrologic soil group D
 #

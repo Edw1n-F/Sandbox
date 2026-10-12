@@ -7,7 +7,7 @@ only -- no route, schema or frontend change.
 
 All coordinate values are EPSG:4326 (degrees) on the wire, per CLAUDE.md.
 Measurement maths belongs in a projected CRS and is confined to
-``scripts/`` -- see docs/OCT6_STATUS.md (ADR-007).
+``scripts/`` -- see docs/ARCHITECTURE.md (Decision 1, ADR-007).
 """
 
 from functools import lru_cache

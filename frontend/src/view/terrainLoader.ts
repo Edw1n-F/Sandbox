@@ -62,7 +62,7 @@ function isQuantizedMesh(url: string | undefined): boolean {
  * the installed version. Rather than cast around the type and fail at runtime,
  * real terrain is reported as unsupported here. Reinstating it needs either a
  * Cesium version whose provider accepts a URL, or a small wrapper -- and either
- * way it is blocked behind having a DEM at all (see docs/OCT6_STATUS.md D1).
+ * way it is blocked behind having a DEM at all (see docs/ARCHITECTURE.md).
  */
 
 /**

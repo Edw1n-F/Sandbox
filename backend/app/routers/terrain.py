@@ -4,7 +4,7 @@ Returns the opaque ``terrainUrl`` / ``imageryUrl`` references plus the bbox, so
 the frontend can build its providers without knowing where the data lives.  It
 also carries the resolved overlay URLs and a terrain hint, which the spec's
 three-field example omits but the viewer needs (documented in
-docs/OCT6_STATUS.md).
+docs/ARCHITECTURE.md).
 """
 
 from fastapi import APIRouter

@@ -141,27 +141,76 @@ def main() -> int:
     check("and says its CN is assumed rather than looked up",
           "not a TR-55 lookup" in INTERVENTION_EFFECTS["permeable_paving"]["why"], "")
 
-    # --- the shipped store must not contain a silently absurd intervention --- #
+    # --- the over-large-intervention guard must actually fire --- #
+    # This was previously asserted by scanning data/interventions/ for badly
+    # sited seeds and requiring the set to be non-empty. That coupled the guard
+    # to leftover test residue: the assertion passed precisely BECAUSE stale
+    # documents were sitting in the store, so cleaning the store up silently
+    # turned a real check into a failing one, and leaving the residue in was the
+    # only way to keep it green. A guard tested by garbage is not a guard.
+    #
+    # The absurd geometries are now built here instead, so the check is a
+    # property of the code rather than of whatever the store happens to hold.
+    site_area = float(grids.rows * grids.cols)
+    min_lon, min_lat, max_lon, max_lat = grids.bounds
+    whole_area = [
+        [min_lon, min_lat],
+        [max_lon, min_lat],
+        [max_lon, max_lat],
+        [min_lon, max_lat],
+        [min_lon, min_lat],
+    ]
+    coverage = len(_polygon_cells(grids, whole_area)) / site_area
+    check("the site-covering fixture really does cover the site",
+          coverage > 0.95, f"{coverage:.1%} of {grids.rows}x{grids.cols} cells")
+    for kind in ("flood_storage", "green_space"):
+        out = ledger_for_scenario(grids, [_feature(kind, whole_area)])
+        skipped = out["interventionsSkipped"]
+        # Both of these rewrite the land class, so both are refusable; the point
+        # is that a site-covering polygon of either kind is refused outright
+        # rather than applied as a district-scale land-cover swap.
+        check(f"a site-covering {kind} is refused, not applied",
+              bool(skipped) and coverage > MAX_INTERVENTION_COVERAGE,
+              f"covers {coverage:.0%} of the site, "
+              f"{'skipped' if skipped else 'APPLIED -- guard did not fire'}")
+
+    # A ledger handed nothing must move not at all -- the guard is not a filter
+    # that silently drops legitimate work.
+    check("the over-large guard does not fire on a normal polygon",
+          not ledger_for_scenario(grids, [_feature("green_space", ring)])
+          ["interventionsSkipped"],
+          f"the {len(_polygon_cells(grids, ring))}-cell ring was applied")
+
+    # --- and no shipped seed is itself over-large, now that the store is clean -- #
     store = BACKEND_DIR / "data" / "interventions"
-    rows = [json.loads(p.read_text()) for p in store.glob("*.json")]
-    absurd = []
+    rows = [json.loads(p.read_text(encoding="utf-8")) for p in store.glob("*.json")]
+    live_ids = set()
+    for plan_path in (BACKEND_DIR / "data" / "plans").glob("*.json"):
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        for item in plan.get("interventions") or []:
+            live_ids.add(item.get("id"))
+    absurd_live = []
     for row in rows:
-        geom = row.get("geometry") or {}
-        coords = geom.get("coordinates") or []
-        ring = coords[0] if coords and isinstance(coords[0], list) else []
-        cells = _polygon_cells(grids, [p for p in ring
+        # Only documents a plan still references are live; an unreferenced file
+        # is store residue, not a seeded intervention, and saying so here keeps
+        # this check from being re-coupled to it a second time.
+        if live_ids and row.get("id") not in live_ids:
+            continue
+        coords = (row.get("geometry") or {}).get("coordinates") or []
+        ring_i = coords[0] if coords and isinstance(coords[0], list) else []
+        cells = _polygon_cells(grids, [p for p in ring_i
                                        if isinstance(p, (list, tuple)) and len(p) >= 2])
-        if cells:
-            frac = len(cells) / float(grids.rows * grids.cols)
-            if frac > MAX_INTERVENTION_COVERAGE and \
-                    row.get("intervention_type") in INTERVENTION_EFFECTS and \
-                    INTERVENTION_EFFECTS[row["intervention_type"]].get("to"):
-                absurd.append((row["intervention_type"], round(frac, 3)))
-    check("the ledger refuses every over-large intervention in the store",
-          True, f"{len(absurd)} found and refused: "
-                f"{sorted({f'{k} {v:.0%}' for k, v in absurd})}")
-    check("and that set is not empty, or the guard is untested",
-          len(absurd) > 0, f"{len(absurd)} badly-sited seeds in the store")
+        if not cells:
+            continue
+        frac = len(cells) / site_area
+        if frac > MAX_INTERVENTION_COVERAGE and \
+                row.get("intervention_type") in INTERVENTION_EFFECTS and \
+                INTERVENTION_EFFECTS[row["intervention_type"]].get("to"):
+            absurd_live.append((row["intervention_type"], round(frac, 3)))
+    check("no live seeded intervention is over-large",
+          not absurd_live,
+          f"{len(rows)} documents, {len(live_ids & {r.get('id') for r in rows})} "
+          f"live, {len(absurd_live)} over-large")
 
     # --- the base ledger still matches the script after all of this --- #
     led = storage_ledger(grids, grids.land_class)

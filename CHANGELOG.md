@@ -2,6 +2,176 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-12 (part 2) — one home per fact, and a stale comment that hid a bug
+
+Second pass at the same cleanup. The first pass removed files with no inbound
+references; this one removes files whose *content* was duplicated elsewhere, and
+repairs the 21 code and doc citations that pointed at them.
+
+### Removed (duplicated content, not just unreferenced files)
+
+- **`docs/HEAT_AND_WIND_PROGRESS.md`** (27 KB). Every section had a home already:
+  the AVA findings and citations are in [`research/ch02`](research/ch02_wind_ventilation.md),
+  its eight-stage plan table was a stale copy of `STATUS.md`'s stages table
+  (still saying "Stage 2 is next" months after Stage 7 shipped), and its
+  progress log restated `CHANGELOG.md` entry by entry.
+- **`docs/OCT6_STATUS.md`** (19 KB). A dated snapshot whose own header admitted
+  sections 2.2, 4 and 6 no longer held. Its three load-bearing decisions all
+  survive elsewhere: D2 (store mode) is Decision 1 in `ARCHITECTURE.md` and is
+  asserted by a contract test; D3 (the HSK/HT bbox over the 27-task plan's Deep
+  Bay anchor) is in `DATA_SOURCES.md` and `CLAUDE.md`; the assumption register is
+  in `DATA_SOURCES.md`. `RUNG_AND_BUSINESS.md` cited it as the evidence base,
+  and every claim it rested on is carried in the surviving files.
+- **`docs/PHASE1_SCOUTING_BRIEF.md`** (11 KB). An input to the outline planner
+  that had already been consumed into the research chapters; zero citations.
+- **README's eight duplicated design decisions** (~7.5 KB → 3 KB). Decisions
+  1–5 were verbatim `ARCHITECTURE.md`; the file had drifted out of agreement
+  with the seven it did not restate. Replaced with a pointer plus the four
+  points worth having on the front page — the parts that were *not* duplicated.
+
+`docs/` is now five entries and one directory.
+
+### Fixed (a stale comment that was hiding a real bug)
+
+`scene_hsk.json`'s `dataSources` block claimed **"No real DTM is shipped... the
+wet grid therefore runs on a synthetic surface."** That has been false since
+6 Oct: elevation is real, sampled from Open-Meteo at a measured ~90 m posting and
+verified against Everest and open-ocean control points on every run. The land-
+cover note likewise still said the classifier was "a coarse synthetic/OSM-derived
+surrogate" awaiting a third party, when it is ESA WorldCover 10 m v200. Both
+notes rewritten to state what the data actually is.
+
+Following that thread found a genuine bug. `seed_scene.py` set
+`terrain_url=None` on the **create** path with a comment explaining that no real
+DEM existed — but it omitted `terrain_url` entirely on the **refresh** path,
+where `SceneUpdate` therefore left the existing value alone. So the committed
+scene carried `dem_terrain_rgb.png` while a fresh `--reset` seed would have
+produced a scene with no terrain at all, and only `fetch_dem.py` re-attaching
+the overlay afterwards hid it. Both paths now derive `terrain_url` from whether
+`dem_terrain_rgb.png` is actually on disk, and say so on stderr when it is
+missing: a URL to a file that does not exist 404s on every tile request, while a
+null boots a visibly flat ellipsoid, which is honestly flat. Verified by
+re-seeding — the scene keeps `dem_terrain_rgb.png`.
+
+### Changed (citations)
+
+21 references to the deleted files were repointed **deliberately, one at a
+time**, not by blanket search-and-replace, because each named a different
+rationale: the bbox provenance goes to `DATA_SOURCES.md`, the store-mode
+argument to `ARCHITECTURE.md` Decision 1, the contract decisions to
+`ARCHITECTURE.md` + their ADR numbers. Ten are in code comments and docstrings
+across nine modules (`geo_import`, `config`, `main`, `models/plan`,
+`schemas/plan`, `schemas/scene`, `routers/terrain`, `_overlay_common`,
+`terrainLoader.ts`, `scene_hsk.json`). The rest are in `README.md`,
+`CLAUDE.md`, `STATUS.md` and `research/ch05`.
+
+### Added (the rule that prevents this recurring)
+
+`CLAUDE.md` now states **one home per fact**: `STATUS.md` is the only live
+statement of what works, `ARCHITECTURE.md` the only home for design rationale,
+`CHANGELOG.md` the only history. A claim repeated in two files is a claim that
+will disagree in one of them — which is precisely how the test counts, the stage
+table and the progress log all went stale before this cleanup.
+
+### Measured
+
+No code path changed except `seed_scene.py`'s `terrain_url` derivation, so no
+number moves: `wetgrid_hsk.npy` and `flow_accum_hsk.npy` md5s are unchanged
+(`d7cc052a…`, `4f9c4689…`). Zero broken internal markdown links across the repo.
+
+## 2026-10-12 — repository cleanup, and a test that was passing on garbage
+
+A read-only audit of all 206 tracked files, by inbound-citation count rather
+than by eye. Removed 64 files: **206 → 148** tracked. The interesting finding is not what was deleted
+— it is the test that only passed *because* of what was deleted.
+
+### Fixed (a test coupled to leftover residue)
+
+`test_ledger`'s over-large-intervention guard scanned
+`backend/data/interventions/` for badly-sited polygons and then asserted
+`len(absurd) > 0` — "or the guard is untested". It passed because stale
+documents from earlier runs were sitting in the store. Deleting those documents,
+which is the entire point of the cleanup, turned a real check into a failing
+one: **39/39 → 38/39**.
+
+A guard tested by garbage is not a guard. The absurd geometries are now built
+synthetically from `grids.bounds`, so the check is a property of the code rather
+than of whatever the store happens to hold:
+
+- the site-covering fixture is itself asserted to cover the site (100.0% of
+  664×474) — the first attempt built it from an unrelated fixture ring and
+  covered 4%, which would have made the guard pass for the wrong reason;
+- a site-covering `flood_storage` and `green_space` are each refused, not
+  applied;
+- a normal 11,433-cell polygon still applies, so the guard is a refusal and not
+  a filter that drops legitimate work;
+- and separately, **no live seeded intervention is over-large** — that check now
+  skips documents no plan references, so it cannot be re-coupled to residue.
+
+`test_ledger` **39 → 42**, and the guarantee is now real.
+
+### Removed
+
+- **`docs/drafts/` entirely** (8 files, ~146 KB): four DESIGN/PRD documents for
+  work that already shipped and is recorded in this changelog, plus
+  `framework.json`, an intermediate JSON build artifact of the same report. Zero
+  inbound references from anywhere.
+- **Three superseded `*_draft.md` chapters**, each a strict textual predecessor
+  of its `*_revised.md` sibling (29, 12 and 4 differing lines respectively).
+  Keeping both meant two files could disagree about the same physics with no way
+  to tell which was current.
+- **`docs/_技术文档_extracted.txt`** — the raw docx extraction, superseded by
+  `_clean.txt` and referenced by nothing.
+- **16 ad-hoc AI plans and 34 orphaned intervention documents** from the JSON
+  store. Only 2 plans (the baseline and `seed_interventions.py`'s output) and 7
+  intervention documents are referenced; `list_interventions` reads the plan
+  document and never the loose files, so all 34 were unreachable.
+
+### Fixed (the cause of the above)
+
+**The suites write into the real store.** No test redirects
+`settings.scenes_dir` / `plans_dir` / `interventions_dir` at a temporary
+directory, so every run of `test_contract`, `test_scenario` and `test_ai_plan`
+leaves records behind, and 18 plans had accumulated in git. `.gitignore` now
+allowlists exactly the three seeded fixtures and ignores the rest of those three
+directories, with a comment saying why. A new test suite that creates records
+must now clean up after itself or use a temp dir.
+
+### Changed (docs)
+
+- `STATUS.md`, `CHANGELOG.md` and `HEAT_AND_WIND_PROGRESS.md` cited
+  `Hack4SDG_Heat_Wind_Drainage_Research.md` — **a file that does not exist in
+  this repository**, in five places. The research chapters it referred to were
+  scattered across `docs/`, `docs/drafts/` and under draft filenames. They are
+  now `docs/research/ch01`–`ch05` with an index, and every citation points
+  there. A dangling reference to a design document is worse than a missing one,
+  because it reads as though the reasoning is recorded somewhere.
+- The three inline test counts in `CLAUDE.md` (`11/11`, `16/16`, `10/10`) and
+  the two in `README.md` (`11/11`, "404 checks") were 3–8 months stale. All five
+  replaced with a pointer to the measured table in `STATUS.md`, plus an
+  instruction not to retype them.
+- `CLAUDE.md`'s "Where things are written down" pointed at
+  `docs/OCT6_STATUS.md` for "what actually works". That file is a **dated 6 Oct
+  snapshot** whose own header says sections 2.2, 4 and 6 no longer hold.
+  Repointed at `STATUS.md`, with the snapshot labelled as such.
+- Fixed a duplicated `preflight.py` line in the README project-layout tree.
+
+### Kept, deliberately
+
+- **`validate_geometry()` in `geo_import.py`** has no callers. It enforces the
+  spec's EPSG:4326 mandate in §4.4. Deleting an uncalled validator is not
+  cleanup, it is removing the thing that would catch the next mistake.
+- **The 5 research chapters** are unreferenced by filename but are real
+  deliverable content, so they were consolidated rather than deleted.
+- `OCT6_STATUS.md` is stale in places but is an explicitly dated snapshot that
+  the rung declaration leans on; it says so itself and is kept unedited.
+
+### Measured
+
+Backend **476 → 479** (`test_ledger` 39 → 42). All twelve suites re-run. The
+`wetgrid_hsk.npy` and `flow_accum_hsk.npy` md5s are unchanged (`d7cc052a…`,
+`4f9c4689…`), so nothing here moved a number — as a cleanup should not.
+
 ## 2026-10-10 — direct coordinate and footprint-size editing via GenAI
 
 The GenAI sandbox now lets the model (or the user) directly change the
@@ -233,7 +403,7 @@ the status page itself listed as collapsible.
 
 ## 2026-10-09 — heat SVF + anchoring, wind corridors, drainage routing, compare()
 
-Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2. **393 backend tests**
+Stages 3–6 of [`docs/research/ch05_way_forward.md`](docs/research/ch05_way_forward.md) §5.2. **393 backend tests**
 (was 271). Every new output carries a machine-readable `status` and a human
 `warning`; nothing here is a temperature, a velocity ratio, or a flood prediction.
 

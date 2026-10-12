@@ -29,7 +29,7 @@ app = FastAPI(
     description=(
         "Scene management and configuration module for the Hack4SDG 3D sandbox. "
         "Single data authority: all reads and writes go through this module "
-        "(CLAUDE.md). Store mode is `file` on Oct 6; see docs/OCT6_STATUS.md."
+        "(CLAUDE.md). Store mode is `file`; see docs/ARCHITECTURE.md (Decision 1)."
     ),
 )
 

@@ -1,26 +1,29 @@
 # Status
 
 What actually works, measured rather than asserted. Counts were produced by running the
-suites on 2026-10-09; nothing here is a target.
+suites on **2026-10-12**; nothing here is a target.
 
-**Tests: 456 backend + 50 frontend.** Lint and typecheck are clean.
+**Tests: 479 backend + 50 frontend**, with one known environment-dependent
+failure (see gap 14). Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts below were re-verified at **456** on
-> 2026-10-10 (476 after the hourly storm increment; test_scenario +8 resize/move, test_ai_plan +2 resize/schema, -30 hourly-storm moved to its own suite already counted). The frontend figure of 50 is the frontend owner's, carried forward unchanged.
+> leaves the other's alone. Backend counts were re-verified at **479** on
+> 2026-10-12, all twelve suites re-run after the repository cleanup;
+> `test_ledger` gained 3 checks in that work and `test_ventilation`'s 45th
+> fails on this host only — gap 14. The frontend figure of 50 is the frontend owner's.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
 | backend `test_scenario` | 66/66 | `python tests/test_scenario.py` |
-| backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
+| backend `test_ventilation` | 44/45 ⚠ | `python tests/test_ventilation.py` — gap 14, timing only |
 | backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
-| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
-| backend `test_ledger` | 39/39 | `python tests/test_ledger.py` |
+| backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
-| backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
+| backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
+| backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
@@ -53,7 +56,7 @@ server read as a pass.
 
 ### The three simulations
 
-Stages 3–6 of `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2, built 9 Oct 2026. Each
+Stages 3–6 of [`docs/research/ch05_way_forward.md`](docs/research/ch05_way_forward.md) §5.2, built 9 Oct 2026. Each
 new output carries a machine-readable `status` and a human `warning`.
 
 - **Heat: sky view and a blended field.** `sky_view_factor_raster` /
@@ -113,8 +116,9 @@ new output carries a machine-readable `status` and a human `warning`.
 
 The goal is to make a design choice *legible*: this change, in this place, moves
 shade, ventilation and drainage by these amounts. Full findings, sources and
-citations are in `docs/HEAT_AND_WIND_PROGRESS.md`; the design it implements is
-`Hack4SDG_Heat_Wind_Drainage_Research.md` (workspace root, Chapters 1–5).
+citations are in the research chapters under
+[`docs/research/`](docs/research/README.md) — chapters 1 to 3 for these three
+axes, chapter 5 for the roadmap this implements.
 
 The organising fact is that these are **not three features but one geometry read
 three ways**. Hong Kong's own air-ventilation guidance states that a designer
@@ -175,7 +179,7 @@ ground-level permeability.
 
 ## Stages
 
-Numbering follows `Hack4SDG_Heat_Wind_Drainage_Research.md` §5.2. Dependency
+Numbering follows [`docs/research/ch05_way_forward.md`](docs/research/ch05_way_forward.md) §5.2. Dependency
 ordered: a stage may only begin when the raster and the interface it consumes
 already exist and are tested.
 
@@ -301,6 +305,23 @@ Ordered by what would hurt a user first.
     the plain-float property. All 404 backend tests and both raster regeneration runs
     are byte-identical before and after (`wetgrid_hsk.npy` md5 `d7cc052a…`
     unchanged), so the collapse changed no number.
+14. **One test fails on this host, and it is a timing assertion, not a
+    correctness one.** `test_ventilation`'s "eight principal corridors complete
+    inside one second" measures **2.95 s here**, against a 1 s budget. It fails
+    identically (2.98 s) on unmodified `main`, so it is the machine, not the
+    change: the budget was set on faster hardware. `least_cost_corridors` is
+    still correct, and every other assertion in the suite passes. Left failing
+    rather than quietly widened, because widening a timing budget to make a suite
+    green is the same move as deleting a failing test. Either pin the budget to
+    a documented reference machine or convert it to a relative
+    (no-regression) bound.
+15. **The suites write into the real store.** No test redirects
+    `settings.scenes_dir` / `plans_dir` / `interventions_dir` at a temporary
+    directory, so running them leaves scene, plan and intervention records in
+    `backend/data/`. 18 plans had accumulated in git before the 12 Oct cleanup.
+    `.gitignore` now allowlists the three seeded fixtures and ignores the rest,
+    which stops the *commit* but not the *accumulation*. The underlying fix is
+    for each creating suite to use a temp dir or clean up after itself.
 
 ## Honesty constraints that must survive future work
 
@@ -329,7 +350,7 @@ Ordered by what would hurt a user first.
   refusal, or hiding the axes behind the ordering, would re-create the combined score
   by another name.
 - **Every new output carries a machine-readable `status` and a human `warning`**, from
-  the closed set in `docs/drafts/DESIGN_stages_3_6.md` §6. `status` is never a verdict.
+  the closed set in [`docs/research/ch05_way_forward.md`](docs/research/ch05_way_forward.md) §5.2. `status` is never a verdict.
 - **The heat field is a relative index, not a temperature.** The anchor band now on
   disk (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is what the 0–1 scale
   is *read against*; the field itself is still not °C and never becomes °C. Do not
@@ -345,3 +366,9 @@ Ordered by what would hurt a user first.
   a correction to the published deficit, or vice versa.
 - **`mass_balance` raises rather than reporting.** If it is ever changed to return a
   flag, a leak becomes a field someone can ignore.
+- **A test must never assert that bad data exists.** `test_ledger` once scanned
+  the intervention store for badly-sited polygons and required the set to be
+  non-empty — so it passed *because* stale test residue was lying around, and
+  cleaning the store up broke a real check. Every guard must now build its own
+  adversarial fixture and assert the guard fires on it. If deleting a file can
+  turn a test red, the test was measuring the wrong thing.

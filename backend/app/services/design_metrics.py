@@ -596,7 +596,7 @@ def design_report(
 ) -> dict[str, Any]:
     """Every geometry-derived design metric, each with its published rule.
 
-    This is Stage 1 of ``docs/HEAT_AND_WIND_PROGRESS.md``: the measurements that
+    This is Stage 1 of ``docs/research/ch05_way_forward.md``: the measurements that
     make a design choice legible. It reports **no verdict**. The AVA policy is
     explicit that whether a scheme meets a standard cannot be known, so the
     comparison against other schemes -- Stage 3 -- is the only honest reading of
