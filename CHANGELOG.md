@@ -2,6 +2,90 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+Gap numbers quoted inside an entry are the ones current **on that entry's date** —
+they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
+
+## 2026-10-13 — the gap list closed out: 29 entries to 16
+
+The 29-entry backlog had drifted into a scrapbook: eleven entries were closed but
+still sitting there struck through, and four pairs described one job each. This
+closes the list out — the closed entries are replaced by a real history entry
+(here), the merges are made, and the survivors are renumbered **1–16** with a
+translation table from the old numbering so a number someone already quoted can
+still be resolved.
+
+The rule that produced 29 entries is what changes: an entry now earns its place by
+being *open work*, and the moment it closes it leaves the list and lands in this
+file.
+
+### Closed
+
+- **Cumulative project selection.** `POST /run` accepts `planIds[]` and merges
+  every selected plan's features through `intervention_features_many()`;
+  `ProjectCatalog.tsx` is multi-select. `MAX_TOTAL_COVERAGE = 0.40` joins the
+  per-intervention `MAX_INTERVENTION_COVERAGE = 0.25`, because a list of
+  individually-legal interventions can still compose into a district-scale
+  land-use change; the cumulative guard is enforced in both
+  `apply_interventions` and `sanity_checks`.
+- **Two land classes were missing.** `LAND_CLASSES` appends `floodable` and
+  `tank` (appending keeps every existing index and raster valid), with entries in
+  `CURVE_NUMBER_HSG_D`, `HEAT_INDEX`, `COUNTED_AS`, `STORAGE_DEPTH_M` and
+  `CN_CITATIONS`. `flood_storage` is remapped from `water` to `floodable`, so a
+  floodable park is no longer modelled as a permanent water body.
+- **Storage volume was not parameterised.** A `storage_over` dict mirrors the
+  existing `cn_over` mechanism, so an intervention's `storageDepthM` param is
+  honoured per intervention rather than via the global `STORAGE_DEPTH_M`.
+- **The stats panel showed 4 of the 7 brief stats.** `storageCapacityM3`,
+  `imperviousShare` and `greenAndWaterM2` reach the ledger, the delta, the
+  TypeScript types and the panel's rows (4 → 7).
+- **No sanity checks.** `sanity_checks()` returns warnings — never raises — for
+  storage > runoff, wet area > site area, impervious share > 100 %, coverage over
+  either cap, and CN outside 30–100.
+- **Run output was one shared directory.** A run writes under
+  `data/rasters/run/<runId>/…` with pruning, so two concurrent planners cannot
+  overwrite each other's overlay.
+- **The suites wrote into the real store.** `tests/_tmpstore.py` redirects
+  `settings.scenes_dir` / `plans_dir` / `interventions_dir` at a temp copy of
+  `data/`, and the creating suites use it. `.gitignore` had stopped the *commit*,
+  not the *accumulation*.
+- **Error states were only partly closed.** A scene with no terrain and a plan
+  with no interventions now render a `SceneNotice` instead of a blank surface.
+- **Grounding could flag a correct number.** The fix does **not** loosen the
+  check: the run publishes a `stats.ratios` block (`unstoredOverRunoff` plus four
+  siblings) and `build_facts` forwards it verbatim, so a derived percentage
+  grounds because the run now stands behind it. A test pins the old behaviour too,
+  so the guard cannot rot into "accept anything".
+- **Hygiene.** Seven orphaned frontend components deleted, with every reference
+  that named them; two host-dependent one-second timing assertions converted to
+  ratios measured in-process; the chat's pure half given a suite.
+
+### Added
+
+- `backend/tests/test_agent.py` — ten keyless, networkless assertions over
+  `app/agent/grounding.py` and `build_facts`, including the "95 %" case.
+- `frontend/src/components/SceneNotice.tsx`, and `sanityChecks` on the run
+  response.
+
+### Fixed
+
+- **`test_ledger`'s "no shipped seed is over-large" check was red on this host,
+  for the store rather than for the code.** It globbed `data/plans/`, which also
+  collects residue, so a leftover plan made a leftover intervention read as
+  "live". It now asks git which plans are actually shipped (`_shipped_plan_files`)
+  and fails loudly if git cannot answer. Its stale docstring — which claimed the
+  *shipped* seeds were the badly-sited ones — is corrected: the shipped seven are
+  all ≈2 % coverage and the absurd polygons are built in code.
+- In-source `gap N` comments renumbered against the new list; the ones that
+  pointed at a now-closed entry no longer quote a number.
+- `docs/FILE_STRUCTURE.md` and `.gitignore` said the suites "write into these
+  directories directly (none of them redirects `settings.*_dir`)". They do now,
+  and both say so.
+- `STATUS.md` counts re-measured on all fourteen suites: **498 backend** (was 488
+  across thirteen, before `test_agent` existed and before `test_run` and
+  `test_ventilation` each gained a check) and **56 frontend unit** (was 55). The
+  "45th ventilation check fails on this host" note is gone — that check was an
+  absolute timing bound and is now a ratio.
+
 ## 2026-10-12 (part 4) — the chat agent: an answer you can audit
 
 The run loop answered "what happened" with one paragraph. A planner's next

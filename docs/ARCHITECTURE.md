@@ -459,7 +459,7 @@ If you are changing something, these are the places that must move together:
 | A different study area | `data/scene_hsk.json`, then re-run all four scripts |
 | A better DEM | Drop in `dem_hsk.npy` + set `terrain_source`. Nothing else |
 | Real land cover | Drop in `landclass_hsk.npy`. Nothing else |
-| A new front-end layer | `view/` for rendering, `components/LayerToggle.tsx` for the switch |
+| A new front-end layer | `view/` for rendering + a control in `components/` for the switch |
 | A new massing operation | `MASSING_TOOL` + `parse_massing_intent` + `_massing_feature` + `applyMassingOps`, **and a test that an unrecognised scope is dropped rather than widened** |
 | A new field on the answer card | `agent/answer.py` (model **and** `ANSWER_SCHEMA`) + `CardView` in `ChatPanel.tsx` + anything `grounding.check_card` should now read |
 | A new stream event | `agent/chat_service.py` + the `Step`/event union in `api/chatApi.ts` + `ChatPanel.tsx`. The stream always ends with `done` |

@@ -92,12 +92,14 @@ utilities, the thin scrollbars and the pulse keyframes.
 `cityModelStats` — so a component can trigger a viewer action without the Cesium
 instance being drilled into the tree. `ViewButtons` is the current consumer.
 
-### Orphaned — on disk, imported by nothing
+### Removed 13 Oct 2026 — orphaned, imported by nothing
 
-`ScenePanel.tsx` (which itself imports `ImpactPanel` and `RunSummary`),
+`ScenePanel.tsx` (which itself imported `ImpactPanel` and `RunSummary`),
 `ImpactPanel.tsx`, `RunSummary.tsx`, `CameraController.tsx`, `LayerToggle.tsx`,
-`ViewModeSwitch.tsx`, `PromptBar.tsx`. All tsc-clean, none reached from
-`App.tsx`. Adding a feature to one of these is work nobody will see.
+`ViewModeSwitch.tsx` and `PromptBar.tsx` were all tsc-clean but reached from
+nothing — `App.tsx` had moved on. They were deleted, along with the doc
+references that named them, so a feature added to one cannot be work nobody
+sees. (Closed 13 Oct 2026; the reasoning is in `CHANGELOG.md`.)
 
 ## Scripts
 
@@ -118,12 +120,13 @@ build. Exactly three files in them are committed — the seeded scene, the basel
 plan and `seed_interventions.py`'s output — and `.gitignore` allowlists precisely
 those by id.
 
-Everything else there is residue. The suites write into these directories directly
-(none of them redirects `settings.*_dir` at a tmp dir), so `scenes/`, `plans/` and
-`interventions/` each accumulate a record per run. `list_interventions()` reads
-features out of the **plan document**, so a loose file in `interventions/` that no
-plan references is unreachable — 34 of them had accumulated. Deleting residue is
-safe; deleting a fixture is not.
+Everything else there is residue. The suites that create records now redirect
+`settings.*_dir` at a temp copy (`backend/tests/_tmpstore.py`), so running them no
+longer adds to it — poking the API by hand still does. A loose file in
+`interventions/` that no plan references is unreachable (34 had accumulated before
+the 12 Oct 2026 cleanup), and a loose *plan* makes a loose intervention read as
+live, which is why the ledger's "no shipped seed is over-large" check asks git what
+is actually in the repo. Deleting residue is safe; deleting a fixture is not.
 
 Rasters (`backend/data/rasters/`) are the opposite case: generated artefacts that
 *are* committed because the tests pin their md5s and the API serves them. Depths
@@ -135,5 +138,5 @@ come from the `.npy`, never the `.png`.
 2. If it is pure and decides geometry, export it and write tests for it.
 3. Add it to this table.
 4. Add a `CHANGELOG.md` entry — every non-trivial change gets one.
-5. If it creates records in the store, make the test clean up after itself. The
-   residue is invisible until someone counts the files.
+5. If it creates records in the store, call `tests/_tmpstore.isolate_store()`
+   first. The residue is invisible until someone counts the files.

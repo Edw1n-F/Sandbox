@@ -15,6 +15,11 @@ frontend/dist/
 frontend/.env
 frontend/.env.local
 
+# vitest's scratch dir. Vitest writes into TEMP/TMP, and on this host both point
+# somewhere it cannot use, so a run redirects them here:
+#   TEMP=$PWD/.vitest-tmp TMP=$PWD/.vitest-tmp npx vitest run
+frontend/.vitest-tmp/
+
 # Editor
 .vscode/
 .idea/
@@ -53,9 +58,10 @@ backend/data/rasters/run/
 #   backend/data/plans/77593516-...json             the baseline plan
 #   backend/data/interventions/*.json matching the seeded plan's feature ids
 # Everything else under those three directories is residue from running the
-# suites or poking the API by hand. The suites write into the real store -- they
-# never redirect settings.*_dir at a tmp_path -- so without this the residue
-# accumulates silently and gets committed. See docs/FILE_STRUCTURE.md.
+# suites or poking the API by hand. The suites that create records now redirect
+# settings.*_dir at a temp copy (backend/tests/_tmpstore.py), so running them no
+# longer adds to it -- but poking the API by hand still does, and without this
+# the residue would be committed. See docs/FILE_STRUCTURE.md.
 backend/data/scenes/*
 backend/data/plans/*
 backend/data/interventions/*

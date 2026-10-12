@@ -368,7 +368,7 @@ database; the backend never knows what Cesium is.
 | API client | `frontend/src/api/` | One `fetch` wrapper, one module per resource, typed. |
 | Stores | `frontend/src/state/` | Zustand. `sceneStore` and `planStore` only. |
 | View | `frontend/src/view/` | Cesium. `SandboxViewer` owns the Viewer; `terrainLoader`, `demProvider`, `cityModel` and `interventionLayer` are separate concerns. |
-| Components | `frontend/src/components/` | Panel, layer switches, camera, sliders. No Cesium imports except `CameraController`. |
+| Components | `frontend/src/components/` | Panel chrome, sliders, project catalog, stats, chat and the missing-artefact notice. No Cesium imports. |
 
 ### API surface
 
@@ -553,7 +553,7 @@ LLM_FALLBACK_MODELS=nvidia/nemotron-3-ultra-550b-a55b:free
 
 `LLM_FALLBACK_MODELS` matters because a free tier is a shared pool: a `:free`
 model throttled upstream is the normal case, not an emergency. See
-[gap 20](STATUS.md) for the measured latency.
+[gap 10](STATUS.md) for the measured latency.
 
 ### Running it live, with no key at all
 
@@ -999,7 +999,7 @@ T1/
     │   │   ├── viewModes.ts      survey / tactical scene dressing
     │   │   └── interventionLayer.ts  discrete features (extrusion)
     │   ├── components/           ChatPanel, HudPanel, StatsPanel, SlidersPanel,
-    │   │                         ProjectCatalog, ViewButtons, RunSummary
+    │   │                         ProjectCatalog, ViewButtons, SceneNotice
     │   ├── App.tsx  main.tsx  index.css
     ├── vite.config.ts            @ alias + /api and /static dev proxies
     ├── .env.local.example
@@ -1081,7 +1081,7 @@ scenario, so it cannot answer a question about a run that has not happened yet.
 **The free-model tier is slow and throttled.** Shared pools rate-limit without
 warning, so a live answer can take 40–55 s and can fall through to a slower
 fallback model. That is a property of the `:free` tier, not of the tool — a paid
-model id removes it. See [gap 20](STATUS.md).
+model id removes it. See [gap 10](STATUS.md).
 
 ### Next steps, in priority order
 

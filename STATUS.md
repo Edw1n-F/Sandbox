@@ -1,44 +1,45 @@
 # Status
 
 What actually works, measured rather than asserted. Counts were produced by running the
-suites on **2026-10-12**; nothing here is a target.
+suites on **2026-10-13**; nothing here is a target.
 
-**Tests: 488 backend + 55 frontend**, with one known environment-dependent
-failure (see gap 14). Lint and typecheck are clean. The chat agent is **not**
-covered by any suite — gap 22.
+**Tests: 498 backend + 56 frontend unit**, all green. Lint and typecheck are clean.
+The chat's model call is the one thing no suite exercises — gap 9.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts were re-verified at **488** on
-> 2026-10-12, all thirteen suites re-run after the live run loop landed
-> (`test_run`, 29/29). The previously documented **479** could not be reproduced:
-> the thirteen suites' own tallies sum to 488, and the discrepancy is recorded
-> rather than silently carried forward. `test_ventilation`'s 45th check fails on
-> this host only — gap 14. The frontend figure of 55 is 50 from the frontend owner
-> plus 5 run-loop store tests added alongside the run endpoint.
+> leaves the other's alone. Backend counts were re-measured at **498** on 2026-10-13
+> across all fourteen suites (`test_run`, 30/30; `test_agent`, 10/10 and new). The
+> previously documented **488** was thirteen suites, before `test_agent` existed and
+> before `test_run` and `test_ventilation` each gained a check. The old note that
+> `test_ventilation`'s 45th check "fails on this host only" is gone: it was an
+> absolute one-second timing bound, and it is now a ratio measured in-process, so it
+> is **45/45** under parallel load. `scipy` is required by `test_ventilation` and
+> `test_contract`; both were run with it present.
 
 | Suite | Count | Command |
 |---|---|---|
 | backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
 | backend `test_scenario` | 66/66 | `python tests/test_scenario.py` |
-| backend `test_ventilation` | 44/45 ⚠ | `python tests/test_ventilation.py` — gap 14, timing only |
-| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
+| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
-| backend `test_run` | 29/29 | `python tests/test_run.py` — the live run loop |
+| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
+| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
+| backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
-| frontend unit (`vitest`) | 55/55 | `npm test` |
-| frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` |
-| frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` |
+| backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding + fact assembly, no key |
+| frontend unit (`vitest`) | 56/56 | `npm test` |
+| frontend rendering (`verify-3d.mjs`) | 38/38 ⚠ | `npm run verify:3d` — not re-run 13 Oct; needs live servers |
+| frontend robustness (`verify-ux.mjs`) | 20/20 ⚠ | `npm run verify:ux` — not re-run 13 Oct; needs live servers |
 
 The two frontend `verify-*` suites are **not** part of `npm test`: they need the dev
 server on `:5173` and the backend on `:8000`, and folding them in would let a missing
-server read as a pass.
+server read as a pass. Their figures are carried from 12 Oct and marked, not re-measured.
 
 ## Working
 
@@ -75,7 +76,7 @@ server read as a pass.
   against the run by code before it is shown. **Live against a real OpenRouter
   key**: two consecutive calls returned `source: model` with real titles and
   stats; one was fully grounded, the other had its derived "95 %" flagged as a
-  number the run did not produce. 40–55 s per answer on the free tier (gap 20).
+  number the run did not produce. 40–55 s per answer on the free tier (gap 10).
   With no model configured the same card is assembled by code and labelled
   `source: "template"` — a printout, not an interpretation, and it says so.
 
@@ -214,7 +215,7 @@ already exist and are tested.
 | 1 | `design_metrics.py` — geometry metrics each tied to a published rule | **done** |
 | 2 | One `evaluate(scenario)` returning three separate deltas, never one score | **done** |
 | 3 | Scenario-vs-baseline comparison with **stated** weights | **done** — `compare()` refuses to rank without them |
-| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **done** — SVF, the blend, and the anchor: the HKO Lau Fau Shan July band is on disk, verified by `fetch_heat_anchor.py --check`; `anchorSource: "hko_station"`. `HEAT_INDEX` itself remains hand-authored (see gap 9) |
+| 4 | Heat: sky-view factor, blended and anchored to a published LST/HKO normal | **done** — SVF, the blend, and the anchor: the HKO Lau Fau Shan July band is on disk, verified by `fetch_heat_anchor.py --check`; `anchorSource: "hko_station"`. `HEAT_INDEX` itself remains hand-authored (see gap 8) |
 | 5 | Wind: break the NE≡SW symmetry; least-cost-path corridors | **done** — symmetry broken twice: `directional_exposure` reads the arrangement, and each corridor now carries `entryEdge` + `firstObstructionMeanM` (the canonical march attached per direction), so a NE reading and a SW reading are no longer interchangeable. The path cells remain identical for opposite winds — exact geometry, stated in the limitation |
 | 6 | Drainage: D8 fill-and-spill cascade, mass-balance assertion, HAND cross-check | **done** — and the routed response now carries a `reconciliation` block putting the level-pool headline and the routed cascade side by side under the same rainfall, with their shared identity (`runoffInM3 == unstoredM3`) stated and checked |
 | 7 | Expose the three axes to the LLM as an objective, never as a number | **done** — `massing_fit.py` + `GET /buildings/{id}/fit` + the `assess_building_fit` tool: the model states an objective enum and constraints, the ledger does the arithmetic. 32 tests |
@@ -236,167 +237,216 @@ Scoring-side items (rung declaration, business model) are tracked in
 
 ## Known gaps
 
-Ordered by what would hurt a user first.
+Ordered by what would hurt a user first, numbered **1–16** in this revision. The
+list held 29 entries before; eleven of those are closed and have been **removed**
+rather than struck through, because their rationale now lives in
+[`CHANGELOG.md`](CHANGELOG.md) and that is where history belongs. Four pairs that
+were really one job are merged, so 18 open entries became 16.
 
-1. **A malformed payload used to render a blank white page, and the class is only
-   partly closed.** Two separate causes found on 2026-10-09 — an unreadable scene
-   record and a FeatureCollection with no `features`, both throwing inside a render and
-   unmounting the tree. Both are now fixed at the store boundary and an error boundary
-   catches the rest, and 5xx / malformed-payload / slow-network are covered. What is
-   *not* covered: a scene with no terrain, and a plan with no interventions.
-2. **No per-building development phase.** The 2,639 envelopes carry no build year, age
-   or phase — `height_class` is a *height* class from a random draw and must not be
-   relabelled as one. The government source exists and was verified: CSDI **"Building
-   information and age records"** (layer `BDBIAR`), whose phase signal is
-   `NSEARCH3_E`/`NSEARCH3_C` = **Occupation Permit Date**. Not ingested, because joining
-   it to procedurally generated blocks is a spatial coincidence rather than an ID match,
-   and presenting that as authority would overclaim. See `CHANGELOG.md`.
-3. **Two-finger scroll does nothing.** It cannot pan reliably in Cesium 3D — a
-   cursor-anchored ground pan was implemented and measured at 39 m for a 2 km request —
-   and it was disabled rather than left zooming. Left-drag pans. Zoom is on pinch,
-   Cmd/Ctrl+scroll, the buttons and the keyboard.
-4. **Unit coverage is 46 tests** over the DEM sampler, the camera geometry, the
-   plan-scoping geometry (`pointInRing`, `rotateRing`, `translateRing`), the store
-   reducers and the API error normaliser. The overlay layers and the online 3D assets
-   loader are untested.
-5. **Cesium's credit logo link has no accessible name.** Third-party attribution markup
-   (`.cesium-credit-wrapper`); excluded from the accessibility check rather than stripped,
-   because removing it would break Cesium's attribution terms.
-6. **Storage is JSON files, not PostGIS**, and the documented target is not started. The
-   seam is `app/db.py` and `app/services/scene_service.py` only.
+**A number from the 29-entry revision does not mean the same thing here.** The
+table below is the translation, and it is the only place the old numbering is
+still authoritative.
 
-### Gaps in the heat / wind / drainage work
+| Old | New | What happened |
+|---|---|---|
+| 1 | — | Closed 13 Oct — cumulative project selection (`planIds[]`) |
+| 2 + 11 | 1 | Merged — the parameter card is the container the missing-assumption questions need |
+| 3 | 2 | Renumbered |
+| 4 + 7 | 3 | Merged — real footprints remove the direction-blindness for free |
+| 5, 6 | — | Closed 13 Oct — land classes, per-intervention storage depth |
+| 8 + 9 | 4 | Merged — both are "an intervention is a primitive, not a shape" |
+| 10 | 5 | Renumbered |
+| 12 | 6 | Renumbered |
+| 13, 14, 16 | — | Closed 13 Oct — stats rows, sanity checks, per-run output dir |
+| 15 | 7 | Renumbered |
+| 17 | 8 | Renumbered |
+| 18, 19, 22 | — | Closed 13 Oct — suite store isolation, error states, grounding ratios |
+| 20 | 9 | Closed except its residual, carried below as entry 9 |
+| 21 | 10 | Renumbered |
+| 23 + 26 | 11 | Merged — both are the wind geometry's unfinished business |
+| 24 | 12 | Renumbered |
+| 25 | 13 | Renumbered |
+| 27 | 14 | Renumbered |
+| 28 | 15 | Closed except its residual, carried below as entry 15 |
+| 29 | 16 | Renumbered |
 
-7. **~~The scenario evaluator cannot score `place` or `reset`.~~** **Closed 9 Oct
-   2026, by delegation.** The gap was real: both ops need footprints generated on
-   unbuilt paved land, or the seeded heights restored, and both belong to the
-   city-model generator. The fix is not a second implementation but a call into
-   the generator's own code: `place` invokes the AI planner's
-   `placement_footprints()` (same ESA paved mask, same block pitch, same
-   occupied-cell exclusion) and converts rings through the one
-   `footprint_from_ring()` conversion now shared by the loader, the planner and
-   the evaluator; `reset` restores the generated baseline exactly as the
-   viewer's reset does, discarding every earlier op in the sequence. Measured:
-   `place count=3 east` adds exactly 3 envelopes (2,639 → 2,642), moves shade,
-   and leaves drainage at exactly 0 (placed blocks sit on already-paved cells —
-   arithmetic, honestly stated). `unsupportedOps` is now `[]` and the response
-   reports `placedCount`.
-8. **Two drainage readings coexist by design; they are now shown side by side.**
-   The routed fill-and-spill cascade balances to 1e-14 and sits **beside** the
-   level-pool solve rather than replacing it: the headline `bufferDeficitM3` and
-   `wetgrid_hsk.npy` still come from the level-pool path, deliberately, so the
-   published number did not move. **The one-view half is closed (9 Oct 2026):**
-   `GET /drainage/routed` now carries a `reconciliation` block — both readings'
-   volumes under the same rainfall, their shared identity
-   (`runoffInM3 == levelPool.unstoredM3`, 3,170,180.3 m³, checked), and a plain
-   statement of why they differ. Still open: `sea_level_scenario` reasons about
-   retention submergence rather than outfall capacity, which is where sea level
-   would actually bite.
-9. **`HEAT_INDEX` is hand-authored** — `paved 1.00, bare 0.85, green 0.40,
-   wetland 0.20, water 0.05` — with no published provenance, and it sits in the
-   retention path, so it touches drainage numbers too. It is the weakest number in the
-   project and is honest about itself (`heatIndexSource: "Hand-authored screening
-   index; awaiting verification"`). The Stage 4b anchor does **not** change this
-   table: it supplies the band the index is read against, not the index weights
-   themselves.
-10. **The massing model carries no orientation, so the *baseline* is still
-    direction-blind.** `directional_exposure` breaks the NE≡SW symmetry on the real
-    layout, and footprints can now be rotated, but every generated envelope is
-    axis-aligned — so there is no orientation to recover for the baseline, only to
-    introduce by design. Frontal area density additionally *cannot* be made
-    direction-sensitive for any orientation; that is exact geometry, not a gap to be
-    closed later.
-11. **The heat field is anchored to a *nearby* observation, not the site.** The
-    anchor band (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is now on
-    disk and served in every heat response, but the station is ~20 km from the
-    study area and the record is an *air*-temperature climatology, not skin
-    temperature and not a site measurement. The 0–1 field stays relative; a real
-    Landsat 8/9 LST scene over the site would still be the stronger anchor, and
-    every response says so. **Closed as a data gap; open as a provenance
-    limitation.**
-12. **The corridor *path* still cannot tell a north-easterly from a south-westerly;
-    the response now can.** `cell_fad` is 180°-periodic, so the NE and SW cost
-    surfaces are bit-identical and their paths are the same cells — exact geometry,
-    unchanged. **Closed at the response level (9 Oct 2026, Stage 5c):** each
-    corridor now carries `entryEdge` (which side the wind enters from) and
-    `firstObstructionMeanM` (the arrangement, from the canonical
-    `directional_exposure` march — NE 30.2 m vs SW 44.9 m on the real district),
-    so the two readings are no longer interchangeable. A cost surface weighted by
-    the arrangement would be an invented weight; the limitation says exactly this.
-13. **~~`Overlay.cell_area_m2` was a `float` subclass that was also callable.~~**
-    **Collapsed 9 Oct 2026.** The two spellings (`ov.cell_area_m2()` in the scripts,
-    `grids.cell_area_m2` in the canonical geometry) are now one: the attribute form,
-    everywhere. The `_CellAreaM2` float-subclass bridge is deleted; every caller reads
-    the plain-float property. All 404 backend tests and both raster regeneration runs
-    are byte-identical before and after (`wetgrid_hsk.npy` md5 `d7cc052a…`
-    unchanged), so the collapse changed no number.
-14. **One test fails on this host, and it is a timing assertion, not a
-    correctness one.** `test_ventilation`'s "eight principal corridors complete
-    inside one second" measures **2.95 s here**, against a 1 s budget. It fails
-    identically (2.98 s) on unmodified `main`, so it is the machine, not the
-    change: the budget was set on faster hardware. `least_cost_corridors` is
-    still correct, and every other assertion in the suite passes. Left failing
-    rather than quietly widened, because widening a timing budget to make a suite
-    green is the same move as deleting a failing test. Either pin the budget to
-    a documented reference machine or convert it to a relative
-    (no-regression) bound.
-15. **The suites write into the real store.** No test redirects
-    `settings.scenes_dir` / `plans_dir` / `interventions_dir` at a temporary
-    directory, so running them leaves scene, plan and intervention records in
-    `backend/data/`. 18 plans had accumulated in git before the 12 Oct cleanup.
-    `.gitignore` now allowlists the three seeded fixtures and ignores the rest,
-    which stops the *commit* but not the *accumulation*. The underlying fix is
-    for each creating suite to use a temp dir or clean up after itself.
+### Gaps against the brief
 
-### Gaps in the live run loop
+1. **No validated parameter card, and user-written interventions never ask for
+   missing assumptions.** Two halves of the same hole, which is why they are one
+   entry. **The card** is the biggest structural gap: the brief puts it between
+   "read scenario" and "calculate", and nothing of it exists. The numbers are
+   scattered across the ledger and the stats dict; there is no single object
+   carrying total site area, pond/wetland retained or removed, bare ground,
+   explicit storage, soil group, or source + date + confidence per assumption. Add
+   `parameter_card.py` plus an endpoint, cached on (plan ids + intervention hash)
+   so a rainfall-only change reuses the land-cover half. **The questions** are what
+   the card is for: `ai_plan` silently assumes where a user-written intervention
+   replaced land, what surface it is, how deep the storage goes and where it
+   overflows. The brief wants `questions[]` (location, footprint, land replaced,
+   surface type, usable depth, overflow, vegetation), a confirm/edit card, and the
+   label "Preliminary, user-defined scenario" on the run that follows. Today the
+   instruction applies directly — no review step, no label — and the parameter card
+   is the object those answers belong in.
+2. **The project catalog is a placeholder.** Four projects, two phases each, and
+   each phase is an English sentence piped through `ai_plan` — so placement is
+   re-derived and non-deterministic, with no predefined footprint, land-cover
+   conversion or stated assumptions. Add `backend/data/projects.json` with fixed
+   footprint rings, land-cover conversion, assumed environmental changes and
+   source/date/confidence per field. This also makes runs reproducible, which a
+   demo needs. (`ProjectCatalog.tsx` flags this in the panel rather than hiding it.)
 
+### The model, its geometry, and the AI's reach
+
+3. **The base model is procedural, not real — so it is also direction-blind.**
+   All 2,639 envelopes are the same 30 m × 30 m axis-aligned square tiled on a 45 m
+   pitch (`BLOCK_CELLS = 6`, `GAP_CELLS = 3`); only height varies, and
+   `height_source` is `ASSUMED_DISTRIBUTION_NOT_SURVEYED`. Two consequences are one
+   fix. **Orientation:** `cell_fad` is 180°-periodic, so the NE and SW cost surfaces
+   are bit-identical and their corridor paths are the same cells — there is no
+   orientation to recover, only to introduce, and real footprints supply it for
+   free. **Age:** a real build-year/phase join (old CSDI `BDBIAR` records) is blocked
+   for the same reason — joining age records to *invented* blocks is a spatial
+   coincidence, but against real footprints it becomes a genuine overlap test.
+   Frontal area density additionally *cannot* be made direction-sensitive for any
+   orientation; that is exact geometry, not a gap to close later.
+   **The replacement is measured, not hypothetical.** Overture Maps' `buildings`
+   theme is reachable from this host — OSM is not, see the `make_citymodel.py`
+   docstring — and holds **5,743 footprints** inside the study-area bbox. Measured
+   on release `2026-09-23.1`: median footprint **69 m²** (mean 184, max 19,378)
+   against a uniform 900 m² today; **20.6 % are not simple quads** (6.1 %
+   six-vertex, 5.2 % seven-to-nine, 8.1 % ten or more, max 245 vertices); and only
+   **57.7 % sit within 5° of axis-aligned**, so ~42 % carry a genuine orientation.
+   Honest limit: heights are *not* in the data — 18 of 5,743 carry `height` and
+   1,092 carry `num_floors` — so height stays modelled, but conditioned on real
+   area and storeys. **The trap:** `make_heatmap.py:82` reads `citymodel_hsk.json`
+   directly, so a photoreal mesh with no matching lon/lat footprint GeoJSON leaves
+   every heat, shade, SVF and wind number computed from the old fake blocks; the
+   contract must include footprints as lon/lat GeoJSON, not only a mesh. Not yet
+   ingested.
+4. **An intervention is an axis-aligned slab, not a shaped object.** Two
+   placeholders compound. **The footprint:** `extent_ring` and `_fraction_ring`
+   both emit five-point axis-aligned rings, and `_clip_to_scope` states the
+   assumption in its own docstring — so a reservoir is a bounding box extruded
+   14 m, not a basin. `_components` already computes the true cell mask;
+   contouring it would give an intervention the shape of the ground it sits on.
+   **The massing:** `STYLE_FOR_KIND` gives each kind a single `extrusionHeight`
+   (reservoir 14 m, green space 6 m), so every proposal of a kind is the same
+   slab — no rim, no depth profile, no concept object, where the brief asks for a
+   "visual overlay or concept object" per suggestion.
+5. **AI suggestions are not generated, and Pin/Unpin does not exist.** The chips
+   are hardcoded strings (`ChatPanel.tsx:57`) and a grep for `pin` returns zero
+   hits anywhere. Add `suggest_interventions(run_result, grounding)` over the
+   existing `reservoir_sites` / `green_sites` / `paving_sites` pools, returning
+   2–3 draft cards (name, type, footprint, why, required area, storage or cooling
+   mechanism, evidence status); add `pinned: bool` to `InterventionRow`; drop
+   unpinned + untoggled features on the next run.
+6. **The chat cannot change the model.** `app/agent/chat_service.py` answers but
+   exposes no tools — "no skills, no tools the model can call" is deliberate.
+   NL → geometry *does* exist (`parse_massing_intent` → `massingOps` →
+   `applyMassingOps`) but is reachable only via `POST /scenes/{id}/ai-plan`, so
+   the chat panel and the geometry engine are unconnected. **One op vocabulary
+   serves all four cases** — existing buildings, project toggles, AI suggestions
+   and generated glTF — so this is one path, not four, and the op shape already
+   exists, which is what makes it the cheapest large win.
+
+### The run, its outputs, and the data behind them
+
+7. **No water-pour animation.** The wet grid is a static PNG swap. The cheapest
+   honest version precomputes ~6 frames at increasing volume and steps them —
+   terrain-based accumulation, clearly not a timing model.
+8. **`HEAT_INDEX` is hand-authored, and the heat anchor is ~20 km away.** The
+   index weights (`paved 1.00, bare 0.85, green 0.40, wetland 0.20, water 0.05`,
+   plus floodable 0.40 and tank 1.00) have no published provenance and they sit in
+   the retention path, so they touch drainage numbers too. It is the weakest number
+   in the project and says so (`heatIndexSource: "Hand-authored screening index;
+   awaiting verification"`). The anchor is an *air*-temperature climatology from
+   HKO Lau Fau Shan (July 2015–2024, `[26.4, 32.7] °C`), not skin temperature and
+   not a site measurement. A real Landsat 8/9 LST scene over the site is the
+   documented fix.
+
+### The chat agent
+
+9. **The chat's model call is covered only by hand, and threads are not
+   persisted.** `tests/test_agent.py` covers the pure half of `app/agent/` —
+   number grounding and fact assembly — with no key and no network, but the
+   provider client has no automated test: the LLM call itself is verified by hand
+   against a live key. Threads are not stored either — run state is sent by the
+   client per request (ADR-024), so a reload loses the thread. The second half is
+   a design choice rather than an oversight, and the UI says so; the first is a
+   real coverage hole.
+10. **The free tier is slow and throttled, and the fallback is slower.** Measured
+    40–55 s per answer. Google's pool returned `429 …
+    limit_source=upstream_provider_shared_pool` for `gemma-4-31b-it:free`, so every
+    live call fell through to `nemotron-3-ultra-550b-a55b:free`. Three mitigations
+    are in place — `MAX_TOKENS=2000` (900 starved reasoning models: 382 thinking
+    tokens, then `finish_reason=length` and a truncated card), one unstreamed retry
+    when a stream yields nothing, and `LLM_FALLBACK_MODELS` — but a throttled
+    primary still costs a wasted round trip before the rescue runs. A paid model id
+    removes all three.
+
+### Wind, terrain, storage, and other tracked limitations
+
+11. **Wind is built but not surfaced, and its geometry has two encodings.**
+    `ventilation.py` (frontal area density + least-cost corridors) computes and
+    tests, but nothing surfaces it in the UI or the run; the brief marks this
+    optional — wire it in as a third overlay, kept out of the flood/heat numbers.
+    The same geometry is meanwhile written down twice: `projected_width_m` and
+    `frontal_area_density` exist in both `ventilation.py` (dict-based) and
+    `design_metrics.py` (typed `Footprint`), and `ch05` says the typed one is
+    canonical, so `ventilation.py` should delegate rather than grow a third
+    encoding. Already closed at the *response* level (Stage 5c): each corridor
+    carries `entryEdge` and `firstObstructionMeanM`, so the two wind readings are
+    no longer interchangeable even though the underlying paths still cannot
+    separate NE from SW.
+12. **The outlet water-level condition is unresolved.** `sea_level_scenario`
+    models retention *submergence* rather than outfall capacity, which is where sea
+    level would actually bite at this site; it needs pipe and outfall data the
+    project does not have, so the honest option is to declare it rather than invent
+    the network. Related: two drainage readings coexist by design — the routed
+    fill-and-spill cascade and the level-pool solve — and are shown side by side
+    with a `reconciliation` block; the headline `bufferDeficitM3` stays on the
+    level-pool path and deliberately did not move.
+13. **The terrain is ~90 m SRTM-derived, and the docs are stale about the fix.**
+    `ch05 §5.4` calls the 5 m DTM "request-gated", but it is now freely available
+    (and Open3Dhk's set includes a TIN terrain model). Also: a run re-solves the
+    water level on the conditioned surface but does not re-condition it, so a DEM
+    change needs `make_wetgrid.py` re-run (`make_wetgrid.py` writes the
+    Priority-Flood conditioning and the D8 receiver once, ~9 s, offline).
+14. **Storage is JSON files, not PostGIS.** The documented target is not started;
+    the seam is `app/db.py` and `scene_service.py` only.
+15. **Coverage stops short of two view modules, and two known limits stand.**
+    Unit coverage does not reach `view/onlineProps.ts` (the online 3D assets
+    loader) or `view/interventionLayer.ts`; the 56 unit tests cover the DEM
+    sampler, camera geometry, plan-scoping geometry, store reducers and the API
+    error normaliser instead. Separately and honestly so: Cesium's credit logo
+    link has no accessible name (third-party markup `.cesium-credit-wrapper`,
+    excluded rather than stripped, because removing it would break Cesium's
+    attribution terms); and two-finger scroll does not pan in Cesium 3D (a
+    cursor-anchored ground pan measured 39 m for a 2 km request) and is disabled —
+    left-drag pans instead.
 16. **The temperature slider is a display preset, not physics.** Above 35 °C the
     run applies `make_heatmap`'s documented heatwave stretch — a render transform
-    on the same field. The land-class heat index does not know about air
+    on the same field; the land-class heat index does not know about air
     temperature, and `test_run` asserts it is bit-identical across presets. A
-    planner who drags temperature and sees no rainfall-side change is looking at
-    a model that is being honest, not at a broken slider. Making temperature move
-    the physics needs a real energy-balance term, which this project does not
-    have and should not imply.
-17. **Run output is one shared directory.** `POST /run` writes
-    `backend/data/rasters/run/{wetgrid,heatmap}.png`, so two planners running at
-    the same moment overwrite each other's overlay. Fine for one demo machine,
-    wrong for two concurrent users; the fix is a per-run (or per-session)
-    filename rather than a fixed one.
-18. **~~The explanation is one shot, not streamed.~~** **Closed 12 Oct 2026.**
-    `/chat/stream` emits `run_started`, `step_started`/`step_finished` for all
-    three steps, `delta` per token, `grounding`, `answer` and `done`. All three
-    steps always start and finish, including on the template path, so the stepper
-    shows three ticks either way and the result line says which path produced the
-    card. Still true: `POST /run`'s own `explanation` field is a finished
-    paragraph — it is not streamed, because a run result is one response.
-19. **The run does not re-derive the terrain.** Priority-Flood conditioning and
-    the D8 receiver stay as `make_wetgrid.py` wrote them (~9 s, once, offline).
-    A run re-solves the water level on the conditioned surface; it does not
-    re-condition it, so a change to the DEM needs the script re-run.
+    planner who drags temperature and sees no rainfall-side change is looking at a
+    model that is being honest, not at a broken slider — but the brief says
+    temperature "simulates heatwaves", so it is a scope risk if read literally.
+    Making temperature move the physics needs a real energy-balance term this
+    project does not have and should not imply.
 
-### Gaps in the chat agent
-
-20. **The free tier is slow and throttled, and the fallback is slower.**
-    Measured 40–55 s per answer. Google's pool was returning `429 …
-    limit_source=upstream_provider_shared_pool` for `gemma-4-31b-it:free`, so
-    every live call fell through to `nemotron-3-ultra-550b-a55b:free`. Three
-    mitigations are in place — `MAX_TOKENS=2000` (900 starved reasoning
-    models: 382 thinking tokens, then `finish_reason=length` and a truncated
-    card), one unstreamed retry when a stream yields nothing, and
-    `LLM_FALLBACK_MODELS` — but a throttled primary still costs a wasted round
-    trip before the rescue runs. A paid model id removes all three.
-21. **Grounding can flag a correct number.** A percentage the model derived
-    (unstored ÷ runoff = 95 %) is not a number the run produced, so it is
-    reported as ungrounded. That is the check working, but it reads as a false
-    alarm. One revision round is attempted, then the card is shown with the
-    warning rather than looped.
-22. **The chat has no test suite and no persistence.** Nothing in `tests/`
-    covers `app/agent/`; it was verified by hand against a live key. Threads are
-    not stored — run state is sent by the client per request (ADR-024), so a
-    reload loses the thread.
+**Deliberately out of scope — the docs already say why, so don't build them:**
+typhoon surge with jacking, a trained perception encoder, the generative
+emulator, kappa validation against 2017 flood records, and InVEST (SCS-CN is
+implemented directly from USDA TR-55 Table 2-2, and that deviation is declared).
 
 ## Honesty constraints that must survive future work
+
+- **Generative 3D belongs on proposals, not on the existing district.** An
+  AI-generated mesh is fiction, so it must not be presented as the current state
+  of HSK — the existing buildings have to come from measured data (gap 3).
+  Interventions are already labelled `draft_pending_human_review`, so a generated
+  glTF is honest there and dishonest as "what is there now".
 
 - The city model is **provisional massing, not surveyed buildings.** Keep the
   `provisional` chip and the terrain-grounding disclosure.
