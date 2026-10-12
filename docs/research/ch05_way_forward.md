@@ -11,7 +11,7 @@ The ordering rule is dependency, not importance: **a stage may only begin when t
 | Stage | What (module / function) | Files | Acceptance test | Honesty label |
 |---|---|---|---|---|
 | **0** | Research, cited and recorded | `docs/research/` (chapters 1–4) | Every rule carries a source | — |
-| **1** | `design_report()` — geometry metrics each tied to a published rule (height dispersion, site coverage, ground-level void fraction, shade fraction) | `app/services/design_metrics.py` | `test_design_metrics.py` (37 checks) | "geometry, not flow; no verdict" |
+| **1** | `design_report()` — geometry metrics each tied to a published rule (height dispersion, site coverage, ground-level void fraction, shade fraction) | `app/services/design_metrics.py` | `test_design_metrics.py` | "geometry, not flow; no verdict" |
 | **2** | One `evaluate(scenario)` returning **three separate deltas** (heat, wind, drainage) | new `app/services/evaluate.py`; reuse `ledger_for_scenario` | Three keys present; never a single score | "three axes, not one number" |
 | **3** | Scenario-vs-baseline comparison (the relative judgement the AVA document asks for) | `evaluate.py` + API | Δ sign correct; baseline reproducible | "relative, not a pass/fail" |
 | **4** | Heat: rasterise massing → solar position → shadow mask → SVF → blend + anchor | extend `make_heatmap.py`, `design_metrics.solar_position` | SVF sanity; monotone in shade | "relative index, not °C" |

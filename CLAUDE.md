@@ -139,12 +139,14 @@ mandates both. The frontend has one error branch.
 `backend/data/{scenes,plans,interventions}/` is a **runtime store, not source.**
 Only three files in it are committed — the seeded scene, the baseline plan and
 `seed_interventions.py`'s output — and `.gitignore` allowlists exactly those.
-Everything else accumulates there when you run the suites or poke the API,
-because **the suites write into the real store**: none of them redirects
-`settings.*_dir` at a temporary directory. That is why 16 ad-hoc plans and 34
-orphaned intervention documents had to be deleted on 12 Oct 2026. If you add a
-suite that creates records, either clean up after it or fix it to use a temp
-dir; do not let the residue reach a commit.
+Everything else is residue, from hand-poking the API. The suites that create
+records now redirect `settings.*_dir` at a temp copy of `data/`
+(`backend/tests/_tmpstore.py`, used by `isolate_store()`), so running them no
+longer adds to it. **If you add a suite that creates records, call
+`isolate_store()` first** — the residue is invisible until someone counts the
+files, and it is not only clutter: a loose *plan* makes a loose intervention read
+as live, which is how the ledger's "no shipped seed is over-large" check came to
+fail for the store rather than for the code.
 
 - **scene** -- geographic anchor. `center`, `bbox`, `terrain_url`,
   `imagery_url`, `default_camera`, `env_params`, plus `wet_grid_path` /

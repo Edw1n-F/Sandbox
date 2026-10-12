@@ -5,6 +5,46 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-13 (part 2) — the docs stop counting twice
+
+No file was unnecessary; the redundancy was *inside* `README.md`, which had grown
+into a monolith restating every other document. Shortened, nothing deleted.
+
+The interesting part is not the line count. `README.md` carried stale per-suite
+counts in **three** separate places — `test_contract.py` "11/11" against a real
+23, `test_ai_plan.py` "30/30" against a real 41, and a loop labelled "404 checks,
+11 suites" against a real 498 across fourteen — and `docs/ARCHITECTURE.md` said
+"two suites" and pinned 11 / 18 / 30 tests. `CLAUDE.md` had already written the
+rule down ("read STATUS.md — do not trust a number typed into a comment"); the
+rule was not being followed. **The counts now exist in exactly one place, and the
+other documents point at it.** Updating a number in N places is a chore; the fix
+is N = 1.
+
+### Changed
+
+- `README.md`, 1120 → 951 lines. Removed the layer table (a duplicate of
+  `CLAUDE.md`), the four-point design-decision restatement (→ ARCHITECTURE, kept
+  as four one-line claims so the front page still says what kind of tool this is),
+  the test-internals prose (→ CHANGELOG), the deep heat-overlay and wet-grid
+  detail (→ DATA_SOURCES and the research chapters), "Next steps" (→ the STATUS
+  gap list, the single backlog) and the committed/not-committed tables (→
+  FILE_STRUCTURE and `.gitignore`).
+- `docs/ARCHITECTURE.md` and `docs/research/ch05_way_forward.md` — counts removed
+  rather than updated, for the same reason.
+
+### Fixed
+
+- **`backend/requirements.txt` cited two documents that no longer exist**
+  (`HEAT_AND_WIND_PROGRESS.md`, `OCT6_STATUS.md`), in the comments justifying the
+  scipy pin and the absent PostGIS stack. A previous cleanup deleted the files and
+  left the citations.
+- **`CLAUDE.md` stated the opposite of the truth about the test store**: "the
+  suites write into the real store — none of them redirects `settings.*_dir`".
+  Untrue since `tests/_tmpstore.py`; it now describes `isolate_store()` and why a
+  residue *plan* makes a residue intervention read as live.
+- One dead link in this file, left by the 12 Oct docs reorganisation — a pointer
+  has to resolve.
+
 ## 2026-10-13 — the gap list closed out: 29 entries to 16
 
 The 29-entry backlog had drifted into a scrapbook: eleven entries were closed but
@@ -231,7 +271,7 @@ repairs the 21 code and doc citations that pointed at them.
 ### Removed (duplicated content, not just unreferenced files)
 
 - **`docs/HEAT_AND_WIND_PROGRESS.md`** (27 KB). Every section had a home already:
-  the AVA findings and citations are in [`research/ch02`](research/ch02_wind_ventilation.md),
+  the AVA findings and citations are in [`docs/research/ch02`](docs/research/ch02_wind_ventilation.md),
   its eight-stage plan table was a stale copy of `STATUS.md`'s stages table
   (still saying "Stage 2 is next" months after Stage 7 shipped), and its
   progress log restated `CHANGELOG.md` entry by entry.

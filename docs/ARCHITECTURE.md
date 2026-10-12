@@ -57,8 +57,8 @@ PostGIS + MinIO.
 
 **How it's kept honest.** The storage boundary is drawn at exactly **two
 modules**: `app/db.py` and `app/services/scene_service.py`. No route, no schema,
-no frontend code knows which store is active. The 11 contract tests run against
-file mode today and run unchanged against PostGIS when it exists.
+no frontend code knows which store is active. The contract suite runs against
+file mode today and runs unchanged against PostGIS when it exists.
 
 **Why it matters.** If the routes knew about storage, "temporarily" would have
 become permanent by the third endpoint. The seam is what makes the PostGIS
@@ -469,14 +469,18 @@ If you are changing something, these are the places that must move together:
 
 ## Testing strategy
 
-Two suites, each guarding a different class of mistake.
+Fourteen standalone suites. The ones below are the strategy — each guards a class
+of mistake the others cannot see. **Their measured counts are in
+[`../STATUS.md`](../STATUS.md) and are deliberately not repeated here**: a count
+written down twice is a count that disagrees with itself, which is exactly how the
+counts in this file, the README and the progress log all went stale once.
 
-**`tests/test_contract.py` (11 tests)** — the API is a contract with an external
+**`tests/test_contract.py`** — the API is a contract with an external
 consumer, so the contract is asserted: every endpoint, the cascade delete, the
 `sceneId` alias, bbox ring closure, and that the error envelope carries both
 required shapes.
 
-**`tests/test_constants.py` (18 tests)** — guards the two constants the source
+**`tests/test_constants.py`** — guards the two constants the source
 documents say *fail silently*: the SCS-CN form and the mCD/mPD datum offset.
 Neither raises an error when wrong; both produce a plausible number. One of them
 was caught in practice — `S = 25400/CN − 2540` returns negative retention above
@@ -503,7 +507,7 @@ two languages, and if they ever drift the terrain renders at the wrong height
 with nothing erroring — and the DEM's height range must be plausible for a
 coastal Hong Kong floodplain.
 
-**`tests/test_ai_plan.py` (30 tests)** — drives the LLM path through an injected
+**`tests/test_ai_plan.py`** — drives the LLM path through an injected
 transport that replays a recorded Messages API response, so the request shape,
 the tool-use parsing and the grounding constraint are all exercised with no key
 and no network. A test that only runs when a credential happens to be present is

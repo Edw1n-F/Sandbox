@@ -12,17 +12,16 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 > `.json` sidecar recording its assumptions, and
 > [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) separates what is real from
 > what is assumed. Please read the
-> [Limitations](#limitations--what-this-is-not) section before quoting any figure.
+> [Limitations](#limitations-what-this-is-not) section before quoting any figure.
 
 ---
 
-## Table of contents
+## Contents
 
 - [What works today](#what-works-today)
 - [Tech stack](#tech-stack)
 - [Running it locally](#running-it-locally)
 - [Architecture](#architecture)
-- [Design decisions and why](#design-decisions-and-why)
 - [Generative AI](#generative-ai)
 - [3D city model, and editing it](#3d-city-model-and-editing-it)
 - [Online 3D assets](#online-3d-assets)
@@ -30,7 +29,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [Project layout](#project-layout)
-- [Limitations: what this is not](#limitations--what-this-is-not)
+- [Limitations: what this is not](#limitations-what-this-is-not)
 
 ---
 
@@ -38,18 +37,18 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 
 | Capability | Status | Verified by |
 |---|---|---|
-| REST API — the spec's §3 surface, the reserved AI slot, and the analysis endpoints | Working | 23 contract tests |
-| Scene → plan → intervention cascade delete | Working | contract test |
-| camelCase wire contract with `sceneId`/`planId` aliases | Working | contract test |
-| Single error envelope (`detail` **and** `error`) | Working | contract test |
+| REST API — the spec's §3 surface, the reserved AI slot, and the analysis endpoints | Working | `test_contract` |
+| Scene → plan → intervention cascade delete | Working | `test_contract` |
+| camelCase wire contract with `sceneId`/`planId` aliases | Working | `test_contract` |
+| Single error envelope (`detail` **and** `error`) | Working | `test_contract` |
 | 3D viewer: real terrain, imagery, boundary, camera | Working | headless-browser render, zero console errors |
 | **Real elevation** (~90 m, Open-Meteo global model) | Working | control-point assertions on every fetch; resolution measured, not assumed |
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
 | Heat-exposure overlay — land class **+ sky view + cast shadow**, a relative 0–1 index | Working, screening-grade | a lone thin tower reads SVF 0.9913; a uniform block reads 0.0 |
 | **Heat anchor** — the cited band that index is read against | Working | HKO Lau Fau Shan, July [26.4, 32.7] °C; reproducible via `fetch_heat_anchor.py --check` |
-| **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | 2 tests: stated area vs geometry, draft status + provenance |
-| **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | 30 tests, incl. real-HTTP round trips |
+| **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | stated area vs geometry, draft status + provenance |
+| **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | real-HTTP round trips replayed on every run |
 | **Chat** — ask why, get an answer card whose numbers are checked against the run | **Live.** OpenRouter `:free` model; no key needed to fall back | verified against a real key: 2/2 cards `source: model`, one fully grounded, one flagged a derived 95 % |
 | **Streamed steps** — the reader watches the three steps happen | Working | `run_started` → 3 × `step_started`/`step_finished` → `delta` → `grounding` → `answer` → `done` |
 | **Number grounding** — every figure in a card traced back to the run | Working | invented "42,000 m³" and "99.9" are caught and named |
@@ -57,14 +56,18 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **AI 3D alteration, scoped** — height / density / orientation, by region or site | Working | 1,232 of 2,639 buildings for "western blocks"; west/east visible in the render |
 | **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded; click-to-select + per-building height, browser-verified |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
-| **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | 3 tests; 10.3% of DEM cells are depressions |
+| **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 10.3% of DEM cells are depressions |
 | **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |
 | **Wind: least-cost-path corridors** per direction (Dijkstra on a `1 + cellFAD` cost surface) | Working, **geometry not flow** | 8 directions in 0.70 s; corridor cost monotone in FAD |
 | **Wind: per-direction FAD ratio** | Working | `1.0` for identical schemes, `>1` where blockage rises |
-| **Drainage: D8 fill-and-spill routing + enforced mass balance + HAND** | Working, screening-grade | residual **6.5e-15** relative; a deliberately leaked cell makes the assertion **raise** |
+| **Drainage: D8 fill-and-spill routing + enforced mass balance + HAND** | Working, screening-grade | residual ~1e-15 relative; a deliberately leaked cell makes the assertion **raise** |
 | **Scenario evaluation** — three axes at once, with **no combined score** | Working | raising the western blocks 40% taller gives more shade *and* more blockage |
 | **Scenario comparison** — ordering under **stated** weights | Working | refuses to rank without weights; the three axes stay visible; `combinedScore` stays `null` |
 | Zero-credential operation (no Cesium Ion token) | Working | app boots with empty `.env.local` |
+
+Counts are deliberately absent from this table: the measured number for each suite
+lives in [`STATUS.md`](STATUS.md) and nowhere else. Two copies of a count is two
+copies that disagree.
 
 **Not working / not built:** PostGIS + MinIO store, a physics engine, a
 validated Curve Number table, Hato flood validation, and the ability to
@@ -72,7 +75,7 @@ validated Curve Number table, Hato flood validation, and the ability to
 height, density and orientation, not remove them. Two drainage readings
 deliberately coexist: the routed cascade and the level-pool headline, which are
 not merged because they are different pictures of the same water. See
-[Limitations](#limitations--what-this-is-not).
+[Limitations](#limitations-what-this-is-not).
 
 ## Tech stack
 
@@ -85,7 +88,7 @@ no credentials, no Docker and no paid services.**
 |---|---|
 | **FastAPI** | The spec's contract is OpenAPI-first, with validation errors that must carry a FastAPI `detail` array *and* a custom `{"error": {...}}` envelope. FastAPI gives the first for free and Pydantic v2 gives typed request/response models, so a wire contract is enforced rather than hoped for. |
 | **Pydantic v2 + pydantic-settings** | `extra="forbid"` on response models is what caught the `sceneId`/`id` bug during the build. Settings come from `.env` with validated, *anchored* paths. |
-| **Store mode as configuration** | `STORE_MODE=file` writes JSON to disk; `STORE_MODE=postgis` is the target. Swapping is confined to `app/db.py` + `app/services/scene_service.py` — no route, schema or frontend change. See [ADR-020](#1-store-mode-is-configuration-not-architecture). |
+| **Store mode as configuration** | `STORE_MODE=file` writes JSON to disk; `STORE_MODE=postgis` is the target. Swapping is confined to `app/db.py` + `app/services/scene_service.py` — no route, schema or frontend change. See [ARCHITECTURE Decision 1](docs/ARCHITECTURE.md#decision-1--store-mode-is-configuration-not-architecture). |
 | **numpy + Pillow** | The overlay maths is array work. No GDAL in the critical path. |
 | **rasterio** *(only for one script)* | Reading ESA WorldCover GeoTIFF as a windowed COG. Its wheels bundle GDAL, so no Homebrew GDAL is needed. Nothing else imports it. |
 
@@ -100,10 +103,8 @@ no credentials, no Docker and no paid services.**
 | **MUI** | Gives accessible switches, sliders and dialogs for free, and the panel looks like an analysis tool rather than a demo. |
 | **`SingleTileImageryProvider` for overlays** | Continuous fields are images, not thousands of polygons: smaller payload, better frame rate. Extrusion is reserved for discrete features. |
 
-### Deliberately not used
-
-Docker, PostgreSQL/PostGIS, MinIO, GDAL, `alembic`, a physics engine, any
-paid or token-gated API. Each is documented with the reason in
+Docker, PostgreSQL/PostGIS, MinIO, GDAL, `alembic`, a physics engine and any
+paid or token-gated API are deliberately not used, each with a stated reason, in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#deliberately-not-used).
 
 ---
@@ -112,9 +113,9 @@ paid or token-gated API. Each is documented with the reason in
 
 > **This guide is tested, not aspirational.** Every step below was run against
 > a clean `git archive` export of the repository — a fresh clone with no `.env`,
-> no `node_modules` and no caches. `preflight.py` reported *Ready*, 59/59 tests
-> passed, and both overlays regenerated from the committed data. If a step here
-> breaks, that is a bug in the repo rather than a surprise for you.
+> no `node_modules` and no caches. `preflight.py` reported *Ready* and both
+> overlays regenerated from the committed data. If a step here breaks, that is a
+> bug in the repo rather than a surprise for you.
 
 ### Prerequisites
 
@@ -239,7 +240,8 @@ python scripts/seed_interventions.py --reset
 - **Drainage alignment** traced steepest-descent from the deepest basin
 
 Each feature records the raster it came from in `params.basis`, and all are
-`status="draft"` — the engine refuses to compute on draft geometry (ADR-030).
+`status="draft"` — the engine refuses to compute on draft geometry
+([ARCHITECTURE Decision 13](docs/ARCHITECTURE.md#decision-13--a-scope-is-resolved-in-code-or-the-operation-does-not-happen)).
 Re-running with `--reset` replaces only plans this script created.
 
 ### Step 6 — frontend
@@ -312,14 +314,17 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 
 ```bash
 cd backend
-python scripts/preflight.py      # environment; exits non-zero if not runnable
-python tests/test_contract.py     # 11/11 — API contract
-python tests/test_constants.py    # 18/18 — constants, DEM, raster/feature invariants
-python tests/test_ai_plan.py      # 30/30 — grounding, scope, placement
+python scripts/preflight.py                    # environment; exits non-zero if not runnable
+for f in tests/test_*.py; do ./.venv/bin/python "$f"; done
 
 cd ../frontend
-npx tsc --noEmit                 # must be clean
+npx tsc --noEmit                               # must be clean
 ```
+
+Fourteen standalone suites, no pytest. Each prints `N/N passed` and exits
+non-zero on any failure, so a red suite fails a CI run. **The counts are in
+[`STATUS.md`](STATUS.md)** — one table, measured, and the only place they are
+written down.
 
 ### Run it all at once (optional)
 
@@ -334,8 +339,6 @@ cd frontend && npm run dev
 ---
 
 ## Architecture
-
-### The chain
 
 ```
 open data (fetch_*.py)
@@ -355,20 +358,34 @@ open data (fetch_*.py)
 Every arrow is an HTTP call. The frontend never touches the filesystem or a
 database; the backend never knows what Cesium is.
 
-### Layers
+Four decisions tell you what kind of tool this is before you read any code. The
+argument for each, and the alternative that was rejected, is in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — sixteen numbered decisions, the
+single home for design rationale.
 
-| Layer | Path | Responsibility |
-|---|---|---|
-| Routers | `backend/app/routers/` | HTTP only. Parse, delegate, serialise. No business logic, no filesystem. |
-| Schemas | `backend/app/schemas/` | The wire contract. `RowModel` translates storage ↔ wire. |
-| Services | `backend/app/services/` | All business logic: cascade deletes, bbox normalisation, overlay resolution. |
-| Store | `backend/app/db.py` | Reads and writes documents. The *only* module that knows the store is files. |
-| Config | `backend/app/config.py` | Settings, with paths anchored to `backend/`, never to the cwd. |
-| Raster scripts | `backend/scripts/` | Fetch and analysis. Pure functions over arrays; they attach results to a scene at the end. |
-| API client | `frontend/src/api/` | One `fetch` wrapper, one module per resource, typed. |
-| Stores | `frontend/src/state/` | Zustand. `sceneStore` and `planStore` only. |
-| View | `frontend/src/view/` | Cesium. `SandboxViewer` owns the Viewer; `terrainLoader`, `demProvider`, `cityModel` and `interventionLayer` are separate concerns. |
-| Components | `frontend/src/components/` | Panel chrome, sliders, project catalog, stats, chat and the missing-artefact notice. No Cesium imports. |
+- **Store mode is a switch, not a rewrite.** The target is PostGIS + MinIO; this
+  host has neither, so the store is JSON on disk with the boundary at exactly two
+  modules. No route, schema or frontend code knows which store is active.
+- **Honesty is a feature, not a disclaimer.** Every raster writes a `.json`
+  sidecar listing its constants and sources, and a failed overlay is reported in
+  the panel instead of swallowed. Three separate bugs presented as "the toggle
+  does nothing", and two were invisible to the type checker — making failure
+  visible is what turned a guess into a diagnosis.
+- **Rasters are generated artefacts, not source.** No PNG is a source of truth;
+  each is reproducible, and `fetch_heat_anchor.py --check` is a drift gate that
+  fails if the committed file stops agreeing.
+- **Three axes, never one score — and the tool refuses to grade.** TC 1/06 §6
+  gives no absolute benchmark, so nothing prints a pass or fail: `verdict` is
+  `null`, `combinedScore` is `null`, and `scenario/compare` refuses to rank
+  without weights. The units are incommensurable and the axes genuinely conflict
+  — raising the western blocks 40% taller gives more shade *and* more wind
+  blockage at once — so a single number would settle that trade-off silently.
+
+- **Why it is built this way** — the sixteen decisions, in depth:
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **Which module does what, and the layer rules** —
+  [`CLAUDE.md`](CLAUDE.md#layer-responsibilities) (backend) and
+  [`docs/FILE_STRUCTURE.md`](docs/FILE_STRUCTURE.md) (frontend).
 
 ### API surface
 
@@ -376,14 +393,14 @@ database; the backend never knows what Cesium is.
 |---|---|---|
 | `GET` | `/health` | Liveness |
 | `POST` | `/api/scenes` | Create a scene from a study area |
-| `GET` | `/api/scenes/{sceneId}` | Read a scene |
-| `PUT` | `/api/scenes/{sceneId}` | Update a scene |
-| `DELETE` | `/api/scenes/{sceneId}` | Delete a scene **and cascade** its plans and interventions |
+| `GET` `PUT` `DELETE` | `/api/scenes/{sceneId}` | Read, update, or delete a scene — **delete cascades** to its plans and interventions |
 | `GET` | `/api/scenes/{sceneId}/terrain` | Terrain + imagery + overlay URLs, bbox, centre |
 | `GET` | `/api/scenes/{sceneId}/plans` | Plans under a scene |
 | `PUT` | `/api/plans/{planId}` | Create or update a plan |
 | `GET` | `/api/plans/{planId}/interventions` | Interventions as a GeoJSON `FeatureCollection` |
 | `POST` | `/api/scenes/{sceneId}/ai-plan` | **Natural language → a draft plan** (the spec's reserved AI slot) |
+| `POST` | `/api/scenes/{sceneId}/run` | Apply the active plan and return baseline-vs-scenario stats + re-rendered overlays |
+| `POST` | `/api/scenes/{sceneId}/chat`, `/chat/stream` | Grounded answer card; the streamed variant sends SSE step events |
 | `GET` | `/api/scenes/{sceneId}/ledger` | The buffer deficit, and what stored interventions do to it |
 | `GET` | `/api/scenes/{sceneId}/sea-level` | Official HKO 2100 projections run through the ledger |
 | `GET` | `/api/scenes/{sceneId}/scenarios` | Three published CEDD development programmes, encoded |
@@ -395,60 +412,6 @@ database; the backend never knows what Cesium is.
 | `GET` | `/api/scenes/{sceneId}/drainage/hourly` | Hourly storm simulation — rain and drainage per hour, cited reference storms, an enforced whole-simulation mass balance, and the DSD 134 mm/h design standard as the stated capability proxy |
 | `POST` | `/api/scenes/{sceneId}/scenario/evaluate` | Three separate axis deltas — and **no combined score** |
 | `POST` | `/api/scenes/{sceneId}/scenario/compare` | Order scenarios **only under stated weights**; refuses without them |
-
----
-
-## Design decisions and why
-
-The reasoning behind every structural choice lives in
-**[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — 15 numbered decisions, each
-with the alternative that was rejected and why. It is the single home for that
-material; this section used to restate eight of them and had drifted out of
-agreement with the other seven.
-
-Four points are worth having on the front page.
-
-**Store mode is a switch, not a rewrite.** The target is PostGIS + MinIO. This
-host has no Docker or Postgres, so the store is JSON on disk, with the boundary
-drawn at exactly two modules — `app/db.py` and `app/services/scene_service.py`.
-No route, no schema and no frontend code knows which store is active.
-
-**Honesty is a feature, not a disclaimer.** Every raster writes a `.json`
-sidecar next to its `.png` listing every constant, assumption and source. The
-viewer reports a failed overlay in the panel instead of swallowing it. This is
-not decoration: three separate bugs presented as "the toggle does nothing" — an
-unregistered Vite alias, a StrictMode-destroyed viewer, and an image that failed
-to decode — and the first two were invisible to the type checker. Making failure
-visible is what turned a guess into a diagnosis.
-
-**Rasters are generated artefacts, not source.** No PNG is committed as a source
-of truth; each is reproducible, and `--check` asserts the committed file still
-does:
-
-```bash
-python scripts/fetch_landcover.py                  # → landclass_hsk.npy
-python scripts/fetch_dem.py                       # → dem_hsk.npy
-python scripts/make_wetgrid.py --rainfall 450# → wetgrid_hsk.png
-python scripts/make_heatmap.py                     # → heatmap_hsk.png
-python scripts/fetch_heat_anchor.py                # → reference/heat_anchor.json
-python scripts/fetch_heat_anchor.py --check        # drift gate
-```
-
-**Three axes, never one score — and the tool refuses to grade.** TC 1/06 §6 gives
-no absolute benchmark and the AVA policy behind it (Ng & Cheng, 2009) states that
-whether the better design option meets a standard "cannot be known". So this tool
-compares and never grades: `verdict` is `null` on every response and nothing prints
-a pass or fail. The obvious thing to do with three axes — weight them and add them
-up — is the one thing refused. The units are incommensurable (a fraction of ground,
-a dimensionless blockage, cubic metres), the ventilation axis has no threshold to
-normalise against, and the axes genuinely conflict: raising the western blocks 40%
-taller gives more shade *and* more wind blockage at once. So
-`scenario/compare` **refuses to rank without weights**; given weights it echoes
-them back, names the total `weightedFavourability` (never `score`) and keeps the
-three raw axes on every row. A default weight set would quietly become this
-project's opinion about which axis matters — the judgement the guidance says
-cannot be settled. The same instinct drives `mass_balance()` to **raise** rather
-than report a flag: a leak should be loud, not a field someone can ignore.
 
 ## Generative AI
 
@@ -476,7 +439,7 @@ That turns an open-ended generation problem into a selection problem, which is
 what language models are actually reliable at, and it makes hallucinated
 geometry **structurally impossible** rather than filtered out. A test asserts the
 catalogue handed to the model contains no coordinates at all, so the guarantee
-cannot quietly erode.
+cannot quietly erode. ([Decision 11](docs/ARCHITECTURE.md#decision-11--the-model-selects-sites-it-never-emits-coordinates).)
 
 ### Grounding, not invention
 
@@ -506,12 +469,11 @@ only worth having if there is something to compare it against.
 
 ### Status and honesty
 
-Every feature is `source="ai"` and `status="draft"`, per ADR-030 — the engine
-refuses to compute on draft geometry, which is the correct posture for
-machine-proposed sites. Generated features travel the **same**
-validate → store → render path as hand-drawn ones, which §3.3.2 requires
-("用户绘制与 AI 方案落地共用同一套管线"), so nothing downstream special-cases AI
-output.
+Every feature is `source="ai"` and `status="draft"` — the engine refuses to
+compute on draft geometry, which is the correct posture for machine-proposed
+sites. Generated features travel the **same** validate → store → render path as
+hand-drawn ones, which §3.3.2 requires ("用户绘制与 AI 方案落地共用同一套管线"),
+so nothing downstream special-cases AI output.
 
 The LLM path is exercised on every test run through an injected transport that
 replays a recorded response, so it is not untested code waiting for a key.
@@ -525,7 +487,7 @@ rather than merely fluent:
 1. **It explains, it does not compute.** The run's own numbers are handed over as
    a FACTS block. Nothing is recalculated inside a Q&A — recomputing would turn a
    fast reply into a 0.7 s simulation *and* let the answer drift from the numbers
-   on screen.
+   on screen. ([Decision 16](docs/ARCHITECTURE.md#decision-16--the-chat-explains-a-run-it-never-computes-one).)
 2. **The answer is a card, not a paragraph.** Title, one-sentence answer, cause,
    next step, stats, confidence with a reason, caveats, follow-ups. The same
    fields are always present, so a cause the numbers do not support shows as
@@ -540,10 +502,11 @@ own figures and labelled `source: "template"`. That is not a degraded mode to
 hide — every number in it is one the run actually produced, which is more than a
 hallucinated answer can claim.
 
-**Configuration** (three lines in `backend/.env`):
+**Configuration** (in `backend/.env`). `ANTHROPIC_API_KEY` wins over the router,
+so leave it empty unless Anthropic is what you want:
 
 ```ini
-ANTHROPIC_API_KEY=                                # leave empty: it wins over the router
+ANTHROPIC_API_KEY=
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=sk-or-...
 LLM_MODEL=google/gemma-4-31b-it:free
@@ -552,8 +515,8 @@ LLM_FALLBACK_MODELS=nvidia/nemotron-3-ultra-550b-a55b:free
 ```
 
 `LLM_FALLBACK_MODELS` matters because a free tier is a shared pool: a `:free`
-model throttled upstream is the normal case, not an emergency. See
-[gap 10](STATUS.md) for the measured latency.
+model throttled upstream is the normal case, not an emergency. Measured latency
+and the throttling behaviour are in [`STATUS.md`](STATUS.md) (gap 10).
 
 ### Running it live, with no key at all
 
@@ -589,33 +552,23 @@ validates the configured model id against `GET /v1/models` rather than trusting 
 hard-coded string, so a rotated id is caught before the demo rather than during
 it.
 
-### Two things a small local model forced us to fix
-
-**The model must not choose the tool.** Both tools were originally advertised
-with a permissive `tool_choice`, on the reasoning that a system-prompt rule
-would be enough. `qwen2.5:3b-instruct` settled that: asked *"make the district
-25% taller to reduce flood risk"* with both tools available, it returned **no
-tool call at all** and the feature vanished silently. Offering one tool is a
-guarantee; a prompt rule is a request. Routing is now decided in code by
-`route_tools()`, and the model is never asked.
-
-**Tool-calling is not universal, structured output is.** The same model returns
-nothing at all for the massing schema. So the OpenAI-compatible provider falls
-back to JSON-schema-constrained output
-(`response_format: {"type": "json_schema"}`), which the same model satisfies
-instantly and correctly. The grounding guarantee is untouched either way,
-because it lives in `_materialise`, not in the tool plumbing.
-
-Decoding is pinned to `temperature: 0`. At default temperature the same sentence
-gave different answers on successive runs, and a demo must show the plan you
-rehearsed.
+A small local model also forced two structural changes, both recorded in
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#decision-15--verify-the-reference-implementation-then-reimplement-if-it-will-not-install):
+tool routing is decided **in code**, not by the model (a 3B model asked with two
+tools available returned no tool call at all and the feature vanished silently),
+and the OpenAI-compatible path falls back to JSON-schema-constrained output
+because tool-calling is not universal. Decoding is pinned to
+`temperature: 0` — at the default the same sentence gave different answers on
+successive runs, and a demo must show the plan you rehearsed.
 
 ### Try it
 
 ```bash
 cd backend
 python scripts/ai_plan.py "add two water reservoirs and a green space" --dry-run
-python scripts/ai_plan.py "make the district 25% taller"
+python scripts/ai_plan.py "add three 60 m residential towers in the east"
+python scripts/ai_plan.py "make the western blocks 30% taller"
+python scripts/ai_plan.py "rotate the northern blocks 20 degrees"
 python scripts/llm_probe.py
 ```
 
@@ -623,15 +576,6 @@ python scripts/llm_probe.py
 not design a district. It places *interventions* and it places and reshapes
 *buildings* — five operations, all grounded in the analysis. It cannot invent a
 footprint, and it cannot move a block.
-
-```bash
-cd backend
-python scripts/ai_plan.py "add three 60 m residential towers in the east"
-python scripts/ai_plan.py "make the western blocks 30% taller"
-python scripts/ai_plan.py "rotate the northern blocks 20 degrees"
-python scripts/ai_plan.py "add two water reservoirs and a green space"
-python scripts/llm_probe.py
-```
 
 ## 3D city model, and editing it
 
@@ -652,13 +596,15 @@ WorldCover 10 m `paved` class says where the ground *is* built up, and blocks go
 only there. The land-use input is real; the footprints are not surveyed, heights
 are an assumed distribution (11–131 m, mean 35 m, four classes), and every
 feature records `height_source: ASSUMED_DISTRIBUTION_NOT_SURVEYED`. The panel
-carries a **provisional** chip for exactly this reason.
+carries a **provisional** chip for exactly this reason. Overture Maps is a
+measured replacement and the next thing to do here — see
+[`STATUS.md`](STATUS.md) gap 3.
 
 **Why geometry and not a glTF massing model.** A mesh would be one draw call but
 would be *opaque* — you cannot change a building's height inside it. Cesium
 entities are per-feature property bags, so a height edit is a property
 assignment: no rebuild, no re-upload, no regeneration. Changing the model is
-the point.
+the point. ([Decision 12](docs/ARCHITECTURE.md#decision-12--geometry-not-a-mesh-for-the-city-model).)
 
 **Editing by hand, three ways:**
 
@@ -697,19 +643,16 @@ the panel cheerfully reported success. It is the worst failure mode in this
 project: not an error, not a wrong number, but a 3D result that answers a
 question nobody asked.
 
-So every operation now carries a **scope**, and it is resolved in the backend
-from three sources and nowhere else:
-
-- a **region** — one of ten named fractions of the locked study-area bbox
-  (`west`, `east`, `north`, `south`, `centre`, and the four corners). Plain
-  arithmetic over a constant the project already owns, so there is nothing for a
-  model to hallucinate.
-- a **site id** from the grounded catalogue — `water_reservoir#0`,
-  `permeable_paving#2` — whose polygon the analysis already derived.
-- nothing, meaning the whole study area.
+So every operation now carries a **scope**, resolved in the backend from three
+sources and nowhere else: a **region** (one of ten named fractions of the locked
+study-area bbox — plain arithmetic over a constant the project already owns, so
+there is nothing for a model to hallucinate); a **site id** from the grounded
+catalogue (`water_reservoir#0`, `permeable_paving#2`), whose polygon the analysis
+already derived; or nothing, meaning the whole study area.
 
 A region we do not recognise produces **no edit at all**, never a fallback to
 "everything". A test asserts that directly, because the fallback is the bug.
+([Decision 13](docs/ARCHITECTURE.md#decision-13--a-scope-is-resolved-in-code-or-the-operation-does-not-happen).)
 
 ### Where a placed block comes from
 
@@ -750,7 +693,6 @@ engineering choice than a 1.6 KB box:
 
 The layer reports how many loaded, so a dead URL is visible rather than silent.
 
-
 ---
 
 ## Data and overlays
@@ -775,75 +717,42 @@ from machine-retrieved OSM anchors and recorded in
 > would shift if it changed, which is exactly why it is recorded rather than
 > typed into a script.
 
-Full provenance, the ESA→our-class mapping, and the rejected sources are in
+Full provenance, the ESA→our-class mapping, control points and the rejected
+sources are in [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
+
+### The wet grid, in one paragraph
+
+A **screening view, not a flood prediction**. SCS-CN runoff depth per cell from
+rainfall and the class Curve Number (hydrologic soil group D, assumed); then
+retention subtracted — land cover sets how much *runs off*, explicit storage sets
+how much can be *held*, and **no cell is counted in both**; then a level-pool
+solve by bisection for the water-surface elevation that holds the remainder, so
+the picture is a pond rather than a uniform smear and the printed volume matches
+the picture. Verified monotonic in rainfall. The **headline deficit**
+(`bufferDeficitM3`) comes from this path; a separate D8 fill-and-spill cascade
+exists as an **additive** screening surface and does not replace or correct it.
+The reasoning and the citations are in
+[`docs/research/ch03_drainage.md`](docs/research/ch03_drainage.md).
+
+### The heat overlay, in one paragraph
+
+Land class (hand-authored index) + sky view + cast shadow → a **relative
+heat-exposure index on a 0–1 scale**, rendered at a summer solar day (day 196).
+It is **not degrees Celsius** and **not** a modelled air-temperature field.
+What it does state is the band it is read against, from committed cited data
+(`backend/data/reference/heat_anchor.json`): **index 0.0 ↔ 26.4 °C, index 1.0 ↔
+32.7 °C**, the mean daily min/max over July 2015–2024 at HKO **Lau Fau Shan**.
+That is a stated band for a Hong Kong summer, ~20 km away, not a measurement of
+this site; it is *air* temperature, never skin. Cross-checked against the HKO
+1991–2020 normals and the ERA5 archive at the site centroid, neither of which is
+the anchor. `--heatwave` is a *display* stretch, not a scenario. Detail in
+[`docs/research/ch01_urban_heat.md`](docs/research/ch01_urban_heat.md) and
 [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
-
-### The wet grid
-
-A **screening view**, not a flood prediction. The pipeline, in the order the
-baseline storage ledger requires:
-
-1. **Generation** — SCS-CN runoff depth per cell from rainfall and the class
-   Curve Number (hydrologic soil group D, assumed).
-2. **Retention** — subtract what standing water and wetland already hold, plus a
-   depression allowance elsewhere. Land cover sets how much *runs off*; explicit
-   storage sets how much can be *held*; **no cell is counted in both.**
-3. **Allocation** — solve for the water-surface elevation that holds the
-   remaining volume, by bisection. A level pool, so the picture is a pond rather
-   than a uniform smear, and the printed volume matches the picture.
-
-Verified monotonic in rainfall: 0 / 200 / 450 / 800 mm gives
-0 / 8.7 / 17.0 / 27.2 % wet area.
-
-The wet grid is a **level-pool** allocation: water is placed by water-surface
-level, not routed downhill, and the **headline deficit** (`bufferDeficitM3`,
-`wetgrid_hsk.npy`) comes from this path. A **separate** D8 fill-and-spill routing
-cascade now exists (`routed_depth_hsk.npy`,
-`GET /api/scenes/{id}/drainage/routed`, mass-balanced to 1e-15 relative) as an
-**additive screening surface** — it does **not** replace or correct the headline
-number, and it is not a flood prediction. The two are different pictures of the
-same water and are deliberately not merged.
-
-### The heat overlay
-
-**The final choice: real air temperature, cited, as a band the relative index is
-read against — not a temperature field.**
-
-The field itself is unchanged: land class (hand-authored) + sky view + cast
-shadow → a **relative heat-exposure index on a 0–1 scale** → RGBA ramp. It is
-**not degrees Celsius** and **not** a modelled air-temperature field. What is new
-is that the scale now states the band it is read against, from committed, cited
-data (`backend/data/reference/heat_anchor.json`):
-
-- **Real, not synthesized.** Source: **HKO open data — Lau Fau Shan (LFS)
-  station daily air temperature**,
-  `https://data.weather.gov.hk/weatherAPI/opendata/opendata.php`
-  (`dataType=CLMTEMP|CLMMAXT|CLMMINT`, `station=LFS`), retrieved **2026-10-09**.
-- **Air temperature, not skin.** Every skin-temperature source (Landsat 8/9 C2 L2
-  ST, MODIS MOD11, ECOSTRESS) is credential-gated and was unreachable from this
-  host. Skin runs 10–20 °C above air on a hot paved surface and is **not**
-  claimed.
-- **The band: [26.4, 32.7] °C.** Index 0.0 ↔ 26.4 °C (a typical July night, the
-  mean daily minimum); index 1.0 ↔ 32.7 °C (a typical July afternoon, the mean
-  daily maximum). Mean of the daily min/max over **July 2015–2024**, missing
-  values excluded.
-- **Honest caveat.** This is a **stated band for a Hong Kong summer, not a
-  measurement of this site** — the LFS station is ~20 km away, and it is a 10-year
-  July climatology, not the site's air temperature on any day.
-- Cross-checked against the HKO 1991–2020 normals (HKO HQ, July 26.9 / 31.6) and
-  the Open-Meteo ERA5 archive at the site centroid (July mean-of-daily-max
-  30.99 °C). Neither is the anchor.
-
-The anchor is a **committed file, never fetched at request time** (deterministic);
-it is reproduced by `backend/scripts/fetch_heat_anchor.py`. The overlay is
-rendered at a **summer solar day (day 196, 15 July)** to match the July band.
-`--heatwave` is still a *display* stretch, not a scenario.
 
 ### Both scripts register themselves
 
 Each script attaches its output to the seeded scene, so `GET /terrain` starts
-returning real URLs and the viewer switches light up. That is what makes §4.1's
-"reserved fields" testable rather than aspirational.
+returning real URLs and the viewer switches light up.
 
 **The sliders do not trigger a recomputation.** They write `envParams` into the
 frontend store only; re-running the script is a manual step. The panel says so.
@@ -852,72 +761,33 @@ frontend store only; re-running the script is a manual step. The panel says so.
 
 ## Testing
 
-There is no pytest in the venv — every suite is a plain script that prints
-`N/N passed` and exits non-zero on any failure, so a red suite fails a CI run:
-
 ```bash
 cd backend
-for f in tests/test_*.py; do ./.venv/bin/python "$f"; done   # 404 checks, 11 suites
-
-# individually:
-python tests/test_design_metrics.py      #  79 — sky view, shadow, per-cell FAD
-python tests/test_scenario.py            #  54 — three axes, no combined score, compare()
-python tests/test_ai_plan.py             #  39 — grounding, scope, placement, hostile responses
-python tests/test_ventilation.py         #  40 — frontal area density, corridors, FAD ratio
-python tests/test_ledger.py              #  39 — the storage ledger and the routed cascade
-python tests/test_building_fit.py        #  32 — per-building candidate scoring
-python tests/test_published_scenarios.py #  28 — three CEDD programmes
-python tests/test_hydrology.py           #  26 — depressions, fill-and-spill, mass balance, HAND
-python tests/test_contract.py            #  23 — API contract
-python tests/test_constants.py           #  18 — constants, DEM, raster/feature invariants
-python tests/test_sea_level.py           #  15 — HKO projections
+for f in tests/test_*.py; do ./.venv/bin/python "$f"; done
 cd ../frontend && npx tsc --noEmit
 ```
 
-**`test_contract.py`** — every endpoint, the cascade delete, the `sceneId` alias,
-bbox ring closure, and that the error envelope carries both shapes.
+Every suite is a standalone script that prints `N/N passed` and exits non-zero on
+any failure — there is no pytest in the venv. **The per-suite counts and what each
+one covers live in [`STATUS.md`](STATUS.md)**, which is the only place they are
+written down; a count repeated in a second file is a count that goes stale in it.
 
-**`test_constants.py`** exists because the source documents name two constants
-that *fail silently*. One of them was caught in practice: written as
-`S = 25400/CN − 2540` it returns negative retention for any Curve Number above
-~91, which makes the denominator of `Q` negative and produced a first run
-reporting **5.4 × 10¹⁸ m³** of runoff — while rendering a perfectly
-plausible-looking image. The correct form is `−254`, now pinned against the
-TR-55 worked example.
+What this suite exists to catch, in one example: the source documents name
+constants that *fail silently*. Written as `S = 25400/CN − 2540` the retention
+term goes negative above CN ≈ 91, which makes the denominator of `Q` negative —
+and the first run reported **5.4 × 10¹⁸ m³** of runoff while rendering a
+perfectly plausible image. The correct form is `−254`, now pinned against the
+TR-55 worked example. The same instinct guards the DEM: the committed
+`dem_terrain_rgb.png` must decode back to `dem_hsk.npy` within terrain-RGB's own
+0.1 m quantum, because the Python encoder and the browser decoder are two
+implementations of one formula in two languages. History in
+[`CHANGELOG.md`](CHANGELOG.md).
 
-Two more guards the same instinct: the committed `dem_terrain_rgb.png` must
-decode back to `dem_hsk.npy` within terrain-RGB's own 0.1 m quantum (the Python
-encoder and the browser decoder are two implementations of one formula in two
-languages, and if they drift the terrain renders subtly wrong with nothing
-erroring), and the DEM's height range must be plausible for a coastal Hong Kong
-floodplain — a DEM that decodes to 800 km is a broken source, not a broken night.
-
-**`scripts/preflight.py` guards the environment itself, which is where the
-most common failure actually lives.
-
-A note on verification: **a clean `tsc` did not mean the frontend worked.** Four
-runtime bugs passed the type checker, including a `tsconfig` path alias that
-TypeScript resolved and Vite did not. Frontend changes here are verified by
-driving a real headless-Chromium render and asserting zero console errors, not
-by the compiler.
-
-**The 3D editing path is verified the same way, and it earned its keep.** Two
-bugs in it were invisible to every other check in this repository:
-
-- **Click-to-select never worked.** `GeoJsonDataSource` copies `properties.title`
-  or `properties.name` onto `entity.name` and nothing else, and these features
-  have neither — their key is `properties.id`, which Cesium does not copy. So
-  `picked.id.name` was always `undefined`, every click resolved to "no building",
-  and the panel's "click a building to select it" did nothing at all. 915 clicks
-  across the district selected nothing. The fix is a reverse map keyed on entity
-  identity; after it, nine clicks selected one.
-- **The AI's scope was discarded.** "Make the western blocks 30% taller" produced
-  a correct `scale_all` for the whole district. No test could see it, because the
-  result was a valid feature carrying a valid multiplier.
-
-The browser check therefore asserts what the *viewer* reports, not what the
-backend asked for — "1,232 of 2,639 buildings" — because a 3D view looks the same
-either way.
+**A clean `tsc` did not mean the frontend worked.** Four runtime bugs passed the
+type checker, including a `tsconfig` path alias that TypeScript resolved and Vite
+did not. Frontend changes here are verified by driving a real headless-Chromium
+render and asserting what the *viewer* reports — "1,232 of 2,639 buildings" — not
+by the compiler and not by what the backend was asked for.
 
 ---
 
@@ -947,15 +817,15 @@ either way.
 
 ```
 T1/
-├── README.md                     ← you are here
-├── STATUS.md                     what actually works, measured
+├── README.md                     ← you are here: what it is, how to run it
+├── STATUS.md                     what actually works, measured, + the live gap list
 ├── CHANGELOG.md                  every non-trivial change, newest first
-├── CLAUDE.md                     repo conventions for AI agents
+├── CLAUDE.md                     repo conventions and layer rules for AI agents
 ├── docs/
 │   ├── ARCHITECTURE.md           the 16 design decisions, in depth
 │   ├── DATA_SOURCES.md           provenance, licences, rejected sources
 │   ├── RUNG_AND_BUSINESS.md      rung declaration + business model
-│   ├── FILE_STRUCTURE.md         module dependency map
+│   ├── FILE_STRUCTURE.md         frontend module map
 │   ├── research/                 the five cited research chapters
 │   ├── 技术文档.docx              the specification (Chinese, of record)
 │   └── _技术文档_clean.txt        extracted text, for grepping
@@ -978,8 +848,8 @@ T1/
 │   │   ├── _overlay_common.py    shared grid, land classes, CN, resampling
 │   │   ├── make_wetgrid.py       CN runoff → storage → level-pool fill
 │   │   └── make_heatmap.py       land class → index → RGBA
-│   ├── tests/                    contract + constants
-│   ├── data/                     the file store (git-tracked, see below)
+│   ├── tests/                    fourteen standalone suites
+│   ├── data/                     the file store (see docs/FILE_STRUCTURE.md)
 │   ├── requirements.txt
 │   └── .env.example
 └── frontend/
@@ -1000,37 +870,18 @@ T1/
     │   │   └── interventionLayer.ts  discrete features (extrusion)
     │   ├── components/           ChatPanel, HudPanel, StatsPanel, SlidersPanel,
     │   │                         ProjectCatalog, ViewButtons, SceneNotice
-    │   ├── App.tsx  main.tsx  index.css
+    │   └── App.tsx  main.tsx  index.css
     ├── vite.config.ts            @ alias + /api and /static dev proxies
     ├── .env.local.example
     └── package.json
 ```
 
-### What is committed, and what is not
-
-`backend/data/` is committed, so a fresh clone runs without fetching anything.
-Every file below is meaningful — nothing here is a placeholder someone forgot:
-
-| File | What it is |
-|---|---|
-| `scene_hsk.json` | the locked study area, with its provenance |
-| `scenes/<id>.json`, `plans/<id>.json` | the seeded scene and baseline plan |
-| `dem_hsk.npy`, `dem_terrain_rgb.png`, `dem_hsk.json` | real elevation + its manifest |
-| `landclass_hsk.npy`, `landcover_hsk.json` | real land cover + its manifest |
-| `rasters/wetgrid_hsk.*`, `rasters/heatmap_hsk.*` | the two overlays + manifests |
-| `rasters/flow_receiver_hsk.npy`, `flow_raw_elev_hsk.npy`, `flow_filled_hsk.npy` | the D8 routing graph, the raw surface, and the Priority-Flood surface the receiver was derived from |
-| `rasters/routed_depth_hsk.npy` | the routed fill-and-spill depth — a screening surface beside the level-pool headline, not a replacement |
-| `reference/heat_anchor.json` | the cited air-temperature band the heat index is read against |
-| `reference/hsk_ava_reference.json` | the published AVRG73 wind regime and velocity ratios (carried, never recomputed) |
-
-Not committed, and regenerated on demand:
-
-| Path | Why |
-|---|---|
-| `backend/data/dem_cache/` | Transient HTTP cache — one JSON file per API batch, keyed on coordinates so an interrupted `fetch_dem.py` resumes for free. Gitignored. Safe to delete. |
-| `backend/.env`, `frontend/.env.local` | Machine-local. Copy from the `.example` templates. |
-| `backend/.venv/`, `frontend/node_modules/` | Standard build artefacts. |
-| `docs/*.docx`, `docs/_*_extracted.txt` | Kept for provenance; the `.docx` is the specification of record. |
+`backend/data/` is a **runtime store** with three committed fixtures, so a fresh
+clone runs without fetching anything; everything else under it is residue from
+running the suites or poking the API. Which files are committed, why a raster is
+a render rather than data, and what is safe to delete are stated once, in
+[`docs/FILE_STRUCTURE.md`](docs/FILE_STRUCTURE.md) and the annotations in
+`.gitignore`.
 
 ---
 
@@ -1044,8 +895,7 @@ that level-pool path still produces the headline deficit. A D8 fill-and-spill
 cascade and a HAND cross-check now exist as an **additive screening surface**,
 but they are screening-level, they do not replace the level-pool headline, and
 they are not a flood prediction. No tide boundary — the Hong Kong 0.146 m
-mCD↔mPD datum offset is a named constant with no tide series behind it yet. It
-shows *where water would collect over plausible topography*, nothing more.
+mCD↔mPD datum offset is a named constant with no tide series behind it yet.
 
 **The Curve Number table is unverified.** Hydrologic soil group D is *assumed*
 for HSK/HT and has not been independently checked. Runoff volume scales directly
@@ -1067,38 +917,19 @@ No vertical datum shift, no LiDAR, no bare-earth correction — and if vegetatio
 or structures bias elevation upward, a *deficit* estimate is biased too.
 
 **No physics engine, no PostGIS.** Both out of scope for this phase and both
-named in the task plan. (An AI module does exist — see
-[Generative AI](#generative-ai) — but its limits are its own, below.)
+named in the task plan.
 
 **The chat cannot invent a number the run did not produce — but it can still be
 wrong about what the number means.** Grounding checks arithmetic, not
-interpretation: a card can be fully grounded and still draw a silly conclusion
-from true figures. The confidence field and its one-line reason exist so the
-reader can judge that, and a card is never shown without them. The chat also
-holds no thread: a reload loses the conversation, and it never recomputes a
-scenario, so it cannot answer a question about a run that has not happened yet.
+interpretation. The chat also holds no thread (a reload loses the conversation)
+and never recomputes a scenario.
 
-**The free-model tier is slow and throttled.** Shared pools rate-limit without
-warning, so a live answer can take 40–55 s and can fall through to a slower
-fallback model. That is a property of the `:free` tier, not of the tool — a paid
-model id removes it. See [gap 10](STATUS.md).
+**The city model is massing, not buildings,** and the AI's suggestions are
+scenarios, not designs. See [3D city model](#3d-city-model-and-editing-it).
 
-### Next steps, in priority order
-
-1. **Verify the Curve Number table** independently (HSG for HSK/HT). Biggest
-   single lever on the numbers.
-2. **Replace the study-area extent** with the OZP S/HSK/3 sheet extent.
-3. **Standardise the Python interpreter** — there are two, and only one runs the
-   raster scripts.
-4. **Reconcile the two drainage readings** — the routed fill-and-spill cascade
-   exists and balances, but the headline deficit still comes from the level-pool
-   path. Decide which is the headline, or show both.
-5. **Replace the ~20 km-away anchor** with a site-specific source (a nearby
-   station, or a Landsat/MODIS LST scene once credentials exist), and keep the
-   air-vs-skin distinction.
-6. **Stand up PostGIS + MinIO** and re-run the contract suite against it.
-7. **Validate against a Hato flood record**, which is what the task plan's
-   comparison step assumes exists.
+**Everything still open, ordered by what would hurt a user first, is in
+[`STATUS.md`](STATUS.md)** — that list is the single backlog, and it is not
+repeated here.
 
 ---
 
