@@ -61,6 +61,18 @@ class Settings(BaseSettings):
     llm_model: str = ""
     # Ollama needs a placeholder key but does not check it.
     llm_allow_no_key: bool = True
+    # How to ask an OpenAI-compatible endpoint for JSON.
+    #   auto -- send response_format, and drop it if the server 400s (default;
+    #           most free OpenRouter models reject the parameter)
+    #   json -- always send it
+    #   off  -- never send it (rely on the contract in the prompt)
+    llm_json_mode: str = "auto"
+    # Comma-separated model ids tried in order when the primary one fails with a
+    # retryable error (429 / 5xx) or answers with empty content. The free tiers
+    # are shared pools and are rate-limited without warning, so a single model
+    # id is a single point of failure: on OpenRouter ":free" one of them being
+    # throttled is the normal case, not the exceptional one.
+    llm_fallback_models: str = ""
 
     cors_origins: list[str] = [
         "http://localhost:5173",

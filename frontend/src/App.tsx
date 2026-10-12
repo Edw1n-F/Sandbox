@@ -61,15 +61,24 @@ export default function App() {
 
         {chatOpen && <ChatPanel />}
 
-        {/* Top-right column: scenario inputs + project catalog */}
-        <Box sx={{ position: 'absolute', top: 12, right: 12, zIndex: 1200, display: 'flex', flexDirection: 'column', gap: 1.25, width: 300 }}>
+        {/* Right column: scenario inputs, project catalog (scrolls), stats
+            (bottom-anchored). One shared column so the three never overlap
+            each other — the previous layout had the expanded catalog running
+            under a separately-positioned stats panel. pointer-events:none on
+            the wrapper lets empty space fall through to the canvas; each
+            panel opts back in via HudPanel's pointerEvents:'auto'. */}
+        <Box sx={{
+          position: 'absolute', top: 12, right: 12, bottom: 16, zIndex: 1200,
+          display: 'flex', flexDirection: 'column', gap: 1.25, width: 300,
+          pointerEvents: 'none',
+        }}>
           <SlidersPanel />
-          <ProjectCatalog />
-        </Box>
-
-        {/* Bottom-right: stats */}
-        <Box sx={{ position: 'absolute', right: 12, bottom: 16, zIndex: 1200 }}>
-          <StatsPanel />
+          <Box sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', pointerEvents: 'auto' }}>
+            <ProjectCatalog />
+          </Box>
+          <Box sx={{ mt: 'auto', pointerEvents: 'auto' }}>
+            <StatsPanel />
+          </Box>
         </Box>
 
         {/* Bottom-centre: view buttons */}

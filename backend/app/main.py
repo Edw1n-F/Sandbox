@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
-from app.routers import plans, scenes, terrain
+from app.routers import chat, plans, scenes, terrain
 from app.services.scene_service import ResourceNotFound
 
 app = FastAPI(
@@ -44,6 +44,7 @@ app.add_middleware(
 app.include_router(scenes.router, prefix="/api")
 app.include_router(plans.router, prefix="/api")
 app.include_router(terrain.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 
 
 # --------------------------------------------------------------------------- #

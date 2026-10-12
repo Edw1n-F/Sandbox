@@ -95,6 +95,13 @@ def _scene_to_read(doc: dict[str, Any]) -> SceneRead:
     read = SceneRead.from_row(doc)
     read.wet_grid_url = _resolve_overlay_url(doc, "wet_grid_path")
     read.heatmap_url = _resolve_overlay_url(doc, "heatmap_path")
+    # The city model + its provenance are resolved here too, not only in
+    # `get_terrain`: the frontend's `loadScene` reads `SceneRead`, and a
+    # `cityModelUrl` that is null on the scene but set on the terrain
+    # endpoint is the kind of half-truth that breaks a different consumer
+    # later. Same existence check, same meta helper.
+    read.city_model_url = _resolve_overlay_url(doc, "city_model_path")
+    read.city_model_meta = _city_model_meta()
     return read
 
 

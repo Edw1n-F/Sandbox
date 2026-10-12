@@ -1,16 +1,23 @@
 /**
  * The left full-height LLM panel.
  *
- * The conversational half of the reorg: after each run it shows the plain-
- * language explanation (already produced by the backend, whether template or
- * model), offers a few clickable intervention suggestions, and accepts a
- * free-form instruction that routes through the existing AI plan pipeline.
+ * Two things the user can do here, and the panel keeps them apart:
  *
- * What it is honest about: with no LLM key configured, the only "AI" available
- * is the deterministic intervention parser, so free-form *questions* about the
- * sandbox cannot be answered and the panel says so rather than fabricating.
- * Suggestions and intervention instructions still work (the parser handles
- * those); Q&A is the one capability that genuinely needs a model.
+ * - **Ask about the run.** Routed to the chat agent, which answers as a
+ *   grounded card (title / sentence / what the run shows / what to do / stats /
+ *   confidence / caveats). The steps are shown while it works, and every number
+ *   in the answer is checked against the run's own outputs.
+ * - **Describe an intervention.** Still routed to the existing AI-plan
+ *   pipeline, because that is a different job: it produces geometry, not an
+ *   explanation.
+ *
+ * The card shape and the step/grounding events follow the Constellation repo's
+ * agent contract -- the part worth copying is that the answer is a set of named
+ * fields rather than prose, so a missing cause is visible instead of hidden in
+ * a paragraph.
+ *
+ * Honesty: with no model configured the card is assembled by code and labelled
+ * `template`. That is stated in the card itself, not just here.
  */
 import Box from '@mui/material/Box'
 import Chip from '@mui/material/Chip'
@@ -19,31 +26,198 @@ import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { errorMessage } from '@/api/client'
+import {
+  streamChat,
+  type AnswerCard,
+  type ChatTurn,
+  type StreamEvent,
+} from '@/api/chatApi'
 import { createAiPlan } from '@/api/planApi'
 import { useSceneStore } from '@/state/sceneStore'
+
+interface Step {
+  index: number
+  title: string
+  desc: string
+  state: 'running' | 'done'
+  ms?: number
+}
 
 interface Message {
   id: string
   role: 'ai' | 'user'
-  text: string
+  text?: string
+  card?: AnswerCard
   chips?: string[]
 }
 
 const SUGGESTIONS = [
+  'Is this better than the baseline?',
+  'What should I do next?',
   'Add a retention basin north of the canal',
-  'Plant trees along the main road',
-  'Make the western blocks 25% taller',
 ]
 
 let nextId = 1
 const mkId = () => `m${nextId++}`
 
-/** Very rough: does this look like a question rather than an intervention? */
-function looksLikeQuery(text: string): boolean {
-  return /\b(why|how|what|which|status|state|explain|compare|better|worse)\b/i.test(text) && !/\b(add|place|plant|fill|remove|rotate|resize|raise|lower|move|scale)\b/i.test(text)
+/** Does this read as an intervention instruction rather than a question? */
+function looksLikeIntervention(text: string): boolean {
+  if (/\?$/.test(text.trim())) return false
+  return /\b(add|place|plant|fill|remove|rotate|resize|raise|lower|move|scale|build)\b/i.test(text)
+}
+
+/**
+ * Pull a string field out of a possibly-unfinished JSON document.
+ *
+ * The streamed draft is JSON, so it cannot be parsed until the closing brace.
+ * Reading the field by regex is what lets the sentence appear as it is written
+ * instead of all at once at the end.
+ */
+function partialField(raw: string, field: string): string | null {
+  const m = new RegExp(`"${field}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(raw)
+  if (!m) return null
+  try {
+    return JSON.parse(`"${m[1]}"`) as string
+  } catch {
+    return m[1]
+  }
+}
+
+/** One answer card, rendered by field. */
+function CardView({ card }: { card: AnswerCard }) {
+  const ungrounded = card.grounding?.ungrounded ?? []
+  return (
+    <Box>
+      {card.eyebrow && (
+        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', mb: 0.25 }}>
+          {card.eyebrow.toUpperCase()}
+        </Typography>
+      )}
+      <Typography sx={{ fontSize: 13.5, fontWeight: 600, lineHeight: 1.35, mb: 0.75 }}>
+        {card.title}
+      </Typography>
+      <Typography sx={{ fontSize: 12.5, lineHeight: 1.6, color: 'text.primary' }}>
+        {card.sentence}
+      </Typography>
+
+      {card.cause && (
+        <Box sx={{ mt: 1.25 }}>
+          <Typography className="hud-label">{card.l1}</Typography>
+          <Typography sx={{ fontSize: 12, lineHeight: 1.55, mt: 0.25 }}>{card.cause}</Typography>
+        </Box>
+      )}
+      {card.todo && (
+        <Box sx={{ mt: 1 }}>
+          <Typography className="hud-label">{card.l2}</Typography>
+          <Typography sx={{ fontSize: 12, lineHeight: 1.55, mt: 0.25 }}>{card.todo}</Typography>
+        </Box>
+      )}
+
+      {card.stats.length > 0 && (
+        <Stack spacing={0.5} sx={{ mt: 1.25 }}>
+          {card.stats.map((s) => (
+            <Stack key={s.l} direction="row" justifyContent="space-between" alignItems="baseline" spacing={1}>
+              <Typography sx={{ fontSize: 11, color: 'text.secondary' }}>{s.l}</Typography>
+              <Box sx={{ textAlign: 'right' }}>
+                <Typography className="hud-mono" sx={{ fontSize: 11.5, color: '#5cff9d' }}>
+                  {s.v}
+                </Typography>
+                {s.ci && (
+                  <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary' }}>
+                    {s.ci}
+                  </Typography>
+                )}
+              </Box>
+            </Stack>
+          ))}
+        </Stack>
+      )}
+
+      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 1.25 }}>
+        <Box
+          className="hud-dot"
+          sx={{
+            color: card.confidence.level === 'High' ? '#5cff9d'
+              : card.confidence.level === 'Medium' ? '#ffd54f' : '#ff9d2e',
+          }}
+        />
+        <Typography sx={{ fontSize: 10.5 }}>
+          {card.confidence.level} confidence · {card.confidence.pct}%
+        </Typography>
+      </Stack>
+      <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: 0.25, lineHeight: 1.5 }}>
+        {card.confidence.note}
+      </Typography>
+
+      {ungrounded.length > 0 && (
+        <Box sx={{ mt: 1, p: 0.75, borderRadius: '4px', border: '1px solid', borderColor: 'rgba(255,157,46,0.45)', bgcolor: 'rgba(255,157,46,0.08)' }}>
+          <Typography sx={{ fontSize: 10.5, color: '#ff9d2e' }}>
+            {card.grounding?.revised ? 'Revised, still ungrounded:' : 'Numbers not from this run:'}
+          </Typography>
+          {ungrounded.slice(0, 3).map((p) => (
+            <Typography key={p} sx={{ fontSize: 10, color: 'text.secondary', mt: 0.25 }}>
+              {p}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
+      {card.caveats.length > 0 && (
+        <Box sx={{ mt: 1 }}>
+          {card.caveats.map((c) => (
+            <Typography key={c} sx={{ fontSize: 10, color: 'text.secondary', lineHeight: 1.5 }}>
+              · {c}
+            </Typography>
+          ))}
+        </Box>
+      )}
+
+      {card.source === 'template' && (
+        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'rgba(255,157,46,0.85)', mt: 0.75 }}>
+          ASSEMBLED BY CODE · NO LANGUAGE MODEL CONFIGURED
+        </Typography>
+      )}
+    </Box>
+  )
+}
+
+/** The progress stepper: one row per step, ticked as it finishes. */
+function StepperView({ steps }: { steps: Step[] }) {
+  return (
+    <Stack spacing={0.5}>
+      {steps.map((s) => (
+        <Stack key={s.index} direction="row" alignItems="center" spacing={0.75}>
+          <Box
+            sx={{
+              width: 10,
+              textAlign: 'center',
+              fontSize: 11,
+              color: s.state === 'done' ? '#5cff9d' : 'rgba(125,146,138,0.7)',
+            }}
+          >
+            {s.state === 'done' ? '✓' : '·'}
+          </Box>
+          <Typography
+            sx={{
+              fontSize: 11,
+              color: s.state === 'done' ? 'text.primary' : 'text.secondary',
+              animation: s.state === 'running' ? 'hud-pulse 1.4s ease-in-out infinite' : undefined,
+            }}
+          >
+            {s.title}
+          </Typography>
+          {s.state === 'done' && s.ms !== undefined && (
+            <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary' }}>
+              {s.ms} ms
+            </Typography>
+          )}
+        </Stack>
+      ))}
+    </Stack>
+  )
 }
 
 export default function ChatPanel() {
@@ -55,15 +229,18 @@ export default function ChatPanel() {
     {
       id: mkId(),
       role: 'ai',
-      text: 'Sandbox loaded. Adjust the rainfall and temperature sliders (top-right), toggle a project, then press Run. After the run I’ll describe what changed and suggest interventions here.',
+      text: 'Sandbox loaded. Adjust the rainfall and temperature sliders (top-right), toggle a project, then press Run. After the run I can answer questions about what changed.',
       chips: SUGGESTIONS,
     },
   ])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  const [steps, setSteps] = useState<Step[]>([])
+  const [draft, setDraft] = useState<{ title: string | null; sentence: string | null } | null>(null)
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
   const lastRunId = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   // The model-configured dot. Green = live LLM, amber = parser only, grey = unknown.
   useEffect(() => {
@@ -94,11 +271,72 @@ export default function ChatPanel() {
     ])
   }, [runResult, running])
 
-  // Keep the latest message in view as the thread grows.
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [messages])
+  }, [messages, steps, draft])
+
+  /** Ask the chat agent. Streams, so the steps and the sentence arrive as they happen. */
+  const ask = useCallback(async (question: string, history: ChatTurn[]) => {
+    if (!sceneId) return
+    const controller = new AbortController()
+    abortRef.current = controller
+    setSteps([])
+    setDraft(null)
+
+    let raw = ''
+    const onEvent = (event: StreamEvent) => {
+      switch (event.event) {
+        case 'step_started':
+          setSteps((prev) => [
+            ...prev.filter((s) => s.index !== event.index),
+            { index: event.index, title: event.title, desc: event.desc, state: 'running' },
+          ])
+          break
+        case 'step_finished':
+          setSteps((prev) =>
+            prev.map((s) => (s.index === event.index ? { ...s, state: 'done', ms: event.ms } : s)),
+          )
+          break
+        case 'delta':
+          // The draft is JSON, so fields are read out of the partial document
+          // rather than parsed -- that is what makes it appear mid-stream.
+          raw += event.text
+          setDraft({
+            title: partialField(raw, 'title'),
+            sentence: partialField(raw, 'sentence'),
+          })
+          break
+        case 'answer':
+          setMessages((prev) => [
+            ...prev,
+            { id: mkId(), role: 'ai', card: event.answer, chips: event.answer.followups },
+          ])
+          break
+        case 'error':
+          setMessages((prev) => [
+            ...prev,
+            { id: mkId(), role: 'ai', text: `Note: ${event.message}` },
+          ])
+          break
+        default:
+          break
+      }
+    }
+
+    try {
+      await streamChat(sceneId, { question, run: runResult, history }, onEvent, controller.signal)
+    } catch (err) {
+      if (!controller.signal.aborted) {
+        setMessages((prev) => [...prev, { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` }])
+      }
+    } finally {
+      abortRef.current = null
+      setSteps([])
+      setDraft(null)
+      setBusy(false)
+    }
+  }, [sceneId, runResult])
 
   const send = async (text: string) => {
     const trimmed = text.trim()
@@ -106,52 +344,43 @@ export default function ChatPanel() {
     setMessages((prev) => [...prev, { id: mkId(), role: 'user', text: trimmed }])
     setInput('')
     setBusy(true)
-    try {
-      const r = await createAiPlan(sceneId, trimmed)
-      if (r.features > 0 && r.planId) {
-        // Selecting the new plan routes the features through the existing store
-        // + render path, so the 3D sandbox updates with no special-casing.
-        const { usePlanStore } = await import('@/state/planStore')
-        await usePlanStore.getState().refreshPlans(sceneId)
-        await usePlanStore.getState().selectPlan(r.planId)
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: mkId(),
-            role: 'ai',
-            text: `Placed ${r.features} intervention${r.features === 1 ? '' : 's'} (${r.types.join(', ') || 'geometry'}) into the sandbox. Status: draft. Run again to see the effect.`,
-            chips: SUGGESTIONS,
-          },
-        ])
-      } else if (looksLikeQuery(trimmed) && !llmConfigured) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: mkId(),
-            role: 'ai',
-            text: 'I can’t answer free-form questions without a language model configured. Set ANTHROPIC_API_KEY (or LLM_BASE_URL) on the backend to enable Q&A. I can still place interventions — try “add a retention basin near the river”.',
-            chips: SUGGESTIONS,
-          },
-        ])
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: mkId(),
-            role: 'ai',
-            text: r.message || 'I couldn’t place that as an intervention. Try naming a type (retention basin, trees, green space, water reservoir) and a location.',
-            chips: SUGGESTIONS,
-          },
-        ])
+
+    // Interventions are geometry, not explanation: they keep the AI-plan route.
+    if (looksLikeIntervention(trimmed)) {
+      try {
+        const r = await createAiPlan(sceneId, trimmed)
+        if (r.features > 0 && r.planId) {
+          const { usePlanStore } = await import('@/state/planStore')
+          await usePlanStore.getState().refreshPlans(sceneId)
+          await usePlanStore.getState().selectPlan(r.planId)
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: mkId(),
+              role: 'ai',
+              text: `Placed ${r.features} intervention${r.features === 1 ? '' : 's'} (${r.types.join(', ') || 'geometry'}) into the sandbox. Status: draft. Run again to see the effect.`,
+              chips: SUGGESTIONS,
+            },
+          ])
+        } else {
+          setMessages((prev) => [
+            ...prev,
+            { id: mkId(), role: 'ai', text: r.message || 'I couldn’t place that as an intervention. Try naming a type (retention basin, trees, green space, water reservoir) and a location.' },
+          ])
+        }
+      } catch (err) {
+        setMessages((prev) => [...prev, { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` }])
+      } finally {
+        setBusy(false)
       }
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` },
-      ])
-    } finally {
-      setBusy(false)
+      return
     }
+
+    const history: ChatTurn[] = messages
+      .filter((m): m is Message & { text: string } => Boolean(m.text))
+      .slice(-6)
+      .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.text }))
+    await ask(trimmed, history)
   }
 
   const dotColor = llmConfigured === null ? '#7d928a' : llmConfigured ? '#5cff9d' : '#ff9d2e'
@@ -186,6 +415,16 @@ export default function ChatPanel() {
                 : 'Heuristic parser — not AI'}
           </Typography>
         </Box>
+        {busy && (
+          <IconButton
+            aria-label="Stop"
+            size="small"
+            onClick={() => abortRef.current?.abort()}
+            sx={{ width: 24, height: 24, color: 'text.secondary' }}
+          >
+            <span style={{ fontSize: 11 }}>■</span>
+          </IconButton>
+        )}
       </Stack>
 
       {/* Thread */}
@@ -196,7 +435,7 @@ export default function ChatPanel() {
               key={m.id}
               sx={{
                 alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '88%',
+                maxWidth: '92%',
                 px: 1.5,
                 py: 1.25,
                 borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
@@ -205,37 +444,56 @@ export default function ChatPanel() {
                 bgcolor: m.role === 'user' ? 'rgba(92,255,157,0.08)' : 'rgba(255,255,255,0.03)',
               }}
             >
-              <Typography
-                variant="body2"
-                sx={{
-                  fontSize: 12.5,
-                  lineHeight: 1.55,
-                  whiteSpace: 'pre-wrap',
-                  color: 'text.primary',
-                  '& em': { color: 'text.secondary', fontStyle: 'italic' },
-                }}
-              >
-                {m.text}
-              </Typography>
+              {m.card ? (
+                <CardView card={m.card} />
+              ) : (
+                <Typography
+                  variant="body2"
+                  sx={{ fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', color: 'text.primary' }}
+                >
+                  {m.text}
+                </Typography>
+              )}
               {m.chips && (
                 <Stack direction="row" spacing={0.5} sx={{ mt: 1, flexWrap: 'wrap', gap: 0.5 }}>
                   {m.chips.map((c) => (
-                    <Chip
-                      key={c}
-                      label={c}
-                      size="small"
-                      onClick={() => void send(c)}
-                      sx={{ cursor: 'pointer' }}
-                    />
+                    <Chip key={c} label={c} size="small" onClick={() => void send(c)} sx={{ cursor: 'pointer' }} />
                   ))}
                 </Stack>
               )}
             </Box>
           ))}
-          {busy && (
-            <Typography variant="caption" color="text.secondary" sx={{ alignSelf: 'flex-start' }}>
-              working…
-            </Typography>
+
+          {/* Live progress while the agent works */}
+          {busy && (steps.length > 0 || draft) && (
+            <Box
+              sx={{
+                alignSelf: 'flex-start',
+                maxWidth: '92%',
+                px: 1.5,
+                py: 1.25,
+                borderRadius: '12px 12px 12px 2px',
+                border: '1px solid',
+                borderColor: 'divider',
+                bgcolor: 'rgba(255,255,255,0.03)',
+              }}
+            >
+              {steps.length > 0 && <StepperView steps={steps} />}
+              {draft?.title && (
+                <Typography sx={{ fontSize: 13, fontWeight: 600, mt: 1, lineHeight: 1.35 }}>
+                  {draft.title}
+                </Typography>
+              )}
+              {draft?.sentence && (
+                <Typography sx={{ fontSize: 12.5, lineHeight: 1.6, mt: 0.5 }}>
+                  {draft.sentence}
+                  <Box component="span" sx={{ opacity: 0.5 }}>▌</Box>
+                </Typography>
+              )}
+              {!draft?.sentence && steps.length === 0 && (
+                <Typography variant="caption" color="text.secondary">working…</Typography>
+              )}
+            </Box>
           )}
         </Stack>
       </Box>
@@ -247,7 +505,7 @@ export default function ChatPanel() {
             fullWidth
             multiline
             maxRows={3}
-            placeholder="Describe an intervention or ask a question…"
+            placeholder="Ask about the run, or describe an intervention…"
             value={input}
             disabled={busy || !sceneId}
             onChange={(e) => setInput(e.target.value)}

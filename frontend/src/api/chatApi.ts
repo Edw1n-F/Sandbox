@@ -1,0 +1,159 @@
+/**
+ * Chat endpoints: one question about a run, answered as a grounded card.
+ *
+ * Two ways to ask, same answer:
+ *
+ * - `postChat`     -- the card, once it is finished.
+ * - `streamChat`   -- server-sent events as it happens: steps, deltas, the card.
+ *
+ * The event names mirror the backend's `app/schemas/stream.py` set (itself
+ * taken from the Constellation repo): `run_started`, `step_started`,
+ * `step_finished`, `delta`, `grounding`, `answer`, `error`, `done`.
+ *
+ * SSE is read from `fetch` rather than `EventSource` because the request is a
+ * POST with a body -- `EventSource` can only GET, and the run this question is
+ * about has to be sent.
+ */
+import { http } from './client'
+
+/** One headline number. */
+export interface StatItem {
+  l: string
+  v: string
+  ci?: string | null
+}
+
+export interface Confidence {
+  level: 'High' | 'Medium' | 'Low'
+  pct: number
+  note: string
+}
+
+/** The outcome of the number check. Surfaced, not hidden. */
+export interface GroundingReport {
+  ok: boolean
+  ungrounded: string[]
+  revised: boolean
+}
+
+/**
+ * The answer card.
+ *
+ * Same field names as the backend's `AnswerCard`, so it is rendered by field
+ * rather than parsed out of prose. `source` says whether a model wrote it or
+ * code assembled it, which the panel shows rather than leaving the reader to
+ * assume.
+ */
+export interface AnswerCard {
+  kind: 'run' | 'general'
+  title: string
+  eyebrow?: string | null
+  sentence: string
+  l1: string
+  cause?: string | null
+  l2: string
+  todo?: string | null
+  stats: StatItem[]
+  confidence: Confidence
+  caveats: string[]
+  followups: string[]
+  source: 'model' | 'template'
+  grounding?: GroundingReport | null
+}
+
+export interface ChatTurn {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+export interface ChatRequestBody {
+  question: string
+  run?: unknown | null
+  history?: ChatTurn[]
+}
+
+/** `POST /api/scenes/{sceneId}/chat` -> the finished card. */
+export async function postChat(
+  sceneId: string,
+  body: ChatRequestBody,
+): Promise<AnswerCard> {
+  const { data } = await http.post<{ answer: AnswerCard }>(
+    `/scenes/${sceneId}/chat`,
+    body,
+  )
+  return data.answer
+}
+
+// ---- streaming ---------------------------------------------------------- //
+
+export type StreamEvent =
+  | { event: 'run_started'; run_id: string }
+  | { event: 'step_started'; index: number; title: string; desc: string; tool: string }
+  | {
+      event: 'step_finished'
+      index: number
+      title: string
+      desc: string
+      tool: string
+      ms: number
+      result?: string | null
+    }
+  | { event: 'delta'; text: string }
+  | { event: 'grounding'; ok: boolean; ungrounded: string[]; revised: boolean }
+  | { event: 'answer'; answer: AnswerCard }
+  | { event: 'error'; message: string; recoverable: boolean }
+  | { event: 'done'; status: string; ms: number }
+
+/**
+ * `POST /api/scenes/{sceneId}/chat/stream` -- the same card, arriving as events.
+ *
+ * Calls `onEvent` for each one and resolves on `done`. The stream always ends
+ * with exactly one `done`, even on failure, so the caller can always stop its
+ * spinner in one place.
+ */
+export async function streamChat(
+  sceneId: string,
+  body: ChatRequestBody,
+  onEvent: (event: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/scenes/${sceneId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`chat stream failed: ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  // SSE frames are separated by a blank line; a chunk boundary can fall
+  // anywhere, so the tail is kept until the next chunk completes it.
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let split = buffer.indexOf('\n\n')
+    while (split !== -1) {
+      const frame = buffer.slice(0, split)
+      buffer = buffer.slice(split + 2)
+      for (const line of frame.split('\n')) {
+        if (!line.startsWith('data:')) continue
+        try {
+          onEvent(JSON.parse(line.slice(5).trim()) as StreamEvent)
+        } catch {
+          // A malformed frame is skipped rather than killing the stream.
+        }
+      }
+      split = buffer.indexOf('\n\n')
+    }
+  }
+}
+
+/** The base path the http client is configured with (kept for callers that need it). */
+export const chatBase = http
