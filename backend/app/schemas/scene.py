@@ -309,3 +309,17 @@ PlanSource = Literal["manual", "ai"]
 InterventionSource = Literal["manual", "ai"]
 InterventionStatus = Literal["draft", "validated"]
 GeometryType = Literal["Point", "LineString", "Polygon"]
+
+
+class RunRequest(WireModel):
+    """POST /api/scenes/{sceneId}/run body -- one live simulation run.
+
+    The per-run inputs ADR-024 refused to persist onto the scene: they belong
+    to a run, not to the object every plan hangs off. ``plan_id`` selects the
+    scenario; ``None`` is a baseline run (today's land cover, no
+    interventions).
+    """
+
+    rainfall_mm: float = Field(default=450.0, ge=0.0, le=800.0)
+    temperature_c: float = Field(default=30.0, ge=-10.0, le=50.0)
+    plan_id: str | None = None

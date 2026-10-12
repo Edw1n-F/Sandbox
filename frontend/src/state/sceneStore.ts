@@ -7,11 +7,12 @@
  */
 import { create } from 'zustand'
 
-import { getScene, getTerrain } from '@/api/sceneApi'
+import { getScene, getTerrain, runSimulation } from '@/api/sceneApi'
 import { errorMessage } from '@/api/client'
 import type {
   EnvParams,
   LayerVisibility,
+  RunResult,
   Scene,
   TerrainMeta,
   ViewMode,
@@ -38,6 +39,16 @@ function isScene(value: unknown): value is Scene {
   )
 }
 
+/**
+ * Slider defaults, used when the scene carries no `envParams` of its own.
+ *
+ * 450 mm is the project's rainfall assumption and the number every committed
+ * overlay was generated at, so a first run reproduces the artefact the user
+ * can see before they move anything.
+ */
+export const DEFAULT_RAINFALL_MM = 450
+export const DEFAULT_TEMPERATURE_C = 30
+
 export interface SceneState {
   sceneId: string
   scene: Scene | null
@@ -46,6 +57,16 @@ export interface SceneState {
   error: string | null
   layers: LayerVisibility
   /**
+   * The latest live run, and the state of the run in flight.
+   *
+   * Kept in the store rather than in the panel that triggered it: the viewer
+   * reads the overlay URLs from here, so the result survives a panel remount
+   * and stays visible while the user orbits the sandbox.
+   */
+  runResult: RunResult | null
+  running: boolean
+  runError: string | null
+  /**
    * How the scene is dressed. Session-local like `layers`, and deliberately not
    * persisted: it is a viewing preference, not a property of the study area, so
    * putting it on the scene record would make a renderer choice look like data.
@@ -53,6 +74,7 @@ export interface SceneState {
   viewMode: ViewMode
   load: (sceneId: string) => Promise<void>
   setEnvParams: (patch: Partial<EnvParams>) => void
+  run: (planId: string | null) => Promise<void>
   toggleLayer: (layer: keyof LayerVisibility) => void
   setLayers: (layers: Partial<LayerVisibility>) => void
   setViewMode: (mode: ViewMode) => void
@@ -72,7 +94,7 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   props: true,
 }
 
-export const useSceneStore = create<SceneState>((set) => ({
+export const useSceneStore = create<SceneState>((set, get) => ({
   sceneId: '',
   scene: null,
   terrain: null,
@@ -80,6 +102,9 @@ export const useSceneStore = create<SceneState>((set) => ({
   error: null,
   layers: { ...DEFAULT_LAYERS },
   viewMode: 'survey',
+  runResult: null,
+  running: false,
+  runError: null,
 
   load: async (sceneId) => {
     set({ loading: true, error: null, sceneId })
@@ -113,11 +138,13 @@ export const useSceneStore = create<SceneState>((set) => ({
   /**
    * Slider handler.
    *
-   * ADR-024: scene.envParams holds *static, location-derived defaults*. The
-   * prototype writes slider values here because the physics engine that would
-   * own per-run inputs does not exist yet — so the write is local-only and is
-   * NOT persisted back to the API. Persisting a slider drag would mutate the
-   * object every plan hangs off, which is exactly the trap ADR-024 warns about.
+   * ADR-024: scene.envParams holds *static, location-derived defaults*, and the
+   * write stays local-only — it is NOT persisted back to the API. Persisting a
+   * slider drag would mutate the object every plan hangs off, which is exactly
+   * the trap ADR-024 warns about.
+   *
+   * The values are read off here by :func:`run`, which sends them as the
+   * per-run input they always were rather than as a property of the scene.
    */
   setEnvParams: (patch) =>
     set((state) => {
@@ -129,6 +156,45 @@ export const useSceneStore = create<SceneState>((set) => ({
         },
       }
     }),
+
+  /**
+   * Run the simulation with the current slider values and the given plan.
+   *
+   * `planId: null` is a baseline run. The response's overlay URLs are pushed
+   * onto `terrain` because that is what the viewer reads, and both overlays
+   * are switched on: a run whose result the planner cannot see is
+   * indistinguishable from a run that failed.
+   */
+  run: async (planId) => {
+    const { sceneId, scene } = get()
+    if (!sceneId) return
+    set({ running: true, runError: null })
+    try {
+      const result = await runSimulation(sceneId, {
+        rainfallMm: Number(
+          scene?.envParams.precipitation ?? DEFAULT_RAINFALL_MM,
+        ),
+        temperatureC: Number(
+          scene?.envParams.temperature ?? DEFAULT_TEMPERATURE_C,
+        ),
+        planId,
+      })
+      set((state) => ({
+        runResult: result,
+        running: false,
+        terrain: state.terrain
+          ? {
+              ...state.terrain,
+              wetGridUrl: result.overlays.wetGridUrl,
+              heatmapUrl: result.overlays.heatmapUrl,
+            }
+          : state.terrain,
+        layers: { ...state.layers, wetGrid: true, heatmap: true },
+      }))
+    } catch (error) {
+      set({ running: false, runError: errorMessage(error) })
+    }
+  },
 
   toggleLayer: (layer) =>
     set((state) => ({ layers: { ...state.layers, [layer]: !state.layers[layer] } })),

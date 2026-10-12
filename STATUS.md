@@ -8,10 +8,13 @@ failure (see gap 14). Lint and typecheck are clean.
 
 > **Division of labour.** The frontend is being built by another process in parallel;
 > this file is the single shared status page, so each party updates its own section and
-> leaves the other's alone. Backend counts were re-verified at **479** on
-> 2026-10-12, all twelve suites re-run after the repository cleanup;
-> `test_ledger` gained 3 checks in that work and `test_ventilation`'s 45th
-> fails on this host only — gap 14. The frontend figure of 50 is the frontend owner's.
+> leaves the other's alone. Backend counts were re-verified at **488** on
+> 2026-10-12, all thirteen suites re-run after the live run loop landed
+> (`test_run`, 29/29). The previously documented **479** could not be reproduced:
+> the thirteen suites' own tallies sum to 488, and the discrepancy is recorded
+> rather than silently carried forward. `test_ventilation`'s 45th check fails on
+> this host only — gap 14. The frontend figure of 55 is 50 from the frontend owner
+> plus 5 run-loop store tests added alongside the run endpoint.
 
 | Suite | Count | Command |
 |---|---|---|
@@ -20,6 +23,7 @@ failure (see gap 14). Lint and typecheck are clean.
 | backend `test_ventilation` | 44/45 ⚠ | `python tests/test_ventilation.py` — gap 14, timing only |
 | backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
+| backend `test_run` | 29/29 | `python tests/test_run.py` — the live run loop |
 | backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
@@ -27,7 +31,7 @@ failure (see gap 14). Lint and typecheck are clean.
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
-| frontend unit (`vitest`) | 46/46 | `npm test` |
+| frontend unit (`vitest`) | 55/55 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` |
 | frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` |
 
@@ -50,7 +54,16 @@ server read as a pass.
 - **Navigation** — left-drag pan, right-drag orbit, wheel/pinch zoom, arrow keys,
   on-screen orbit/zoom, and three framings (3D / top-down / reset).
 - **Scenario controls** — rainfall and temperature sliders write to the live scene
-  (ADR-024: local only, not persisted).
+  (ADR-024: local only, not persisted) and are read by **Run simulation**, which
+  sends them as per-run inputs.
+- **Live run loop** — `POST /api/scenes/{id}/run` applies the active plan's
+  interventions to the land-class grid, re-runs the project's own SCS-CN
+  generation/retention arithmetic at the requested rainfall, re-solves the
+  level-pool fill and re-renders **both** overlays, then returns the
+  baseline-vs-scenario ledger and a plain-language explanation. A run at 450 mm
+  reproduces the committed overlay exactly (3,170,180.3 m³, 208.05 ha — pinned by
+  `test_run`). 0.7 s warm; the terrain conditioning and the sky-view/shade
+  rasters are cached, since neither changes with a slider.
 - **GenAI plans** — NL to a draft FeatureCollection, with a badge that distinguishes
   "LLM ready", "no LLM key" and "LLM status unknown".
 
@@ -322,6 +335,30 @@ Ordered by what would hurt a user first.
     `.gitignore` now allowlists the three seeded fixtures and ignores the rest,
     which stops the *commit* but not the *accumulation*. The underlying fix is
     for each creating suite to use a temp dir or clean up after itself.
+
+### Gaps in the live run loop
+
+16. **The temperature slider is a display preset, not physics.** Above 35 °C the
+    run applies `make_heatmap`'s documented heatwave stretch — a render transform
+    on the same field. The land-class heat index does not know about air
+    temperature, and `test_run` asserts it is bit-identical across presets. A
+    planner who drags temperature and sees no rainfall-side change is looking at
+    a model that is being honest, not at a broken slider. Making temperature move
+    the physics needs a real energy-balance term, which this project does not
+    have and should not imply.
+17. **Run output is one shared directory.** `POST /run` writes
+    `backend/data/rasters/run/{wetgrid,heatmap}.png`, so two planners running at
+    the same moment overwrite each other's overlay. Fine for one demo machine,
+    wrong for two concurrent users; the fix is a per-run (or per-session)
+    filename rather than a fixed one.
+18. **The explanation is one shot, not streamed.** The run returns a finished
+    paragraph (an LLM's when one is configured, a labelled template otherwise).
+    There is no "here is what I am checking" thread of the kind the Constellation
+    reference UI shows — but neither is there a fake one, which matters more.
+19. **The run does not re-derive the terrain.** Priority-Flood conditioning and
+    the D8 receiver stay as `make_wetgrid.py` wrote them (~9 s, once, offline).
+    A run re-solves the water level on the conditioned surface; it does not
+    re-condition it, so a change to the DEM needs the script re-run.
 
 ## Honesty constraints that must survive future work
 

@@ -18,7 +18,13 @@ from app.schemas.plan import (
     PlanCreate,
     PlanListRead,
 )
-from app.schemas.scene import SceneCreate, SceneCreated, SceneRead, SceneUpdate
+from app.schemas.scene import (
+    RunRequest,
+    SceneCreate,
+    SceneCreated,
+    SceneRead,
+    SceneUpdate,
+)
 from app.config import settings
 from app.services import scene_service
 from app.services.design_metrics import HEAT_SUMMER_DAY_OF_YEAR
@@ -1102,3 +1108,38 @@ def get_drainage_hourly(
         raise HTTPException(status_code=422, detail=result["error"])
     result["sceneId"] = scene_id
     return result
+
+
+@router.post("/scenes/{scene_id}/run")
+def post_run(scene_id: str, body: RunRequest) -> dict:
+    """POST /api/scenes/{sceneId}/run -- one live simulation run.
+
+    The run loop the sliders were always meant to drive (ADR-024 kept them
+    local-only until this existed): apply the chosen plan's interventions to
+    the land-class grid, re-run the project's own SCS-CN generation/retention
+    arithmetic at the requested rainfall, re-solve the level-pool fill, and
+    re-render both overlays. The response carries fresh overlay URLs (cache
+    busted by run id), the baseline-vs-scenario ledger, and a plain-language
+    explanation -- an LLM paragraph when a provider is configured, a labelled
+    deterministic template otherwise.
+
+    ``planId: null`` is a baseline run: today's land cover, no interventions.
+    The heavy terrain conditioning and the sky-view/shade rasters are cached
+    (they change with the offline scripts and the massing respectively, never
+    with a slider), so a run is seconds, not minutes.
+
+    Screening-level, always: the response's ``status``/``warning`` say so, and
+    so do the sidecars written beside the PNGs in ``data/rasters/run/``.
+    """
+    from app.services import run_service
+
+    try:
+        return run_service.run_scenario(
+            scene_id,
+            rainfall_mm=body.rainfall_mm,
+            temperature_c=body.temperature_c,
+            plan_id=body.plan_id,
+            features=intervention_features(body.plan_id),
+        )
+    except run_service.RunInputsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None

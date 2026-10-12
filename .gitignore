@@ -39,6 +39,13 @@ backend/data/dem_cache/
 # fetch cache, and it is safe to delete at any time.
 backend/data/heat_cache/
 
+# Live run output: what POST /scenes/{id}/run writes. One wet grid, one heatmap
+# and their sidecars, overwritten on every run -- the render of one scenario,
+# not an artefact anyone should diff. The committed wetgrid_hsk.png /
+# heatmap_hsk.png are the offline pipeline's canonical outputs and are NOT under
+# this directory, which is exactly why run output lives in its own.
+backend/data/rasters/run/
+
 # The JSON file store is a RUNTIME store, not source. The seeded fixtures that
 # the app and the tests boot from ARE committed:
 #   backend/data/scenes/51e03c37-...json            the seeded scene

@@ -2,6 +2,64 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-12 (part 3) — the run loop: the sliders now mean something
+
+The prototype had a 3D sandbox, a storage ledger and NL interventions, but no
+loop joining them: the rainfall and temperature sliders wrote to local state
+(ADR-024) and the wet grid / heatmap were static PNGs rendered offline, so the
+panel described a simulation the app could not run. This closes that.
+
+### `POST /api/scenes/{sceneId}/run`
+
+One call, in the order the brief specifies: read the scenario (plan features +
+climate settings) → apply the land-cover change each intervention actually
+implies → re-run the project's own SCS-CN generation/retention arithmetic at the
+requested rainfall → re-solve the level-pool fill → re-render both overlays →
+report the delta against today, with a plain-language explanation.
+
+- `app/services/run_service.py` (new). Consumes the ledger's own functions,
+  never a second copy of them: `apply_interventions` was **extracted** from
+  `ledger_for_scenario` so the grid the run renders is exactly the grid the
+  ledger scores. `cn_grid_for` was likewise extracted so the per-cell CN override
+  path (permeable paving) cannot drift from the class-driven one. The level-pool
+  solver and both colour ramps are imported from `make_wetgrid` /
+  `make_heatmap`.
+- **The live run reproduces the committed overlay exactly.** At 450 mm a run
+  reports 3,170,180.3 m³ unstored and 208.05 ha wet — the offline artefact's own
+  figures, to 0.04 m³. Pinned by `tests/test_run.py` (29 checks, new suite).
+- 0.7 s warm. The terrain is not re-conditioned (that stays offline) and the
+  sky-view/shade rasters are cached against the city model's mtime, because
+  neither depends on a slider.
+- Run output goes to `data/rasters/run/`, never over the canonical
+  `wetgrid_hsk.png` / `heatmap_hsk.png`, and is gitignored.
+
+### Frontend
+
+- `run()` in `sceneStore` sends the slider values and the active plan, then
+  points the viewer at the new overlay URLs (cache-busted by run id) and
+  switches both overlays on — a run whose result is invisible is
+  indistinguishable from a run that failed.
+- `SandboxViewer` now tracks each overlay's URL and rebuilds the provider when
+  it changes. Without this the new PNG was never fetched: the effect only
+  toggled `show` on the existing layer.
+- `components/RunSummary.tsx` (new): the run's numbers with signed deltas
+  (worse red / better green), the explanation paragraph, and a line naming which
+  source wrote it.
+
+### Honesty, kept
+
+- The heatwave preset triggered above 35 °C is `make_heatmap`'s documented
+  display stretch, not a scenario: `test_run` asserts the land-class heat index
+  is **bit-identical** across presets while the blended field moves.
+- Explanations are labelled `template` when no model is configured, for the same
+  reason the AI-plan badge names the deterministic parser.
+- Every response and both sidecars carry `status` / `warning` unchanged.
+
+Refactor, no behaviour change: `_ledger_from_cn` no longer re-implements the
+ADR-015 partition, and `ledger_for_scenario`'s dead `cn_override` parameter is
+gone (declared, never used by any caller). Backend 479 → 508 checks; all
+thirteen suites re-run.
+
 ## 2026-10-12 (part 2) — one home per fact, and a stale comment that hid a bug
 
 Second pass at the same cleanup. The first pass removed files with no inbound

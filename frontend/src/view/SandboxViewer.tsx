@@ -211,7 +211,10 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const viewerRef = useRef<Viewer | null>(null)
   const baseRef = useRef<ImageryLayer | null>(null)
-  const overlaysRef = useRef<Record<'wetGrid' | 'heatmap', ImageryLayer | null>>({
+  // Each entry also records the URL its provider was built from: a live run
+  // writes a new overlay PNG and hands the store a new URL, and a provider
+  // built from the old URL would keep showing the old texture forever.
+  const overlaysRef = useRef<Record<'wetGrid' | 'heatmap', { layer: ImageryLayer; url: string } | null>>({
     wetGrid: null,
     heatmap: null,
   })
@@ -425,11 +428,21 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     let cancelled = false
 
     for (const [key, url, alpha] of wanted) {
-      const existing = overlaysRef.current[key]
+      let existing = overlaysRef.current[key]
+      if (existing && url && existing.url !== url) {
+        // A run produced a new overlay: drop the stale provider so the new
+        // PNG is fetched, not just re-shown.
+        viewer.imageryLayers.remove(existing.layer, true)
+        overlaysRef.current[key] = null
+        existing = null
+      }
       const shouldShow = layers[key] && Boolean(url)
+      // Narrowed here, not inside the async callback: TypeScript does not carry
+      // the `Boolean(url)` check into a closure that runs later.
+      const urlFor = url as string
       if (existing) {
         // Toggling visibility is cheap; rebuilding the provider re-downloads.
-        existing.show = shouldShow
+        existing.layer.show = shouldShow
         if (shouldShow && isLive(viewer)) viewer.scene.requestRender()
         continue
       }
@@ -446,7 +459,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           if (!isLive(live) || live !== viewer) return
           if (!useSceneStore.getState().layers[key]) return
           live.imageryLayers.add(layer)
-          overlaysRef.current[key] = layer
+          overlaysRef.current[key] = { layer, url: urlFor }
           // requestRenderMode is on, so a layer whose texture finished loading
           // asynchronously will never paint until something asks for a frame.
           // This is the single most common reason an overlay silently does

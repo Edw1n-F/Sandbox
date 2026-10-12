@@ -4,7 +4,7 @@
  * CLAUDE.md: "Scene as entry anchor" — all rendering begins at `getScene`.
  */
 import { http } from './client'
-import type { EnvParams, Scene, TerrainMeta } from './types'
+import type { EnvParams, RunResult, Scene, TerrainMeta } from './types'
 
 /** `GET /api/scenes/{sceneId}` — the 3D sandbox init entry point. */
 export async function getScene(sceneId: string): Promise<Scene> {
@@ -24,6 +24,21 @@ export async function updateScene(
   payload: { envParams?: EnvParams; name?: string },
 ): Promise<Scene> {
   const { data } = await http.put<Scene>(`/scenes/${sceneId}`, payload)
+  return data
+}
+
+/**
+ * `POST /api/scenes/{sceneId}/run` — one live simulation run.
+ *
+ * The sliders' values travel here rather than onto the scene (ADR-024), so a
+ * run never mutates the object every plan hangs off. `planId: null` scores
+ * today's land cover with no interventions.
+ */
+export async function runSimulation(
+  sceneId: string,
+  body: { rainfallMm: number; temperatureC: number; planId: string | null },
+): Promise<RunResult> {
+  const { data } = await http.post<RunResult>(`/scenes/${sceneId}/run`, body)
   return data
 }
 

@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react'
 
 import { createAiPlan, type AiPlanResult } from '@/api/planApi'
 import ImpactPanel from '@/components/ImpactPanel'
+import RunSummary from '@/components/RunSummary'
 import {
   cityModelStats,
   editCityModelHeights,
@@ -35,6 +36,10 @@ export default function ScenePanel() {
   const scene = useSceneStore((s) => s.scene)
   const error = useSceneStore((s) => s.error)
   const setEnvParams = useSceneStore((s) => s.setEnvParams)
+  const run = useSceneStore((s) => s.run)
+  const running = useSceneStore((s) => s.running)
+  const runResult = useSceneStore((s) => s.runResult)
+  const runError = useSceneStore((s) => s.runError)
   const plans = usePlanStore((s) => s.plans)
   const activePlanId = usePlanStore((s) => s.activePlanId)
   const features = usePlanStore((s) => s.interventions.features.length)
@@ -456,6 +461,31 @@ export default function ScenePanel() {
         value={Number(scene?.envParams.temperature ?? 25)}
         onChange={(temperature) => setEnvParams({ temperature })}
       />
+
+      {/* The trigger the two sliders above were waiting for. Until this existed
+          the overlays were static PNGs rendered offline and the sliders wrote
+          nowhere (ADR-024), so the panel described a simulation it could not
+          run. The plan sent is the one the panel is showing, so what the
+          planner sees listed is what gets scored. */}
+      <Button
+        variant="contained"
+        size="large"
+        disabled={!sceneId || running}
+        onClick={() => void run(activePlanId)}
+      >
+        {running ? 'Running simulation…' : 'Run simulation'}
+      </Button>
+      {running && (
+        <Typography variant="caption" color="text.secondary">
+          Re-running the runoff and retention arithmetic at{' '}
+          {Number(scene?.envParams.precipitation ?? 450).toFixed(0)} mm and
+          re-rendering both overlays.
+        </Typography>
+      )}
+      {runError && (
+        <Alert severity="error" variant="outlined">{runError}</Alert>
+      )}
+      {runResult && !running && <RunSummary result={runResult} />}
 
       {/* What the current plan costs, in the units the brief asks for. Read-only;
           the four reporting endpoints behind it issue no edits. */}

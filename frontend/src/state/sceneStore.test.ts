@@ -7,10 +7,19 @@
  * several panels read, so a reducer that mutated in place would make every subscriber
  * miss the change.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { useSceneStore } from './sceneStore'
-import type { Scene } from '@/api/types'
+import type { RunResult, Scene } from '@/api/types'
+
+// Hoisted: `vi.mock` factories run before the module body, so the spy has to be
+// created where the factory can see it.
+const { runSimulation } = vi.hoisted(() => ({ runSimulation: vi.fn() }))
+vi.mock('@/api/sceneApi', () => ({
+  getScene: vi.fn(),
+  getTerrain: vi.fn(),
+  runSimulation,
+}))
 
 const scene = {
   sceneId: 's1',
@@ -97,6 +106,100 @@ describe('setEnvParams', () => {
     const before = useSceneStore.getState()
     useSceneStore.getState().setEnvParams({ rainfall: 999 })
     expect(useSceneStore.getState().scene).toBe(before.scene)
+  })
+})
+
+/**
+ * The run loop's wiring, which is the difference between a panel that describes
+ * a simulation and one that runs it. These cover what the browser suites cannot
+ * reach from here: that the slider values actually travel in the request, and
+ * that a result is pointed at the viewer rather than only stored.
+ */
+describe('run', () => {
+  beforeEach(() => {
+    reset()
+    runSimulation.mockReset()
+    useSceneStore.setState({
+      runResult: null,
+      running: false,
+      runError: null,
+    })
+  })
+
+  const result = {
+    runId: 'abc12345',
+    sceneId: 's1',
+    inputs: { rainfallMm: 600, temperatureC: 38, heatPreset: 'heatwave',
+      planId: 'plan-1' },
+    overlays: { wetGridUrl: '/static/rasters/run/wetgrid.png?v=abc12345',
+      heatmapUrl: '/static/rasters/run/heatmap.png?v=abc12345' },
+    stats: { baseline: {}, scenario: {}, delta: {} },
+    worsens: false,
+    interventionsApplied: [],
+    interventionsSkipped: [],
+    explanation: 'text',
+    explanationSource: 'template',
+    status: 's',
+    warning: 'w',
+  } as unknown as RunResult
+
+  it('sends the slider values and the selected plan, not the scene defaults', async () => {
+    useSceneStore.setState({ sceneId: 's1', scene })
+    useSceneStore.getState().setEnvParams({ precipitation: 600, temperature: 38 })
+    runSimulation.mockResolvedValue(result)
+    await useSceneStore.getState().run('plan-1')
+    expect(runSimulation).toHaveBeenCalledWith('s1', {
+      rainfallMm: 600,
+      temperatureC: 38,
+      planId: 'plan-1',
+    })
+  })
+
+  it('falls back to the documented defaults when the scene carries none', async () => {
+    useSceneStore.setState({ sceneId: 's1', scene: { ...scene, envParams: {} } })
+    runSimulation.mockResolvedValue(result)
+    await useSceneStore.getState().run(null)
+    expect(runSimulation).toHaveBeenCalledWith('s1', {
+      rainfallMm: 450,
+      temperatureC: 30,
+      planId: null,
+    })
+  })
+
+  it('points the viewer at the new overlays and switches them on', async () => {
+    // A run whose result the planner cannot see is indistinguishable from a run
+    // that failed, so both overlays come on with the result.
+    useSceneStore.setState({
+      sceneId: 's1',
+      scene,
+      terrain: { terrainUrl: null, imageryUrl: null, bbox: null,
+        wetGridUrl: '/old', heatmapUrl: '/old' },
+    })
+    runSimulation.mockResolvedValue(result)
+    await useSceneStore.getState().run(null)
+    const state = useSceneStore.getState()
+    expect(state.terrain?.wetGridUrl).toBe(result.overlays.wetGridUrl)
+    expect(state.terrain?.heatmapUrl).toBe(result.overlays.heatmapUrl)
+    expect(state.layers.wetGrid).toBe(true)
+    expect(state.layers.heatmap).toBe(true)
+    expect(state.runResult).toBe(result)
+    expect(state.running).toBe(false)
+  })
+
+  it('records a failure instead of leaving the run hanging', async () => {
+    useSceneStore.setState({ sceneId: 's1', scene })
+    runSimulation.mockRejectedValue(new Error('backend unreachable'))
+    await useSceneStore.getState().run(null)
+    const state = useSceneStore.getState()
+    expect(state.running).toBe(false)
+    expect(state.runResult).toBeNull()
+    expect(state.runError).toMatch(/unreachable/)
+  })
+
+  it('does nothing without a scene', async () => {
+    await useSceneStore.getState().run(null)
+    expect(runSimulation).not.toHaveBeenCalled()
+    expect(useSceneStore.getState().running).toBe(false)
   })
 })
 

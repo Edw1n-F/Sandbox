@@ -158,6 +158,76 @@ export interface LayerVisibility {  imagery: boolean
 export type InterventionSource = 'manual' | 'ai'
 
 
+/**
+ * One side of a live run's ledger: today (`baseline`) or the scenario.
+ *
+ * `heatMean` is the land-class index the ledger has always reported;
+ * `heatBlendedMean` is the same field after the sky-view and shade blend the
+ * rendered overlay actually shows. Both are carried because they answer
+ * different questions -- "how hot is this land cover?" and "what does the
+ * picture the planner is looking at mean?" -- and collapsing them would make
+ * the number disagree with the map.
+ */
+export interface RunLedgerSide {
+  runoffM3: number
+  unstoredM3: number
+  heatMean: number
+  greenAreaM2: number
+  pavedAreaM2: number
+  wetAreaHa: number
+  heatBlendedMean: number
+}
+
+/** The result of one live simulation run (`POST /scenes/{id}/run`). */
+export interface RunResult {
+  runId: string
+  sceneId: string
+  inputs: {
+    rainfallMm: number
+    temperatureC: number
+    heatPreset: 'normal' | 'heatwave'
+    planId: string | null
+  }
+  /** Cache-busted by `runId`, so a new run always repaints. */
+  overlays: { wetGridUrl: string; heatmapUrl: string }
+  stats: {
+    baseline: RunLedgerSide
+    scenario: RunLedgerSide
+    delta: {
+      unstoredM3: number
+      runoffM3: number
+      wetAreaHa: number
+      heatMean: number
+      heatBlendedMean: number
+      greenAreaM2: number
+      pavedAreaM2: number
+    }
+  }
+  worsens: boolean
+  interventionsApplied: Array<{
+    id: string | null
+    kind: string
+    areaM2: number
+    cellsChanged: number
+  }>
+  interventionsSkipped: Array<{
+    id: string | null
+    kind: string
+    why: string
+    coverageFraction?: number
+  }>
+  explanation: string
+  /**
+   * `template` means no model was configured and the paragraph was assembled
+   * by code. It is reported rather than hidden, for the same reason the AI
+   * plan badge names the deterministic parser: a demo with no key must not
+   * read as if a model wrote it.
+   */
+  explanationSource: 'anthropic' | 'openai-compatible' | 'template'
+  status: string
+  warning: string
+}
+
 /** Provenance for the 3D massing model, as served alongside the rasters. */
 export interface CityModelMeta {
   status: string

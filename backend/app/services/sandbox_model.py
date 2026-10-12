@@ -424,9 +424,28 @@ def context_for(
     )
 
 
+def cn_grid_for(land_class: np.ndarray,
+                cn_over: dict[tuple[int, int], float] | None = None,
+                ) -> np.ndarray:
+    """The Curve Number grid for a land-class grid, plus any per-cell overrides.
+
+    The one place the class -> CN mapping is rasterised: the ledger, the
+    explicit-CN variant, and the live run service all read it, so the override
+    path (permeable paving) cannot drift from the class-driven path.
+    """
+    cn = np.zeros(land_class.shape, dtype=np.float32)
+    for name, value in CURVE_NUMBER_HSG_D.items():
+        cn[land_class == LAND_CLASSES.index(name)] = min(100.0, value)
+    if cn_over:
+        for (r, c), value in cn_over.items():
+            cn[r, c] = value
+    return cn
+
+
 def _runoff_and_unstored(
     land_class: np.ndarray,
     rainfall_mm: float,
+    cn_grid: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generation and the unstored volume, per cell, in metres.
 
@@ -440,10 +459,16 @@ def _runoff_and_unstored(
     later. ``unstored_m`` is ``max(runoff - storage, 0)``: the water with nowhere
     to go, which is what ``storage_ledger`` reports as ``unstoredM3`` and what the
     cascade routes.
+
+    ``cn_grid`` overrides the class-derived Curve Number grid. It exists for
+    permeable paving, which changes the runoff coefficient without changing the
+    land class, and for the live run service, which fills the level pool from
+    the same per-cell field the ledger sums.
     """
-    cn = np.zeros(land_class.shape, dtype=np.float32)
-    for name, value in CURVE_NUMBER_HSG_D.items():
-        cn[land_class == LAND_CLASSES.index(name)] = min(100.0, value)
+    if cn_grid is None:
+        cn = cn_grid_for(land_class)
+    else:
+        cn = cn_grid
 
     runoff_m = runoff_depth(rainfall_mm, cn)
 
@@ -1054,7 +1079,6 @@ def ledger_for_scenario(
     grids: Grids,
     features: list[dict[str, Any]],
     rainfall_mm: float = DEFAULT_RAINFALL_MM,
-    cn_override: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """The storage ledger for one scenario, and the delta against today's land use.
 
@@ -1068,7 +1092,46 @@ def ledger_for_scenario(
     water has nowhere to go*, and *how much worse than today*.
     """
     base = storage_ledger(grids, grids.land_class, rainfall_mm)
+    trial, cn_over, applied, skipped = apply_interventions(grids, features)
+    scen = _scenario_ledger(grids, trial, cn_over, rainfall_mm)
 
+    d_unstored = scen["unstoredM3"] - base["unstoredM3"]
+    return {
+        "rainfallMm": rainfall_mm,
+        "baseline": base,
+        "scenario": scen,
+        "bufferDeficitM3": round(base["unstoredM3"], 1),
+        "scenarioDeficitM3": round(scen["unstoredM3"], 1),
+        "deltaUnstoredM3": round(d_unstored, 1),
+        "deltaRunoffM3": round(scen["runoffM3"] - base["runoffM3"], 1),
+        "deltaGreenAreaM2": round(scen["greenAreaM2"] - base["greenAreaM2"], 1),
+        "worsens": d_unstored > 1.0,
+        "interventionsApplied": applied,
+        "interventionsSkipped": skipped,
+        "interpretation": (
+            "bufferDeficitM3 is today's unstored water: runoff with nowhere to go. "
+            "deltaUnstoredM3 is the change a scenario makes to it -- positive "
+            f"means {round(d_unstored, 1):,.0f} m3 WORSE than today, negative "
+            "means better, under the same assumed rainfall. Both are screening "
+            "figures from a level-pool allocation, not routed hydraulics."
+        ),
+    }
+
+
+def apply_interventions(
+    grids: Grids,
+    features: list[dict[str, Any]],
+) -> tuple[np.ndarray, dict[tuple[int, int], float], list[dict[str, Any]],
+           list[dict[str, Any]]]:
+    """Translate stored intervention features into a modified land-class grid.
+
+    Returns ``(trial, cn_over, applied, skipped)``: the scenario land-class
+    grid, per-cell Curve Number overrides (permeable paving changes runoff
+    without changing class), and the two audit lists. Factored out of
+    :func:`ledger_for_scenario` so the live run service renders a wet grid and
+    heatmap from *exactly* the grid the ledger scores -- one definition, no
+    possibility of the picture and the number disagreeing.
+    """
     trial = grids.land_class.copy()
     cn_over: dict[tuple[int, int], float] = {}
     applied: list[dict[str, Any]] = []
@@ -1146,37 +1209,21 @@ def ledger_for_scenario(
             "basis": params.get("basis"),
         })
 
-    if cn_over:
-        cn_grid = np.zeros(trial.shape, dtype=np.float32)
-        for name, value in CURVE_NUMBER_HSG_D.items():
-            cn_grid[trial == LAND_CLASSES.index(name)] = min(100.0, value)
-        for (r, c), value in cn_over.items():
-            cn_grid[r, c] = value
-        scen = _ledger_from_cn(grids, trial, cn_grid, rainfall_mm)
-    else:
-        scen = storage_ledger(grids, trial, rainfall_mm)
+    return trial, cn_over, applied, skipped
 
-    d_unstored = scen["unstoredM3"] - base["unstoredM3"]
-    return {
-        "rainfallMm": rainfall_mm,
-        "baseline": base,
-        "scenario": scen,
-        "bufferDeficitM3": round(base["unstoredM3"], 1),
-        "scenarioDeficitM3": round(scen["unstoredM3"], 1),
-        "deltaUnstoredM3": round(d_unstored, 1),
-        "deltaRunoffM3": round(scen["runoffM3"] - base["runoffM3"], 1),
-        "deltaGreenAreaM2": round(scen["greenAreaM2"] - base["greenAreaM2"], 1),
-        "worsens": d_unstored > 1.0,
-        "interventionsApplied": applied,
-        "interventionsSkipped": skipped,
-        "interpretation": (
-            "bufferDeficitM3 is today's unstored water: runoff with nowhere to go. "
-            "deltaUnstoredM3 is the change a scenario makes to it -- positive "
-            f"means {round(d_unstored, 1):,.0f} m3 WORSE than today, negative "
-            "means better, under the same assumed rainfall. Both are screening "
-            "figures from a level-pool allocation, not routed hydraulics."
-        ),
-    }
+
+def _scenario_ledger(grids: Grids, trial: np.ndarray,
+                     cn_over: dict[tuple[int, int], float],
+                     rainfall_mm: float) -> dict[str, float]:
+    """Score the grid :func:`apply_interventions` produced.
+
+    A per-cell CN override (permeable paving) needs the explicit-CN ledger;
+    everything else is the class-driven one.
+    """
+    if cn_over:
+        return _ledger_from_cn(grids, trial, cn_grid_for(trial, cn_over),
+                               rainfall_mm)
+    return storage_ledger(grids, trial, rainfall_mm)
 
 
 def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
@@ -1185,17 +1232,11 @@ def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
 
     Needed for permeable paving, which changes the runoff coefficient without
     changing the land class -- so it cannot be expressed by swapping a class.
+    The arithmetic itself is :func:`_runoff_and_unstored`'s: a second copy of
+    the ADR-015 partition here would be the double count, again.
     """
-    runoff_m = runoff_depth(rainfall_mm, cn)
-
-    storage_m = np.full(land_class.shape, DEPRESSION_STORAGE_M, dtype=np.float32)
-    for name, depth in STORAGE_DEPTH_M.items():
-        storage_m[land_class == LAND_CLASSES.index(name)] = depth
-    for name, side in COUNTED_AS.items():
-        if side == "retention":
-            runoff_m[land_class == LAND_CLASSES.index(name)] = 0.0
-
-    unstored_m = np.maximum(runoff_m - storage_m, 0.0)
+    runoff_m, unstored_m = _runoff_and_unstored(land_class, rainfall_mm,
+                                                cn_grid=cn)
     cell_area = grids.cell_area_m2
 
     heat = np.zeros(land_class.shape, dtype=np.float32)
