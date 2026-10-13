@@ -1,0 +1,13 @@
+# Normalise line endings so a Windows and a Mac checkout never disagree about
+# which lines changed. Text files are LF in the repo; binaries are left alone.
+* text=auto eol=lf
+
+# The terrain tiles, rasters and images are binary: never touch their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.npy binary
+*.npz binary
+*.glb binary
+*.b3dm binary
+*.draco binary
