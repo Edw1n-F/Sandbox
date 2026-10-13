@@ -153,6 +153,7 @@ describe('run', () => {
       // intensity 30 mm/hr × 4 h = 120 mm storm-total, the value SCS-CN needs.
       rainfallMm: 120,
       temperatureC: 38,
+      tideState: 'low',
       planId: 'plan-1',
       planIds: ['plan-1'],
     })
@@ -167,6 +168,7 @@ describe('run', () => {
     expect(runSimulation).toHaveBeenCalledWith('s1', {
       rainfallMm: 50,
       temperatureC: 30,
+      tideState: 'low',
       planId: 'plan-1',
       planIds: ['plan-1', 'plan-2', 'plan-3'],
     })
@@ -179,6 +181,7 @@ describe('run', () => {
     expect(runSimulation).toHaveBeenCalledWith('s1', {
       rainfallMm: 50,
       temperatureC: 30,
+      tideState: 'low',
       planId: null,
       planIds: [],
     })

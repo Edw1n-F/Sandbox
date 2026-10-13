@@ -1191,6 +1191,7 @@ def post_run(scene_id: str, body: RunRequest) -> dict:
             plan_id=plan_ids[0] if plan_ids else None,
             features=intervention_features_many(plan_ids),
             plan_ids=plan_ids,
+            tide_state=body.tide_state,
         )
     except run_service.RunInputsError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None

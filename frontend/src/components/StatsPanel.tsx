@@ -72,6 +72,7 @@ export default function StatsPanel() {
     `${value > 0 ? '+' : ''}${value.toFixed(digits)}${unit}`
   const scenario = stats.scenario
   const checks = runResult.sanityChecks ?? []
+  const tide = stats.tide
   const noInterventions =
     (inputs.planIds?.length ?? 0) > 0 && runResult.interventionsApplied.length === 0
 
@@ -94,6 +95,16 @@ export default function StatsPanel() {
           accent="#5cff9d"
         />
       </Stack>
+      {tide && tide.active && (
+        <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+          <Typography className="hud-label" sx={{ fontSize: 8.5 }}>
+            Tide ({tide.label})
+          </Typography>
+          <Typography className="hud-mono" sx={{ fontSize: 11.5, color: '#1c7ed6' }}>
+            +{tide.tailwaterM.toFixed(1)} m backwater
+          </Typography>
+        </Stack>
+      )}
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
         <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Δ vs today</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5, color: deltaColor }}>

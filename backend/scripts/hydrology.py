@@ -344,6 +344,7 @@ def fill_and_spill(
     runoff_in_m3: np.ndarray,
     cell_area_m2: float,
     tol: float = 1e-6,
+    tailwater_m: float = 0.0,
 ) -> dict[str, object]:
     """Route each cell's runoff down its D8 chain, storing then spilling.
 
@@ -360,6 +361,17 @@ def fill_and_spill(
     counted as discharged when ``receiver[c] == -1``. The **only** sink is the
     grid-edge outlet, so ``runoff_in == stored + discharged`` holds by
     construction and :func:`mass_balance` raises if float error ever breaks it.
+
+    ``tailwater_m`` is the screening form of tidal backwater. An outlet cell
+    (``receiver == -1``) can only discharge water that stands **above** the
+    ambient tailwater level: at high tide the sea level at the outfall is raised,
+    water cannot escape, and the excess stays on the grid as stored volume. A
+    cell's effective capacity at an outlet therefore becomes ``cap + A * max(0,
+    tailwater - filled)`` -- the cell ponds up to the tailwater surface before it
+    can spill. ``tailwater_m = 0`` (the default) reproduces the free-draining
+    behaviour exactly, so existing callers and tests are unchanged. This is a
+    boundary condition, not a hydraulic model: it does not know about pipes or
+    outfall geometry, and says so at the call site rather than here.
 
     ``receiver`` is a **flat** index array of length ``rows * cols`` with ``-1``
     at outlets (the form ``d8_flow_direction`` returns and the form stored on
@@ -382,8 +394,19 @@ def fill_and_spill(
         )
     if runoff.size != n:
         raise ValueError(f"runoff_in_m3 has {runoff.size} entries, expected {n}")
+    if tailwater_m < 0.0:
+        raise ValueError(f"tailwater_m must be >= 0, got {tailwater_m}")
 
     cap = np.maximum(0.0, filled_f - raw_f) * float(cell_area_m2)
+    # Backwater: an outlet cell ponds up to the tailwater surface before it can
+    # spill off-grid, so its capacity grows by the volume below the tailwater
+    # level. A tailwater at or below the cell's own surface adds nothing.
+    outlet = recv < 0
+    tailwater_cap = float(cell_area_m2) * np.maximum(
+        0.0, tailwater_m - filled_f
+    )
+    cap = cap + np.where(outlet, tailwater_cap, 0.0)
+
     inflow = runoff.copy()
     stored = np.zeros(n, dtype=np.float64)
     order = np.argsort(-filled_f, kind="stable")
@@ -418,6 +441,7 @@ def fill_and_spill(
         "depressions": depressions,
         "wetCells": wet_cells,
         "maxDepthM": max_depth,
+        "tailwaterM": tailwater_m,
     }
 
 

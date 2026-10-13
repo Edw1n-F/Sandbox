@@ -46,6 +46,8 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
 from app.config import settings  # noqa: E402
 from app.services import scene_service  # noqa: E402
 from app.services.sandbox_model import (  # noqa: E402
+    DEFAULT_TIDE_STATE,
+    TIDE_STATES,
     Grids,
     _runoff_and_unstored,
     apply_interventions,
@@ -75,6 +77,15 @@ RUN_WARNING = (
     "Screening-level flood extent: SCS Curve Number runoff routed down the D8 "
     "receiver chain, cells with >= %.2f m standing water shown as flooded. Not "
     "engineering-grade, not a regulatory flood map." % FLOOD_DEPTH_M
+)
+# The backwater caveat, appended when a non-zero tide state is chosen. The tide
+# is a D8-outlet boundary condition -- at high tide the outfall cannot discharge
+# and water stays on the grid -- not a hydraulic outfall model. No pipe or
+# outfall geometry is invented.
+TIDE_WARNING = (
+    " Tidal backwater applied as a screening boundary condition (%.2f mCD "
+    "tailwater at the outfall); no pipe/outfall hydraulics, so the effect is "
+    "indicative, not a regulatory tide-locking assessment."
 )
 
 # The slider temperature at which the heatwave *display* preset kicks in. The
@@ -213,6 +224,7 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
     delta = stats["delta"]["unstoredM3"]
     scen = stats["scenario"]
     base = stats["baseline"]
+    tide = stats.get("tide") or {}
     if delta > 1.0:
         comparison = f"{abs(delta):,.0f} m3 worse than today"
     elif delta < -1.0:
@@ -230,6 +242,12 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
         f"({stats['delta']['heatMean']:+.3f} vs today) on the relative 0-1 "
         "scale -- not a temperature.",
     ]
+    if tide.get("active"):
+        parts.append(
+            f"{tide['label']} ({tide['tailwaterM']:.1f} m tailwater) holds "
+            "water at the outfall; the flood extent reflects this screening "
+            "backwater condition."
+        )
     if applied:
         kinds = ", ".join(sorted({a["kind"] for a in applied}))
         parts.append(f"{len(applied)} intervention(s) shaped this run: {kinds}.")
@@ -276,6 +294,7 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "rainfallMm": rainfall_mm,
         "temperatureC": temperature_c,
         "heatwaveDisplayPreset": heatwave,
+        "tide": stats.get("tide"),
         "baseline": stats["baseline"],
         "scenario": stats["scenario"],
         "delta": stats["delta"],
@@ -291,7 +310,10 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "urban planner. Write at most 110 words. Rules: use ONLY the numbers "
         "in the JSON below -- never invent a figure; say 'unstored runoff' "
         "for unstoredM3; mention the flood extent (floodAreaHa, cells with at "
-        "least %.2f m standing water) and the mean heat-exposure index; if no "
+        "least %.2f m standing water) and the mean heat-exposure index; if a "
+        "tide state is present and its tailwaterM is above 0, mention that "
+        "tidal backwater was applied as a screening boundary condition and "
+        "name the tide state; if no "
         "interventions are applied, say this is the baseline today's land "
         "cover and no project is selected; if the scenario matches the "
         "baseline, state that explicitly rather than calling it better or "
@@ -326,7 +348,8 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
 def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                  plan_id: str | None,
                  features: list[dict[str, Any]],
-                 plan_ids: list[str] | None = None) -> dict[str, Any]:
+                 plan_ids: list[str] | None = None,
+                 tide_state: str = DEFAULT_TIDE_STATE) -> dict[str, Any]:
     """One live run: scenario grid -> overlays on disk -> stats + explanation.
 
     ``features`` are the ledger-ready intervention dicts for the chosen plans
@@ -334,6 +357,11 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     list, as it does for ``GET .../ledger``); an empty list is a baseline run.
     ``plan_ids`` is the full selection, recorded so a cumulative run can say
     which projects it composed -- ``plan_id`` stays for a single-plan caller.
+
+    ``tide_state`` is a screening backwater condition (``low``/``mean``/``high``,
+    from :data:`sandbox_model.TIDE_STATES`). It raises the D8-outlet tailwater so
+    a high tide holds water on the grid; it does not model pipes or outfall
+    geometry, and the caveat is attached to every number it touches.
 
     The PNGs are written under a per-run name in ``data/rasters/run/`` -- never
     over the committed artefacts: the offline outputs stay the canonical baseline
@@ -345,6 +373,11 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         raise RunInputsError(
             f"rainfallMm must be 0-{MAX_RAINFALL_MM:.0f}, got {rainfall_mm}"
         )
+    if tide_state not in TIDE_STATES:
+        raise RunInputsError(
+            f"tideState must be one of {sorted(TIDE_STATES)}, got {tide_state!r}"
+        )
+    tailwater_m = float(TIDE_STATES[tide_state]["tailwaterM"])
 
     grids = _grids()
     cell_area = grids.cell_area_m2
@@ -378,6 +411,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             receiver=grids.receiver,
             runoff_in_m3=unstored_m * cell_area,
             cell_area_m2=cell_area,
+            tailwater_m=tailwater_m,
         )
         routed_depth = np.asarray(cascade["depthField"], dtype=np.float32)
     flood_cells = int((routed_depth >= FLOOD_DEPTH_M).sum()) if routed_depth is not None else None
@@ -405,6 +439,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             receiver=grids.receiver,
             runoff_in_m3=base_runoff_m * cell_area,
             cell_area_m2=cell_area,
+            tailwater_m=tailwater_m,
         )
         base_routed = np.asarray(base_cascade["depthField"], dtype=np.float32)
         base_flood_area_ha = float((base_routed >= FLOOD_DEPTH_M).sum()) * cell_area / 10_000.0
@@ -421,6 +456,13 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     base_ledger = storage_ledger(grids, grids.land_class, rainfall_mm)
 
     stats = {
+        "tide": {
+            "state": tide_state,
+            "label": TIDE_STATES[tide_state]["label"],
+            "tailwaterM": tailwater_m,
+            "source": TIDE_STATES[tide_state]["source"],
+            "active": tailwater_m > 0.0,
+        },
         "baseline": {
             **base_ledger,
             "wetAreaHa": round(base_wet_area_ha, 2),
@@ -519,16 +561,23 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     Image.fromarray(ramp_rgba(scen_heat), mode="RGBA").save(heat_png)
 
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    tide_active = tailwater_m > 0.0
     (run_dir / f"wetgrid_{run_id}.json").write_text(json.dumps({
         "artefact": "wetgrid-live-run",
         "runId": run_id,
         "generated": generated,
         "status": RUN_STATUS,
-        "warning": RUN_WARNING,
+        "warning": RUN_WARNING + (TIDE_WARNING % tailwater_m if tide_active else ""),
         "terrainSource": grids.terrain_source,
         "landCoverSource": grids.landcover_source,
         "inputs": {"rainfallMm": rainfall_mm, "planId": plan_id,
                    "planIds": plan_ids or ([plan_id] if plan_id else [])},
+        "tide": {
+            "state": tide_state,
+            "label": TIDE_STATES[tide_state]["label"],
+            "tailwaterM": tailwater_m,
+            "source": TIDE_STATES[tide_state]["source"],
+        },
         "flood": {
             "thresholdM": FLOOD_DEPTH_M,
             "routed": routed_depth is not None,
@@ -585,6 +634,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "rainfallMm": rainfall_mm,
             "temperatureC": temperature_c,
             "heatPreset": "heatwave" if heatwave else "normal",
+            "tideState": tide_state,
             "planId": plan_id,
             "planIds": plan_ids or ([plan_id] if plan_id else []),
         },
@@ -600,7 +650,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "explanation": explanation,
         "explanationSource": source,
         "status": RUN_STATUS,
-        "warning": RUN_WARNING,
+        "warning": RUN_WARNING + (TIDE_WARNING % tailwater_m if tide_active else ""),
     }
 
 

@@ -29,6 +29,8 @@ export interface DefaultCamera {
 export interface EnvParams {
   temperature?: number | null
   precipitation?: number | null
+  durationHours?: number | null
+  tideState?: TideState | null
   [key: string]: unknown
 }
 
@@ -129,6 +131,9 @@ export interface FeatureCollection {
  */
 export type ViewMode = 'survey' | 'tactical'
 
+/** Screening tidal-backwater state applied to the D8 outfall. */
+export type TideState = 'low' | 'mean' | 'high'
+
 /** Which overlay layers are switched on, rendered by the viewer's layer pills. */
 export interface LayerVisibility {  imagery: boolean
   boundary: boolean
@@ -198,6 +203,7 @@ export interface RunResult {
     rainfallMm: number
     temperatureC: number
     heatPreset: 'normal' | 'heatwave'
+    tideState?: TideState
     planId: string | null
     /** The cumulative selection this run composed. Empty for a baseline run. */
     planIds?: string[]
@@ -205,6 +211,14 @@ export interface RunResult {
   /** Cache-busted by `runId`, and named per run, so a new run always repaints. */
   overlays: { wetGridUrl: string; heatmapUrl: string }
   stats: {
+    /** The screening tidal-backwater condition this run applied, if any. */
+    tide?: {
+      state: TideState
+      label: string
+      tailwaterM: number
+      source: string
+      active: boolean
+    }
     baseline: RunLedgerSide
     scenario: RunLedgerSide
     delta: {

@@ -52,6 +52,7 @@ function isScene(value: unknown): value is Scene {
 export const DEFAULT_RAINFALL_MMH = 50
 export const DEFAULT_DURATION_HOURS = 1
 export const DEFAULT_TEMPERATURE_C = 30
+export const DEFAULT_TIDE_STATE = 'low' as const
 
 export interface SceneState {
   sceneId: string
@@ -186,6 +187,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
         temperatureC: Number(
           scene?.envParams.temperature ?? DEFAULT_TEMPERATURE_C,
         ),
+        tideState: (scene?.envParams.tideState ?? DEFAULT_TIDE_STATE) as
+          'low' | 'mean' | 'high',
         planId: selected[0] ?? null,
         planIds: selected,
       })

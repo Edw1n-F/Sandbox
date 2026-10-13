@@ -44,6 +44,7 @@ export async function runSimulation(
   body: {
     rainfallMm: number
     temperatureC: number
+    tideState?: 'low' | 'mean' | 'high'
     planId: string | null
     planIds?: string[]
   },

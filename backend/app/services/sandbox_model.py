@@ -1516,6 +1516,38 @@ def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
 # 2100". Those round numbers sit inside the official ranges rather than
 # replacing them, so the ranges are used and cited, and the brief's two values
 # are kept as named scenarios because they are what a judge will have read.
+# Tide states for the screening backwater condition. The levels are cited from
+# the Hong Kong Observatory's published tidal statistics for the Victoria Harbour
+# (Quarry Bay) tide gauge; the site is estuarine and the exact gauge will differ,
+# so these are *representative screening levels*, not a site measurement. The
+# screening model uses the tailwater as a D8-outlet boundary condition: at higher
+# tide the outfall cannot discharge and water stays on the grid. This is a
+# boundary condition, not a hydraulic outfall model -- no pipe or outfall
+# geometry is invented, and the caveat is attached wherever the number travels.
+#
+# HKO (Quarry Bay): mean sea level ~1.4 mCD, mean higher high water ~2.2 mCD.
+# Low tide is taken as the chart-datum floor (~0 mCD) so the three states span a
+# ~2 m working range without claiming survey precision.
+TIDE_STATES: dict[str, dict[str, Any]] = {
+    "low": {
+        "label": "Low tide",
+        "tailwaterM": 0.0,
+        "source": "Screening floor: outfalls free-drain at chart datum (mCD).",
+    },
+    "mean": {
+        "label": "Mean tide",
+        "tailwaterM": 1.4,
+        "source": "HKO mean sea level, Quarry Bay (~1.4 mCD).",
+    },
+    "high": {
+        "label": "High tide",
+        "tailwaterM": 2.2,
+        "source": "HKO mean higher high water, Quarry Bay (~2.2 mCD).",
+    },
+}
+DEFAULT_TIDE_STATE = "low"
+
+
 SEA_LEVEL_PROJECTIONS: dict[str, dict[str, Any]] = {
     "brief_0.4": {"metres": 0.40, "label": "+0.4 m (brief task 21)",
                   "source": "brief task 21; sits at the low end of HKO SSP2-4.5"},

@@ -339,5 +339,9 @@ class RunRequest(WireModel):
 
     rainfall_mm: float = Field(default=50.0, ge=0.0, le=800.0)
     temperature_c: float = Field(default=30.0, ge=-10.0, le=50.0)
+    # Screening tidal-backwater condition applied to the D8 outfall. One of
+    # "low" / "mean" / "high" (see sandbox_model.TIDE_STATES); not a hydraulic
+    # outfall model.
+    tide_state: str = "low"
     plan_id: str | None = None
     plan_ids: list[str] = Field(default_factory=list)

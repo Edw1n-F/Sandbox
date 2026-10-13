@@ -33,11 +33,19 @@ export default function SlidersPanel() {
   const intensity = Number(scene?.envParams.precipitation ?? 50)
   const durationH = Number(scene?.envParams.durationHours ?? 1)
   const totalMm = intensity * durationH
+  const tideState = (scene?.envParams.tideState ?? 'low') as
+    'low' | 'mean' | 'high'
 
   const RAIN_SIGNALS = [
     { label: 'Amber', value: 30, color: '#f5a623' },
     { label: 'Red', value: 50, color: '#d32f2f' },
     { label: 'Black', value: 70, color: '#1a1a1a' },
+  ] as const
+
+  const TIDE_OPTIONS = [
+    { label: 'Low', value: 'low', color: '#2f9e44' },
+    { label: 'Mean', value: 'mean', color: '#f5a623' },
+    { label: 'High', value: 'high', color: '#1c7ed6' },
   ] as const
 
   return (
@@ -109,6 +117,43 @@ export default function SlidersPanel() {
           onChange={(durationHours) => setEnvParams({ durationHours })}
         />
 
+        <Box>
+          <Typography className="hud-label" sx={{ fontSize: 8.5, mb: 0.25 }}>
+            Tide state
+          </Typography>
+          <Stack direction="row" spacing={0.5}>
+            {TIDE_OPTIONS.map((t) => (
+              <Button
+                key={t.value}
+                size="small"
+                variant={tideState === t.value ? 'contained' : 'outlined'}
+                onClick={() => setEnvParams({ tideState: t.value })}
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  px: 0.5,
+                  py: 0.25,
+                  fontSize: 10,
+                  lineHeight: 1.4,
+                  textTransform: 'none',
+                  whiteSpace: 'nowrap',
+                  ...(tideState !== t.value && {
+                    borderColor: t.color,
+                    color: t.color,
+                    '&:hover': { borderColor: t.color, bgcolor: `${t.color}1a` },
+                  }),
+                }}
+              >
+                {t.label}
+              </Button>
+            ))}
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: 8.5, display: 'block', mt: 0.25 }}>
+            Screening backwater: at higher tide the outfall cannot discharge and
+            water stays on the grid. Not an outfall hydraulics model.
+          </Typography>
+        </Box>
+
         <SliderField
           label="Temperature"
           unit="°C"
@@ -143,7 +188,7 @@ export default function SlidersPanel() {
           <Typography variant="caption" color="text.secondary">
             Re-running runoff + retention at{' '}
             {intensity.toFixed(0)} mm/hr × {durationH} h ({totalMm.toFixed(0)} mm
-            total) and re-rendering both overlays.
+            total) at {tideState} tide and re-rendering both overlays.
           </Typography>
         )}
         {runError && <Alert severity="error" variant="outlined">{runError}</Alert>}
