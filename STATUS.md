@@ -75,13 +75,16 @@ no interventions, renders a `SceneNotice` instead of an empty surface.
 [`docs/research/`](docs/research/README.md) ch01–ch03; ch05 is the roadmap this
 implements)
 
-- **Heat — shade from geometry, anchored at last.** Every footprint is swept along
-  the sun vector (real shadow casting, not a land-cover lookup), so shade moves
-  when the massing moves. A 16-bin, 300 m horizon search gives sky-view factor
-  (0.07 s district-wide); `blended_heat_field` combines the land-class index, SVF
-  and the cast shadow into one relative 0–1 raster at `GET /heat-field`. The field
-  is a **relative index, never °C**; the HKO Lau Fau Shan July band on disk is what
-  it is *read against*, verified by `fetch_heat_anchor.py --check`.
+- **Heat — a °C surface-temperature field, anchored to observed LST.** Every
+  footprint is swept along the sun vector (real shadow casting), a 16-bin, 300 m
+  horizon search gives sky-view factor, and `cell_fad` gives wind shelter. These
+  geometry terms express each cell's *deviation from the site mean* around an
+  **observed Landsat LST surface-temperature scene** (the 2022-09-03 capture,
+  resampled 30 m → 5 m), producing a real °C field (`temperature_field.py`) shown
+  as an anomaly map — blue cooler / neutral average / red hotter — so a
+  well-designed site reads near-neutral and only genuine hot spots go red. The
+  temperature slider sets the scenario mean °C; air temperature is an *estimate*
+  (surface − 12 °C), never a measurement.
 - **Wind — one geometry, read per direction.** `cell_fad` spreads each footprint's
   oriented frontal area over its cells, and the area-weighted mean of that field
   equals the site-level FAD — the identity that catches a wrong denominator.
@@ -167,8 +170,9 @@ Each of these is a design position, not an unfinished feature.
 
 ## Gaps
 
-Fifteen open items, ordered by what hurts a user first. Each states the issue and
-what closes it.
+Fifteen items, ordered by what hurts a user first. Each states the issue and
+what closes it. Four (8, 11, 12, 15) are now marked *resolved* and kept in place
+so the numbering stays stable.
 
 ### 1. No validated parameter card, and nothing estimates a user intervention's own numbers
 
@@ -312,19 +316,25 @@ large win on this list.
 **What to do.** Precompute ~6 frames at increasing volume and step them —
 terrain-based accumulation, clearly labelled as not a timing model.
 
-### 8. `HEAT_INDEX` is hand-authored, and the heat anchor is ~20 km away
+### 8. The heat field is now anchored to observed LST; the index weights are the residual
 
-**The issue.** The index weights (`paved 1.00, bare 0.85, green 0.40, wetland 0.20,
-water 0.05`, plus floodable 0.40 and tank 1.00) have no published provenance **and
-they sit in the retention path**, so they touch drainage numbers too. It is the
-weakest number in the project and says so (`heatIndexSource: "Hand-authored
-screening index; awaiting verification"`). The anchor is an *air*-temperature
-climatology from HKO Lau Fau Shan (July 2015–2024, `[26.4, 32.7] °C`), not skin
-temperature and not a site measurement.
+**The issue, mostly resolved.** The heat overlay is no longer a hand-authored
+0–1 relative index. `temperature_field.py` anchors it to a real **Landsat 8/9
+LST surface-temperature scene** over the site (the 2022-09-03 scene, the only
+100 %-finite, ~1 %-cloud capture), resampled 30 m → 5 m, and expresses each
+cell's *deviation from the site mean* through the geometry terms — land class,
+sky-view, shade, and **wind shelter** (`cell_fad`, the frontal-area density for
+the prevailing NE wind). The result is a **°C surface-temperature field**, shown
+as an anomaly map (blue cooler / neutral average / red hotter), so a
+well-designed site reads near-neutral and only genuine hot spots go red.
 
-**What to do.** Find a published provenance for the weights, or declare them as an
-authored screening assumption more loudly. Replace the anchor with a real Landsat
-8/9 LST scene over the site.
+**What remains, stated honestly.** The `HEAT_INDEX` land-class *weights* are
+still hand-authored (only `green 0.64` is measured from the LST calibration) —
+but they now express the *relative* geometry delta, not the absolute field, so
+the unproven part is a small perturbation on an observed base. Air temperature
+is an *estimate* (surface minus a documented 12 °C offset), never a measurement,
+and there is still no wind-speed or surface-energy-balance term — wind shelter
+is geometry (FAD), not flow.
 
 ### 9. The chat's model call is covered only by hand, and threads are not persisted
 
@@ -351,28 +361,39 @@ costs a wasted round trip before the rescue runs.
 **What to do.** A paid model id — a one-line `.env` change — removes all three
 problems.
 
-### 11. The outlet water-level condition is unresolved
+### 11. The outlet water-level condition is now a screening factor, not a hidden limit
 
-**The issue.** `sea_level_scenario` models retention *submergence* rather than
-outfall capacity, which is where sea level would actually bite at this site; it
-needs pipe and outfall data the project does not have. Related: two drainage
-readings coexist by design — the routed fill-and-spill cascade and the level-pool
-solve — shown side by side with a `reconciliation` block, and the headline
-`bufferDeficitM3` stays on the level-pool path and deliberately did not move.
+**The issue, mostly resolved.** `fill_and_spill` now takes a `tailwater_m`
+boundary condition: outlet cells (`receiver == -1`) pond up to the tailwater
+surface before spilling off-grid, so the cascade can answer "what if this rain
+hits at high tide". A Low/Mean/High tide toggle (HKO Quarry Bay, 0 / 1.4 /
+2.2 mCD) threads through the run, the stats, the sidecar and the frontend. The
+mechanism is verified: on a synthetic low-lying site, a 1.5 m tailwater holds
+back the full runoff volume that would otherwise discharge.
 
-**What to do.** Declare it rather than invent the network. The routed cascade now
-exists and could host the outfall question; the headline stays where it is.
+**The honest finding.** The HSK / San Tin site is **landward** — the grid minimum
+is 3.41 m, above the 2.2 m high-tide tailwater — so tidal backwater has ~zero
+effect here (flood area is unchanged across low/mean/high). The feature is wired
+and tested but effectively inert in this demo, and that is stated, not hidden.
 
-### 12. The terrain is ~90 m SRTM-derived, and the docs are stale about the fix
+**What remains.** True *outfall capacity* under storm surge needs pipe and
+outfall data the project does not have; that stays declared out of scope. The
+headline `bufferDeficitM3` stays on the level-pool path and deliberately did not
+move.
 
-**The issue.** `ch05 §5.4` calls the 5 m DTM "request-gated", but it is now freely
-available — and Open3Dhk's set includes a TIN terrain model. Also: a run re-solves
-the water level on the conditioned surface but does **not** re-condition it, so a
-DEM change needs `make_wetgrid.py` re-run (`make_wetgrid.py` writes the
-Priority-Flood conditioning and the D8 receiver once, ~9 s, offline).
+### 12. The terrain is the real 5 m DTM; only the re-condition note remains
 
-**What to do.** Ingest the real 5 m DTM / TIN terrain and document the re-condition
-step. Gates every drainage number.
+**The issue, resolved.** The terrain is **not** ~90 m SRTM. `dem_hsk.npy` /
+`elevation_5m` are the real 5 m Open3Dhk / LandsD DTM (`terrain_source =
+open3dhk-tiles`, 117×148, 3.4–17.3 m), built by `scripts/tiles_to_rasters.py`
+from the `model/terrain(TB)/*.b3dm` tiles on disk. The earlier "~90 m SRTM"
+wording here was stale.
+
+**What remains, stated honestly.** It is the *surface* of the LandsD terrain-tile
+mesh, not a surveyed bare-earth DTM release. And a run re-solves the water level
+on the conditioned surface but does **not** re-condition it, so a DEM change
+needs `make_wetgrid.py` re-run (`make_wetgrid.py` writes the Priority-Flood
+conditioning and the D8 receiver once, ~9 s, offline).
 
 ### 13. Storage is JSON files, not PostGIS
 
@@ -397,25 +418,22 @@ two-finger scroll does not pan in Cesium 3D (a cursor-anchored ground pan measur
 accessible name if it can be done without breaking the attribution terms. Keep the
 pan workaround documented.
 
-### 15. The temperature slider drives the heat display only, and has to say so
+### 15. The temperature slider now sets the scenario mean, and says so
 
-**The issue.** Above 35 °C the run applies `make_heatmap`'s documented heatwave
-stretch — a render transform on the same field; the land-class heat index does not
-know about air temperature, and `test_run` asserts it is bit-identical across
-presets. That is the right behaviour, because temperature cannot drive SCS-CN at
-all without an evapotranspiration term (Penman-Monteith or equivalent), which is a
-surface energy balance this project does not have and should not imply. What is
-wrong is that the prototype is silent about it: a planner drags temperature, sees
-no rainfall-side change, and gets no explanation.
+**The issue, resolved.** The slider is no longer a silent display-stretch. It now
+sets the **scenario mean surface temperature (°C)** — the temperature analogue of
+the rainfall slider's intensity — and re-anchors the whole heatmap so its mean
+matches, with presets (*Mean summer / Hot day / Extreme heatwave*) mirroring the
+rainfall Amber/Red/Black buttons. The spatial pattern (shade, green, wind shelter)
+still decides which cells are hotter or cooler than average, so a well-designed
+site reads near-neutral rather than "all red". The slider is labelled: it is
+surface (skin) temperature anchored to observed Landsat LST, air is estimated as
+~12 °C lower, and it changes no rainfall or runoff figure — temperature still
+cannot drive SCS-CN without an evapotranspiration term the project does not have.
 
-**What to do.** Constrain the slider to the band the anchor actually supports — the
-HKO Lau Fau Shan July 2015–2024 range `[26.4, 32.7] °C`, so roughly **24–42 °C** —
-because outside it the number is extrapolation with no basis. Mark **35 °C** as the
-threshold where the documented heatwave stretch engages, so the mechanism is
-discoverable rather than mysterious. And state beside the slider, where the planner
-is already looking, that moving it **stretches the heat scale and changes no
-rainfall or runoff figure**. The underlying behaviour stays as it is; what closes
-this gap is that the tool stops being silent about what the slider does.
+**What remains.** Nothing blocking. The one honest caveat is already stated beside
+the slider: this is surface temperature, not air temperature, and the anomaly
+display is what makes it a *comparison* tool rather than a wall of red.
 
 ---
 
@@ -451,7 +469,9 @@ waiting on another.
   extrudes actual building shapes from those footprints instead of tiling squares.
 - **8** — the real Landsat LST scene over the site, which is the heat anchor, plus a
   provenance pass on `HEAT_INDEX`.
-- **12** — the real 5 m DTM / TIN terrain, on the same contract as gap 3.
+- **12** — the terrain is in place (real 5 m Open3Dhk / LandsD DTM); only the
+  residual caveat — it is the tile-mesh *surface*, not a surveyed bare-earth DTM —
+  needs a line in the pitch wording.
 
 ### Edwin — model internals, storage and configuration
 

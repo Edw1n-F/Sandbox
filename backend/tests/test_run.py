@@ -135,23 +135,22 @@ def main() -> int:
     check("three runs produce three different overlay timestamps",
           len({base["runId"], wet["runId"], storm["runId"]}) == 3)
 
-    # ---- 3. the heatwave preset is display, not physics --------------------
+    # ---- 3. temperature re-anchors the surface field, not the water ---------
     hot = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 38.0, None, [])
-    check("a high temperature selects the heatwave preset",
-          hot["inputs"]["heatPreset"] == "heatwave"
-          and base["inputs"]["heatPreset"] == "normal")
-    check("the preset moves the blended field the overlay shows",
-          abs(hot["stats"]["scenario"]["heatBlendedMean"]
-              - base["stats"]["scenario"]["heatBlendedMean"]) > 1e-4,
-          f"{base['stats']['scenario']['heatBlendedMean']:.4f} -> "
-          f"{hot['stats']['scenario']['heatBlendedMean']:.4f}")
-    check("and does NOT move the land-class heat index",
-          abs(hot["stats"]["scenario"]["heatMean"]
-              - base["stats"]["scenario"]["heatMean"]) < 1e-9,
-          "the physics does not know about air temperature")
-    check("or the water: the wet area is identical",
+    check("the scenario mean surface temperature follows the slider",
+          abs(hot["stats"]["scenario"]["surfaceMeanC"] - 38.0) < 0.01,
+          f"{hot['stats']['scenario']['surfaceMeanC']:.2f} C")
+    check("a higher scenario mean shifts the field up",
+          hot["stats"]["scenario"]["surfaceMeanC"]
+          > base["stats"]["scenario"]["surfaceMeanC"],
+          f"{base['stats']['scenario']['surfaceMeanC']:.2f} -> "
+          f"{hot['stats']['scenario']['surfaceMeanC']:.2f} C")
+    check("and does NOT move the water: the wet area is identical",
           abs(hot["stats"]["scenario"]["wetAreaHa"]
               - base["stats"]["scenario"]["wetAreaHa"]) < 1e-9)
+    check("or the unstored volume",
+          abs(hot["stats"]["scenario"]["unstoredM3"]
+              - base["stats"]["scenario"]["unstoredM3"]) < 1e-9)
 
     # ---- 4. an intervention moves the ledger -------------------------------
     # A retention basin in the middle of the study area, small enough to pass

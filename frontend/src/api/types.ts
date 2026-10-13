@@ -187,6 +187,14 @@ export interface RunLedgerSide {
   /** Routed cells with >= flood threshold standing water, in ha (null if routing unavailable). */
   floodAreaHa?: number | null
   heatBlendedMean: number
+  /** Mean surface (skin) temperature, in C, anchored to observed LST. */
+  surfaceMeanC: number
+  /** Maximum surface temperature across the grid, in C. */
+  surfaceMaxC: number
+  /** Maximum deviation from the site mean, in C (the anomaly map's hot end). */
+  anomalyMaxC: number
+  /** Air-temperature estimate = surface minus a documented offset, in C. */
+  airMeanC: number
   /** Total assumed usable storage across the grid, in m3. */
   storageCapacityM3?: number
   /** Paved share of all cells, 0-1. */
@@ -202,7 +210,8 @@ export interface RunResult {
   inputs: {
     rainfallMm: number
     temperatureC: number
-    heatPreset: 'normal' | 'heatwave'
+    /** The scenario mean surface temperature (C) the slider set. */
+    scenarioMeanC?: number
     tideState?: TideState
     planId: string | null
     /** The cumulative selection this run composed. Empty for a baseline run. */
@@ -219,6 +228,16 @@ export interface RunResult {
       source: string
       active: boolean
     }
+    /** Surface-temperature context for the run (quantity, anchor, offset). */
+    temperature?: {
+      quantity: string
+      unit: string
+      observedMeanC: number | null
+      scenarioMeanC: number
+      surfaceToAirOffsetC: number
+      source: string
+      note: string
+    }
     baseline: RunLedgerSide
     scenario: RunLedgerSide
     delta: {
@@ -229,6 +248,10 @@ export interface RunResult {
       floodAreaHa?: number | null
       heatMean: number
       heatBlendedMean: number
+      /** Change in mean surface temperature, in C. */
+      surfaceMeanC: number
+      /** Change in maximum surface temperature, in C. */
+      surfaceMaxC: number
       greenAreaM2: number
       pavedAreaM2: number
       /** Change in total available storage: positive means the scenario adds it. */

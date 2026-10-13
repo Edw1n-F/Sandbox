@@ -188,7 +188,7 @@ export default function ProjectCatalog() {
               onClick={() => setExpanded(isOpen ? null : project.id)}
             >
               <Stack direction="row" spacing={1} alignItems="center">
-                <Typography variant="body2" sx={{ fontWeight: 600, fontSize: 12.5 }}>
+                <Typography className="hud-mono" variant="body2" sx={{ fontWeight: 600, fontSize: 12.5 }}>
                   {project.name}
                 </Typography>
                 {onPhases.length > 0 && (

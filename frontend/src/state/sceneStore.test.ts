@@ -130,7 +130,7 @@ describe('run', () => {
   const result = {
     runId: 'abc12345',
     sceneId: 's1',
-    inputs: { rainfallMm: 600, temperatureC: 38, heatPreset: 'heatwave',
+    inputs: { rainfallMm: 600, temperatureC: 38,
       planId: 'plan-1' },
     overlays: { wetGridUrl: '/static/rasters/run/wetgrid.png?v=abc12345',
       heatmapUrl: '/static/rasters/run/heatmap.png?v=abc12345' },

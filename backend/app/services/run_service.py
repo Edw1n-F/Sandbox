@@ -68,9 +68,14 @@ from make_wetgrid import (  # noqa: E402
     flood_rgba,
     to_rgba,
 )
-from make_heatmap import HEATWAVE_STRETCH, ramp_rgba  # noqa: E402
 from _overlay_common import HEAT_INDEX, LAND_CLASSES  # noqa: E402
 from hydrology import fill_and_spill  # noqa: E402
+from app.services.temperature_field import (  # noqa: E402
+    SCENARIO_PRESETS,
+    SURFACE_TO_AIR_OFFSET_C,
+    load_observed_lst,
+    temperature_field,
+)
 
 RUN_STATUS = "SCREENING_LIVE_RUN_FLOOD_EXTENT"
 RUN_WARNING = (
@@ -88,12 +93,87 @@ TIDE_WARNING = (
     "indicative, not a regulatory tide-locking assessment."
 )
 
-# The slider temperature at which the heatwave *display* preset kicks in. The
-# preset is a display transform on the same field (see make_heatmap), never a
-# change to the physics: the land-class heat index does not know about air
-# temperature, and pretending it does would be the one dishonest number in the
-# loop.
-HEATWAVE_THRESHOLD_C = 35.0
+# The diverging ramp for the temperature *anomaly* map (deviation from the site
+# mean, in C). Blue = cooler than average, neutral = average, red = hotter than
+# average. A well-designed site reads near-neutral; only genuine hot spots go
+# red, which is the whole point of showing the signal rather than a wall of
+# "it is hot in Hong Kong". Centred on zero by construction.
+#
+# Neutral is TRANSPARENT, not white: a cell at ~0 deviation fades the overlay to
+# nothing so the base map shows through. The white band in the first two renders
+# was blinding -- a bright wash over most of the grid -- and reading as "data"
+# when it was really "no signal". Alpha ramps from 0 at 0 to full at the band
+# edge, and the RGB still follows the diverging stops so the fade stays on-hue.
+#
+# Scale note: a real site's anomaly distribution is TIGHT (91% of cells within
+# +/-2 C). The neutral band is therefore only +/-0.5 C, and the mid colours are
+# already saturated by +/-2 C -- otherwise the whole grid lands in the neutral
+# band and the map reads as a washed-out blank with a faint tint.
+ANOMALY_RAMP = (
+    (-6.0, (33, 102, 172)),    # deep blue    - much cooler
+    (-4.0, (70, 148, 178)),    # blue         - cooler
+    (-2.0, (150, 205, 178)),   # teal-green   - visibly cooler
+    (-0.5, (205, 222, 210)),   # pale green-grey - slightly cooler
+    (0.0, (228, 222, 208)),    # neutral      - average (alpha -> 0)
+    (0.5, (240, 204, 148)),    # tan          - slightly warmer
+    (2.0, (242, 166, 90)),     # orange       - visibly warmer
+    (4.0, (222, 100, 60)),     # red-orange   - hot spot
+    (6.0, (168, 32, 48)),      # dark red     - much warmer
+)
+
+# Neutral is TRANSPARENT and WHITE-FREE: the ramp carries no light/white stops,
+# so a near-average cell cannot paint a bright patch no matter what alpha it
+# gets. On top of that a dead-band (below) makes |anomaly| under the threshold
+# fully invisible, and the alpha then ramps in -- so "no signal" shows the base
+# map and every visible tint is a saturated hue.
+#
+# Scale note: a real site's anomaly distribution is TIGHT (median |anomaly|
+# 1.1 C, 92% within +/-2 C). The ramp saturates its colours by +/-2 C so the
+# structure is readable without exaggerating the extremes.
+ANOMALY_RAMP = (
+    (-6.0, (33, 102, 172)),    # deep blue    - much cooler
+    (-4.0, (70, 148, 178)),    # blue         - cooler
+    (-2.0, (118, 196, 178)),   # teal         - visibly cooler
+    (-0.5, (168, 214, 196)),   # soft teal    - slightly cooler
+    (0.0, (188, 198, 189)),    # grey-green   - average (alpha -> 0)
+    (0.5, (222, 194, 138)),    # sand         - slightly warmer
+    (2.0, (242, 166, 90)),     # orange       - visibly warmer
+    (4.0, (222, 100, 60)),     # red-orange   - hot spot
+    (6.0, (168, 32, 48)),      # dark red     - much warmer
+)
+
+# Dead-band half-width (C): cells closer to the mean than this are fully
+# transparent. Beyond it, alpha ramps to opaque by ANOMALY_OPAQUE_C.
+ANOMALY_NEUTRAL_HALF_WIDTH_C = 0.4
+ANOMALY_OPAQUE_C = 2.5
+
+
+def anomaly_rgba(anomaly_c: np.ndarray) -> np.ndarray:
+    """Map a deviation-from-mean temperature field (C) to RGBA, diverging at 0.
+
+    RGB follows the diverging stops (no white); alpha is 0 inside the dead-band
+    (``ANOMALY_NEUTRAL_HALF_WIDTH_C``) and ramps to fully opaque by
+    ``ANOMALY_OPAQUE_C``, so "no signal" cells show the base map and every
+    visible cell is a saturated hue rather than a bright wash.
+    """
+    stops = np.array([s[0] for s in ANOMALY_RAMP], dtype=np.float64)
+    colours = np.array([s[1] for s in ANOMALY_RAMP], dtype=np.float64)
+    clipped = np.clip(anomaly_c, stops[0], stops[-1])
+    out = np.empty(anomaly_c.shape + (4,), dtype=np.uint8)
+    for channel in range(3):
+        out[..., channel] = np.interp(clipped, stops, colours[:, channel])
+    # Alpha: 0 inside the dead-band, 255 at/after the opaque distance.
+    mag = np.abs(anomaly_c)
+    span = ANOMALY_OPAQUE_C - ANOMALY_NEUTRAL_HALF_WIDTH_C
+    alpha = np.clip((mag - ANOMALY_NEUTRAL_HALF_WIDTH_C) / span, 0.0, 1.0) * 255.0
+    out[..., 3] = alpha.astype(np.uint8)
+    return out
+
+# The temperature slider sets the *scenario mean surface temperature* (C), the
+# temperature analogue of the rainfall slider's intensity: a real input driving
+# one honest output (the field re-anchors so its mean matches). The observed
+# Landsat scene supplies the default; presets are documented offsets above it.
+DEFAULT_TEMPERATURE_C = 30.0
 
 # Above the slider's rainfall maximum the CN formula's own validity is
 # questionable; the schema bounds the request, this is just the labelled cap.
@@ -159,6 +239,7 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
         rasterise_height,
         shade_mask,
         sky_view_factor_raster,
+        cell_fad,
     )
 
     terms: dict[str, np.ndarray] | None = None
@@ -176,6 +257,15 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
                 "shaded": shade_mask(fps, grids, SITE_LAT_DEG, SITE_LON_DEG,
                                      HEAT_SUMMER_DAY_OF_YEAR, 14.0
                                      ).astype(np.float32),
+                # Wind shelter: per-cell frontal-area density for the prevailing
+                # NE wind (AVRG73). Higher FAD -> more blocked -> hotter. This is
+                # geometry, not a wind speed (FAD is not a velocity ratio).
+                "fad": cell_fad(fps, grids, 45.0).astype(np.float32),
+                # Building height raster, kept so the wet-grid render can mask
+                # cells under a footprint (see the render block): the flood is
+                # solved on bare earth, so without this a pond under a tower
+                # would paint the tower's roof once classified onto 3D Tiles.
+                "height": height,
             }
     _HEAT_TERMS_CACHE.clear()
     _HEAT_TERMS_CACHE.update({"mtime": mtime, "terms": terms})
@@ -183,30 +273,46 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
 
 
 # --------------------------------------------------------------------------- #
-# The heat field
+# The temperature field
 # --------------------------------------------------------------------------- #
 
-def _heat_field(grids: Grids, land_class: np.ndarray,
-                terms: dict[str, np.ndarray] | None,
-                heatwave: bool) -> np.ndarray:
-    """The blended 0-1 heat-exposure field for one land-class grid.
-
-    Same blend as ``make_heatmap._blend_field``: land class + sky view + shade
-    when the massing exists, land class alone (and said so) when it does not.
-    The heatwave preset applies the offline pipeline's own display stretch --
-    a render transform on the same field, never a change to it (ADR-024).
-    """
-    from app.services.design_metrics import blended_heat_field
-
+def _land_index(grids: Grids, land_class: np.ndarray) -> np.ndarray:
+    """The 0-1 land-class heat index for a grid (the HEAT_INDEX lookup)."""
     lut = np.array([HEAT_INDEX[name] for name in LAND_CLASSES], dtype=np.float32)
-    land_index = lut[land_class].astype(np.float32)
+    return lut[land_class].astype(np.float32)
+
+
+def _temperature_fields(grids: Grids, land_class: np.ndarray,
+                        terms: dict[str, np.ndarray] | None,
+                        lst_base: np.ndarray | None,
+                        scenario_mean_c: float | None,
+                        ) -> dict[str, Any]:
+    """The anchored surface-temperature field (C) for one land-class grid.
+
+    Combines the observed LST base with the geometry terms (land class, sky
+    view, shade, wind shelter) as deviation-from-mean, then re-anchors to the
+    scenario mean. Returns ``surfaceC`` (absolute) and ``anomalyC`` (deviation),
+    plus the summary stats. When ``terms`` is None (no city model) the geometry
+    terms collapse to land-class only, and the sidecar says so.
+    """
+    land_index = _land_index(grids, land_class)
+    shape = land_index.shape
     if terms is None:
-        field = land_index
+        svf = np.ones(shape, dtype=np.float32)
+        shaded = np.zeros(shape, dtype=np.float32)
+        fad = np.zeros(shape, dtype=np.float32)
     else:
-        field = blended_heat_field(land_index, terms["svf"], terms["shaded"])
-    if heatwave:
-        field = np.clip(field * HEATWAVE_STRETCH, 0.0, 1.0)
-    return field
+        svf = terms["svf"]
+        shaded = terms["shaded"]
+        fad = terms["fad"]
+    return temperature_field(
+        land_index=land_index,
+        svf=svf,
+        shaded=shaded,
+        fad=fad,
+        lst_base=lst_base,
+        scenario_mean_c=scenario_mean_c,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -214,7 +320,7 @@ def _heat_field(grids: Grids, land_class: np.ndarray,
 # --------------------------------------------------------------------------- #
 
 def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
-                          heatwave: bool, applied: list[dict],
+                          applied: list[dict],
                           skipped: list[dict]) -> str:
     """The no-LLM explanation: the same facts, assembled by code.
 
@@ -238,9 +344,9 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
         f"(baseline {base['unstoredM3']:,.0f} m3).",
         f"Water ponds over {scen['wetAreaHa']:,.1f} ha of the low ground "
         f"(today: {base['wetAreaHa']:,.1f} ha).",
-        f"Mean heat-exposure index {scen['heatMean']:.3f} "
-        f"({stats['delta']['heatMean']:+.3f} vs today) on the relative 0-1 "
-        "scale -- not a temperature.",
+        f"Mean surface temperature {scen['surfaceMeanC']:.1f} C "
+        f"({stats['delta']['surfaceMeanC']:+.1f} C vs today), air estimate "
+        f"{scen['airMeanC']:.1f} C; rendered as deviation from the site mean.",
     ]
     if tide.get("active"):
         parts.append(
@@ -255,11 +361,6 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
         parts.append(
             f"{len(skipped)} intervention(s) had no land-cover effect the "
             "model can score and were reported, not approximated."
-        )
-    if heatwave:
-        parts.append(
-            "The heatwave preset is a display stretch on the same field, not a "
-            "different scenario -- compare runs at the same preset."
         )
     parts.append(
         "Screening-level SCS-CN runoff routed to a flood extent (>= %.2f m "
@@ -280,7 +381,7 @@ def _rounded(node: Any) -> Any:
 
 
 def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
-                     temperature_c: float, heatwave: bool,
+                     temperature_c: float,
                      applied: list[dict], skipped: list[dict]
                      ) -> tuple[str, str] | None:
     """One short planner-facing paragraph from a configured LLM, or None.
@@ -293,7 +394,7 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
     facts = {
         "rainfallMm": rainfall_mm,
         "temperatureC": temperature_c,
-        "heatwaveDisplayPreset": heatwave,
+        "temperature": stats.get("temperature"),
         "tide": stats.get("tide"),
         "baseline": stats["baseline"],
         "scenario": stats["scenario"],
@@ -310,7 +411,9 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "urban planner. Write at most 110 words. Rules: use ONLY the numbers "
         "in the JSON below -- never invent a figure; say 'unstored runoff' "
         "for unstoredM3; mention the flood extent (floodAreaHa, cells with at "
-        "least %.2f m standing water) and the mean heat-exposure index; if a "
+        "least %.2f m standing water) and the mean surface temperature "
+        "(surfaceMeanC, in degrees Celsius) with its air-temperature estimate "
+        "(airMeanC); if a "
         "tide state is present and its tailwaterM is above 0, mention that "
         "tidal backwater was applied as a screening boundary condition and "
         "name the tide state; if no "
@@ -318,11 +421,11 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "cover and no project is selected; if the scenario matches the "
         "baseline, state that explicitly rather than calling it better or "
         "worse; otherwise state whether the scenario is better or worse than "
-        "today and by how much; if the heatwave display preset is on, say it "
-        "is a display transform, not a different scenario; end by stating "
+        "today and by how much; end by stating "
         "this is a screening-level flood extent (>= %.2f m standing water), "
-        "not engineering-grade, and that the heat index is relative, not a "
-        "temperature.\n\n" % (FLOOD_DEPTH_M, FLOOD_DEPTH_M)
+        "not engineering-grade, and that surface temperature is anchored to an "
+        "observed Landsat scene and rendered as deviation from the site mean, "
+        "not an air-temperature field.\n\n" % (FLOOD_DEPTH_M, FLOOD_DEPTH_M)
         + json.dumps(_rounded(facts), indent=1)
     )
 
@@ -444,11 +547,19 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         base_routed = np.asarray(base_cascade["depthField"], dtype=np.float32)
         base_flood_area_ha = float((base_routed >= FLOOD_DEPTH_M).sum()) * cell_area / 10_000.0
 
-    # ---- heat field ---------------------------------------------------------
-    heatwave = temperature_c >= HEATWAVE_THRESHOLD_C
+    # ---- temperature field ---------------------------------------------------
+    # The slider sets the scenario mean surface temperature (C). The observed LST
+    # scene supplies the base; the geometry terms (land + shade + sky view + wind
+    # shelter) express each cell's deviation from the mean. Scenario and baseline
+    # share the same observed base and geometry, so the delta is the intervention's
+    # own effect on surface temperature.
     terms = _heat_terms(grids, scene_id)
-    scen_heat = _heat_field(grids, trial, terms, heatwave)
-    base_heat = _heat_field(grids, grids.land_class, terms, heatwave)
+    lst_base, lst_meta = load_observed_lst(grids.elevation_5m.shape[0],
+                                           grids.elevation_5m.shape[1])
+    scenario_mean_c = float(temperature_c)
+    scen_temp = _temperature_fields(grids, trial, terms, lst_base, scenario_mean_c)
+    base_temp = _temperature_fields(grids, grids.land_class, terms, lst_base,
+                                    scenario_mean_c)
 
     # ---- stats ---------------------------------------------------------------
     scen_ledger = _scenario_ledger(grids, trial, cn_over, rainfall_mm,
@@ -463,17 +574,38 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "source": TIDE_STATES[tide_state]["source"],
             "active": tailwater_m > 0.0,
         },
+        "temperature": {
+            "quantity": "surface (skin) temperature",
+            "unit": "C",
+            "observedMeanC": lst_meta.get("observedMeanC"),
+            "scenarioMeanC": scenario_mean_c,
+            "surfaceToAirOffsetC": SURFACE_TO_AIR_OFFSET_C,
+            "source": lst_meta.get("source"),
+            "note": (
+                "Surface temperature anchored to an observed Landsat LST scene; "
+                "rendered as deviation from the site mean. Air temperature is "
+                f"estimated as surface minus {SURFACE_TO_AIR_OFFSET_C:.0f} C."
+            ),
+        },
         "baseline": {
             **base_ledger,
             "wetAreaHa": round(base_wet_area_ha, 2),
             "floodAreaHa": round(base_flood_area_ha, 2) if base_flood_area_ha is not None else None,
-            "heatBlendedMean": round(float(base_heat.mean()), 4),
+            "heatBlendedMean": round(float(base_ledger.get("heatMean", 0.0)), 4),
+            "surfaceMeanC": base_temp["meanSurfaceC"],
+            "surfaceMaxC": base_temp["maxSurfaceC"],
+            "anomalyMaxC": base_temp["maxAnomalyC"],
+            "airMeanC": round(base_temp["meanSurfaceC"] - SURFACE_TO_AIR_OFFSET_C, 3),
         },
         "scenario": {
             **scen_ledger,
             "wetAreaHa": round(wet_area_ha, 2),
             "floodAreaHa": round(flood_area_ha, 2) if flood_area_ha is not None else None,
-            "heatBlendedMean": round(float(scen_heat.mean()), 4),
+            "heatBlendedMean": round(float(scen_ledger.get("heatMean", 0.0)), 4),
+            "surfaceMeanC": scen_temp["meanSurfaceC"],
+            "surfaceMaxC": scen_temp["maxSurfaceC"],
+            "anomalyMaxC": scen_temp["maxAnomalyC"],
+            "airMeanC": round(scen_temp["meanSurfaceC"] - SURFACE_TO_AIR_OFFSET_C, 3),
         },
         "delta": {
             "unstoredM3": round(
@@ -487,7 +619,11 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "heatMean": round(
                 scen_ledger["heatMean"] - base_ledger["heatMean"], 4),
             "heatBlendedMean": round(
-                float(scen_heat.mean() - base_heat.mean()), 4),
+                scen_temp["meanSurfaceC"] - base_temp["meanSurfaceC"], 4),
+            "surfaceMeanC": round(
+                scen_temp["meanSurfaceC"] - base_temp["meanSurfaceC"], 3),
+            "surfaceMaxC": round(
+                scen_temp["maxSurfaceC"] - base_temp["maxSurfaceC"], 3),
             "greenAreaM2": round(
                 scen_ledger["greenAreaM2"] - base_ledger["greenAreaM2"], 1),
             "pavedAreaM2": round(
@@ -554,11 +690,21 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     heat_png = run_dir / f"heatmap_{run_id}.png"
     # Flood map when routing is available (routed depth >= threshold), else the
     # continuous ponding ramp — the fallback says why in the sidecar.
+    #
+    # Mask cells under a building footprint before painting. The depth is solved
+    # on the bare-earth surface, so a pond can be placed where a tower stands;
+    # because the overlay is classified onto 3D Tiles (there is no per-tileset
+    # way to exempt buildings), that pond would render on the roof. Suppress it
+    # in the PNG only — the ledger and the .npy keep every solved cell.
+    footprint = (terms["height"] > 0) if (terms and "height" in terms) else None
+    wet_render = routed_depth if routed_depth is not None else depth_field
+    if footprint is not None:
+        wet_render = np.where(footprint, 0.0, wet_render)
     if routed_depth is not None:
-        Image.fromarray(flood_rgba(routed_depth), mode="RGBA").save(wet_png)
+        Image.fromarray(flood_rgba(wet_render), mode="RGBA").save(wet_png)
     else:
-        Image.fromarray(to_rgba(depth_field), mode="RGBA").save(wet_png)
-    Image.fromarray(ramp_rgba(scen_heat), mode="RGBA").save(heat_png)
+        Image.fromarray(to_rgba(wet_render), mode="RGBA").save(wet_png)
+    Image.fromarray(anomaly_rgba(scen_temp["anomalyC"]), mode="RGBA").save(heat_png)
 
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
     tide_active = tailwater_m > 0.0
@@ -596,33 +742,48 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "artefact": "heatmap-live-run",
         "runId": run_id,
         "generated": generated,
-        "status": RUN_STATUS,
-        "warning": RUN_WARNING + (
-            "" if terms is not None else
-            " No city model: land-class index only, no sky-view or shade term."
+        "status": lst_meta["available"] and "SURFACE_TEMPERATURE_ANCHORED_TO_LST"
+                  or "SURFACE_TEMPERATURE_SYNTHETIC_FALLBACK",
+        "warning": (
+            "Surface (skin) temperature rendered as deviation from the site "
+            "mean (C). Blue cooler, red hotter than average. Not air "
+            "temperature; air is estimated as surface minus "
+            f"{SURFACE_TO_AIR_OFFSET_C:.0f} C. Wind shelter is geometry (FAD), "
+            "not a wind speed." + (
+                "" if terms is not None else
+                " No city model: land-class index only, no sky-view, shade or "
+                "wind-shelter term."
+            )
         ),
         "inputs": {
             "temperatureC": temperature_c,
-            "heatwaveDisplayPreset": heatwave,
+            "scenarioMeanC": scenario_mean_c,
             "planId": plan_id,
             "planIds": plan_ids or ([plan_id] if plan_id else []),
         },
+        "temperature": {
+            "surfaceMeanC": scen_temp["meanSurfaceC"],
+            "surfaceMaxC": scen_temp["maxSurfaceC"],
+            "anomalyMaxC": scen_temp["maxAnomalyC"],
+            "airMeanC": round(
+                scen_temp["meanSurfaceC"] - SURFACE_TO_AIR_OFFSET_C, 3),
+            "observedMeanC": scen_temp["observedMeanC"],
+            "lstSource": lst_meta.get("source"),
+        },
         "results": {
-            "meanIndex": round(float(scen_heat.mean()), 4),
-            "deltaVsBaseline": stats["delta"]["heatBlendedMean"],
+            "deltaSurfaceMeanC": stats["delta"]["surfaceMeanC"],
+            "deltaSurfaceMaxC": stats["delta"]["surfaceMaxC"],
         },
     }, indent=2), encoding="utf-8")
 
     _prune_run_dir(run_dir)
 
     # ---- explanation -----------------------------------------------------------
-    llm = _llm_explanation(stats, rainfall_mm, temperature_c, heatwave,
-                           applied, skipped)
+    llm = _llm_explanation(stats, rainfall_mm, temperature_c, applied, skipped)
     if llm is not None:
         explanation, source = llm
     else:
-        explanation = _template_explanation(stats, rainfall_mm, heatwave,
-                                            applied, skipped)
+        explanation = _template_explanation(stats, rainfall_mm, applied, skipped)
         source = "template"
 
     wet_url = settings.public_url(f"rasters/run/wetgrid_{run_id}.png")
@@ -633,7 +794,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "inputs": {
             "rainfallMm": rainfall_mm,
             "temperatureC": temperature_c,
-            "heatPreset": "heatwave" if heatwave else "normal",
+            "scenarioMeanC": scenario_mean_c,
             "tideState": tide_state,
             "planId": plan_id,
             "planIds": plan_ids or ([plan_id] if plan_id else []),

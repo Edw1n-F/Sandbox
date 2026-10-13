@@ -38,8 +38,8 @@ export default function SlidersPanel() {
 
   const RAIN_SIGNALS = [
     { label: 'Amber', value: 30, color: '#f5a623' },
-    { label: 'Red', value: 50, color: '#d32f2f' },
-    { label: 'Black', value: 70, color: '#1a1a1a' },
+    { label: 'Red', value: 50, color: '#ff6b6b' },
+    { label: 'Black', value: 70, color: '#9aa0a6' },
   ] as const
 
   const TIDE_OPTIONS = [
@@ -47,6 +47,22 @@ export default function SlidersPanel() {
     { label: 'Mean', value: 'mean', color: '#f5a623' },
     { label: 'High', value: 'high', color: '#1c7ed6' },
   ] as const
+
+  // Temperature: the scenario mean surface temperature (C). The whole field
+  // re-anchors so its mean matches. The buttons mirror the HKO warning system,
+  // the same way the rainfall buttons mirror the rainstorm signals:
+  //   Hot night         — daily min >= 28 C          (HKO "hot night")
+  //   Very Hot Warning  — daily max >= 33 C          (HKO Very Hot Weather Warning)
+  //   Extreme heat      — "extremely hot weather" special alert, max >= 35 C
+  // These are *air* temperatures; air ~= surface - 12 C, so each button sets
+  // the equivalent surface mean so it stays honest to the surface slider.
+  const temperatureC = Number(scene?.envParams.temperature ?? 30)
+  const TEMP_PRESETS = [
+    { label: 'Hot night', value: 40, airC: 28, color: '#f5a623', onColor: '#1a1a1a' },
+    { label: 'Very hot', value: 45, airC: 33, color: '#ff6b6b', onColor: '#1a1a1a' },
+    { label: 'Extreme', value: 47, airC: 35, color: '#9aa0a6', onColor: '#1a1a1a' },
+  ] as const
+  const activePreset = TEMP_PRESETS.find((p) => p.value === temperatureC)
 
   return (
     <HudPanel title="Scenario Inputs">
@@ -62,8 +78,7 @@ export default function SlidersPanel() {
             { value: 50, label: '50' },
             { value: 70, label: '70' },
           ]}
-          caption={`HKO rainstorm signals are hourly rates: Amber 30, Red 50, Black 70 mm/hr.`
-            + ` At ${intensity} mm/hr × ${durationH} h this event totals ${totalMm.toFixed(0)} mm.`}
+          caption={`Amber 30 · Red 50 · Black 70 mm/hr. At ${intensity} mm/hr × ${durationH} h = ${totalMm.toFixed(0)} mm total.`}
           onChange={(precipitation) => setEnvParams({ precipitation })}
         />
 
@@ -88,7 +103,7 @@ export default function SlidersPanel() {
                   borderColor: sig.color,
                   color: sig.color,
                   textTransform: 'none',
-                  whiteSpace: 'nowrap',
+                  whiteSpace: 'normal',
                   '&:hover': {
                     borderColor: sig.color,
                     bgcolor: `${sig.color}1a`,
@@ -113,7 +128,7 @@ export default function SlidersPanel() {
             { value: 3, label: '3' },
             { value: 6, label: '6' },
           ]}
-          caption="How long the storm lasts. Intensity × duration = storm-total depth fed to the SCS-CN runoff equation."
+          caption="Storm length. Intensity × duration = total depth for runoff."
           onChange={(durationHours) => setEnvParams({ durationHours })}
         />
 
@@ -149,21 +164,58 @@ export default function SlidersPanel() {
             ))}
           </Stack>
           <Typography variant="caption" color="text.secondary" sx={{ fontSize: 8.5, display: 'block', mt: 0.25 }}>
-            Screening backwater: at higher tide the outfall cannot discharge and
-            water stays on the grid. Not an outfall hydraulics model.
+            Screening backwater — higher tide keeps water on the grid.
           </Typography>
         </Box>
 
         <SliderField
-          label="Temperature"
+          label="Surface temperature"
           unit="°C"
           min={24}
-          max={42}
-          value={Number(scene?.envParams.temperature ?? 30)}
-          marks={[{ value: 35, label: '35°' }]}
-          caption="Stretches the heat colour scale above 35 °C. Does not change rainfall or runoff."
+          max={50}
+          value={temperatureC}
+          marks={[{ value: 41, label: '41°' }]}
+          caption="Re-anchors the heatmap to this mean; shade, green and wind shelter still decide which cells run hotter or cooler."
           onChange={(temperature) => setEnvParams({ temperature })}
         />
+
+        <Box>
+          <Typography className="hud-label" sx={{ fontSize: 8.5, mb: 0.25 }}>
+            Heat warning (HKO)
+          </Typography>
+          <Stack direction="row" spacing={0.5}>
+            {TEMP_PRESETS.map((p) => (
+              <Button
+                key={p.label}
+                size="small"
+                variant={activePreset?.value === p.value ? 'contained' : 'outlined'}
+                onClick={() => setEnvParams({ temperature: p.value })}
+                sx={{
+                  flex: 1,
+                  minWidth: 0,
+                  px: 0.5,
+                  py: 0.25,
+                  fontSize: 10,
+                  lineHeight: 1.4,
+                  textTransform: 'none',
+                  whiteSpace: 'normal',
+                  ...(activePreset?.value === p.value
+                    ? { bgcolor: p.color, color: p.onColor, '&:hover': { bgcolor: p.color } }
+                    : {
+                        borderColor: p.color,
+                        color: p.color,
+                        '&:hover': { borderColor: p.color, bgcolor: `${p.color}1a` },
+                      }),
+                }}
+              >
+                {p.label} {p.airC}°
+              </Button>
+            ))}
+          </Stack>
+          <Typography variant="caption" color="text.secondary" sx={{ fontSize: 8.5, display: 'block', mt: 0.25 }}>
+            Air temp (≥28 / ≥33 / ≥35 °C) → surface − 12 °C. Rendered as deviation from the mean.
+          </Typography>
+        </Box>
 
         <Button
           variant="contained"

@@ -421,6 +421,36 @@ def rgba_from_class(
     return lut[land]
 
 
+def building_footprint_mask(ov: "Overlay") -> np.ndarray | None:
+    """Boolean raster: ``True`` where a cell lies under a building footprint.
+
+    ``None`` when no city model is present. The mask is the *render-time*
+    fix for a display artefact, not a change to the model: the overlays are
+    painted onto 3D Tiles as classified geometry (Cesium has no per-tileset way
+    to exempt buildings), so a wet cell whose XY falls under a tower paints the
+    tower's roof. The flood raster is solved on the bare-earth surface, which
+    has no building in it, so those cells are suppressed on screen.
+
+    The data are untouched -- ``wetgrid_hsk.npy`` keeps the solved depth -- so a
+    downstream number that counts those cells still can; only the picture hides
+    a pond that could not physically sit inside a building.
+    """
+    import json as _json
+
+    from app.services.design_metrics import footprints_from_geojson, rasterise_height
+
+    path = settings.rasters_dir / "buildings_hsk.json"
+    if not path.exists():
+        return None
+    try:
+        features = _json.loads(path.read_text()).get("features") or []
+    except (OSError, ValueError):
+        return None
+    if not features:
+        return None
+    return rasterise_height(footprints_from_geojson(features), ov) > 0
+
+
 def attach_to_scene(kind: str, png_path: Path) -> str | None:
     """Register a generated overlay against the seeded scene.
 

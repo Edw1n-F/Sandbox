@@ -112,6 +112,11 @@ def _resolve_overlay_url(doc: dict[str, Any], key: str) -> str | None:
     Existence is checked rather than assumed: advertising a wet-grid URL whose
     PNG was never generated produces a broken layer in the viewer, which is
     worse than reporting the layer as absent.
+
+    The URL carries an ``?v=<mtime>`` cache-buster. Without it the browser keeps
+    the first copy of a re-rendered PNG, so a regenerated overlay (e.g. the
+    heatmap after a ramp change) shows stale pixels until a hard refresh -- the
+    exact "I changed it and nothing happened" trap.
     """
     rel = doc.get(key)
     if not rel:
@@ -119,7 +124,9 @@ def _resolve_overlay_url(doc: dict[str, Any], key: str) -> str | None:
     absolute = settings.data_dir / rel
     if not absolute.exists():
         return None
-    return settings.public_url(rel)
+    url = settings.public_url(rel)
+    version = int(absolute.stat().st_mtime)
+    return f"{url}{'&' if '?' in url else '?'}v={version}"
 
 
 def _resolve_model_3d_url(doc: dict[str, Any], key: str) -> str | None:

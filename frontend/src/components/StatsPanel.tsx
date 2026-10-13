@@ -126,9 +126,21 @@ export default function StatsPanel() {
         </Typography>
       </Stack>
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Heat index</Typography>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Surface temp (mean)</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
-          {stats.scenario.heatBlendedMean.toFixed(3)}
+          {stats.scenario.surfaceMeanC.toFixed(1)} °C
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Air temp (est.)</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {stats.scenario.airMeanC.toFixed(1)} °C
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Δ surface temp</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {signed(delta.surfaceMeanC, ' °C', 1)}
         </Typography>
       </Stack>
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
@@ -192,11 +204,10 @@ export default function StatsPanel() {
       ))}
 
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1, fontSize: 9 }}>
-        {inputs.heatPreset === 'heatwave' ? 'Heatwave display preset. ' : ''}
         {(inputs.planIds?.length ?? 0) > 1
           ? `Cumulative: ${inputs.planIds?.length} projects combined. `
           : ''}
-        Screening figures, not a drainage simulation.
+        Surface temp is skin (Landsat), not air; screening figures.
       </Typography>
     </HudPanel>
   )

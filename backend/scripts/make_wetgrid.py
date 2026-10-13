@@ -40,6 +40,7 @@ from app.config import settings  # noqa: E402
 from hydrology import condition as condition_dem, fill_and_spill  # noqa: E402
 from _overlay_common import (  # noqa: E402
     attach_to_scene,
+    building_footprint_mask,
     COUNTED_AS,
     CN_CITATIONS,
     CN_SOURCE,
@@ -348,7 +349,14 @@ def main() -> int:
 
     out = Path(args.out) if args.out else settings.rasters_dir / "wetgrid_hsk.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(to_rgba(result["depth_field"]), mode="RGBA").save(out)
+    # Render-time building mask: the depth field is solved on bare earth, so a
+    # wet cell can fall under a tower; painted onto 3D Tiles that would show
+    # water on a roof. The data (wetgrid_hsk.npy below) keeps every cell.
+    render_depth = result["depth_field"]
+    footprint = building_footprint_mask(ov)
+    if footprint is not None:
+        render_depth = np.where(footprint, 0.0, render_depth)
+    Image.fromarray(to_rgba(render_depth), mode="RGBA").save(out)
 
     # Also write the depth field as float32 metres.
     #
@@ -496,6 +504,14 @@ def main() -> int:
             "minVisibleDepthM": MIN_VIS_DEPTH_M,
             "maxVisibleDepthM": MAX_VIS_DEPTH_M,
             "note": "Depth beyond maxVisibleDepthM is visually saturated, not capped in the data.",
+            "buildingsMaskedFromRender": footprint is not None,
+            "buildingsMaskNote": (
+                "Cells under a building footprint render transparent. The "
+                "surface is bare-earth, so the solver can place water where a "
+                "building stands; painting that onto 3D Tiles would show water "
+                "on a roof. The mask affects the PNG only -- wetgrid_hsk.npy "
+                "keeps every solved cell."
+            ) if footprint is not None else None,
         },
         "landClasses": list(LAND_CLASSES),
         "landClassProvenance": (

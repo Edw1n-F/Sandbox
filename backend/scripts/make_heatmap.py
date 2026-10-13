@@ -1,25 +1,26 @@
 #!/usr/bin/env python
-"""Heat-exposure overlay (D3): land class + sky view + shade -> relative index -> RGBA PNG.
+"""Heat overlay (D3): observed LST + land class + sky view + shade + wind shelter
+-> surface-temperature anomaly field -> diverging RGBA PNG.
 
-    python scripts/make_heatmap.py --heatwave
+    python scripts/make_heatmap.py
 
-Per-cell heat-exposure index from the land-class grid, blended with the sky-view
-factor and the cast shadow of the massing: paved and bare hold heat, green is
-intermediate, water and wetland cool through evaporation; a cell that loses sky
-to a nearby tower or sits in its shadow is cooler than the same land class in the
-open. The result is a *relative* screening index on a 0-1 scale -- **not** a
-temperature in degrees, and not a modelled air-temperature field.
+This is the offline twin of the live run's heatmap: the same
+``temperature_field`` model and the same ``anomaly_rgba`` diverging ramp as
+``app/services/run_service.py``, so the pre-run baseline overlay and a live run
+overlay are rendered by one code path and cannot drift.
 
-The `--heatwave` preset stretches the scale upward, standing in for the
-"heatwave preset" in the Oct 6 spec. It is a display transform, deliberately
-labelled as such: it changes how the same field is *shown*, never the field
-itself, so a screenshot taken under the preset cannot be mistaken for a
-different scenario.
+The field is anchored to an observed Landsat 8/9 LST scene (canonical capture
+2022-09-03) and deviates from the site mean by geometry: paved and bare hold
+heat, green is intermediate, water and wetland cool through evaporation; a cell
+that loses sky to a nearby tower, sits in its shadow, or is wind-blocked is
+hotter or cooler than the same land class in the open. The rendered map is the
+**anomaly** (deviation from the site mean, in C): blue = cooler, neutral =
+average, red = a genuine hot spot. A well-designed site reads near-neutral --
+that is the point, and it is why the neutral band of the ramp is narrow.
 
-The blend needs the massing (for sky view and shade); when no city model is
-present the overlay falls back to the land-class index alone and says so in the
-sidecar. Unlike the wet grid, this needs no terrain, which is why it is the
-overlay that can honestly ship today.
+The old 0-1 relative heat index and its `--heatwave` display stretch are gone:
+temperature is now a scenario input (the slider sets the scenario mean surface
+temperature, and the field re-anchors), not a baked display transform.
 """
 
 from __future__ import annotations
@@ -43,40 +44,22 @@ from app.services.design_metrics import (  # noqa: E402
     SITE_LON_DEG,
     HEAT_STATUS,
     HEAT_SUMMER_DAY_OF_YEAR,
-    blended_heat_field,
+    cell_fad,
     footprints_from_geojson,
-    heat_field_report,
-    load_heat_calibration,
     rasterise_height,
     shade_mask,
     sky_view_factor_raster,
 )
+from app.services.run_service import anomaly_rgba  # noqa: E402  (one ramp, one home)
+from app.services.temperature_field import (  # noqa: E402
+    load_observed_lst,
+    temperature_field,
+)
 from _overlay_common import (  # noqa: E402
-    HEAT_INDEX,
     LAND_CLASSES,
     attach_to_scene,
     load_overlay,
 )
-
-# Display transform only. Scenario parameters belong on a simulation run, not
-# baked into the renderer (ADR-024).
-HEATWAVE_STRETCH = 0.7  # multiplies the index, compressing the top of the scale
-
-# Perceptually ordered ramp for the index, cool -> hot.
-RAMP = (
-    (0.00, (33, 102, 172)),   # deep blue   - water, coolest
-    (0.25, (66, 146, 198)),   # blue
-    (0.45, (120, 195, 167)),  # teal-green  - green space
-    (0.62, (240, 226, 150)),  # pale yellow
-    (0.80, (233, 150, 80)),   # orange      - bare
-    (1.00, (176, 42, 55)),    # dark red    - paved, hottest
-)
-
-
-def heat_index(land: np.ndarray) -> np.ndarray:
-    """Land-class indices -> relative heat-exposure index in 0..1."""
-    lut = np.array([HEAT_INDEX[name] for name in LAND_CLASSES], dtype=np.float64)
-    return lut[land]
 
 
 def _load_city_model() -> list[dict] | None:
@@ -90,60 +73,42 @@ def _load_city_model() -> list[dict] | None:
         return None
 
 
-def _blend_field(ov, land_index: np.ndarray, day_of_year: int, hour: float
-                 ) -> tuple[np.ndarray, dict]:
-    """The blended field and its report, or the land-only fallback.
+def heat_index(land: np.ndarray) -> np.ndarray:
+    """Land-class indices -> relative heat-exposure index in 0..1.
 
-    Massing present -> land index + (1 - SVF) + (1 - shade), the report carrying
-    the SVF summary and the anchoring block. No massing -> the land index alone,
-    with the weights collapsed to ``land`` so the report's mean and the rendered
-    field cannot disagree, and a note that says why.
+    The *input* to the temperature field's land-class deviation term, not the
+    rendered quantity.
     """
-    cell_m = float(ov.cell_m)
-    calibration = load_heat_calibration()
+    from _overlay_common import HEAT_INDEX
+
+    lut = np.array([HEAT_INDEX[name] for name in LAND_CLASSES], dtype=np.float32)
+    return lut[land]
+
+
+def geometry_terms(ov, day_of_year: int, hour: float) -> dict[str, np.ndarray] | None:
+    """SVF / shaded / FAD rasters for the current massing, or None without one.
+
+    Same solar inputs as the live run (14:00 on the July anchor day) and the
+    same NE-wind FAD bearing (45 deg), so the offline overlay and a live run
+    differ only in scenario mean -- never in sun or wind geometry.
+    """
     features = _load_city_model()
     if not features:
-        report = heat_field_report(
-            land_index, np.ones_like(land_index), np.zeros_like(land_index),
-            calibration=calibration, weights={"land": 1.0, "svf": 0.0,
-                                              "shadow": 0.0}, cell_m=cell_m)
-        report["note"] = (
-            "No city model found, so only the hand-authored land-class index is "
-            "shown; the sky-view and shadow terms are unavailable. " + report["note"]
-        )
-        return land_index, report
-
+        return None
     fps = footprints_from_geojson(features)
     height = rasterise_height(fps, ov)
-    svf = sky_view_factor_raster(height, cell_m)
-    shaded = shade_mask(fps, ov, SITE_LAT_DEG, SITE_LON_DEG, day_of_year, hour)
-    field = blended_heat_field(land_index, svf, shaded.astype(np.float32))
-    report = heat_field_report(land_index, svf, shaded.astype(np.float32),
-                               calibration=calibration, cell_m=cell_m)
-    return field, report
-
-
-def ramp_rgba(index: np.ndarray) -> np.ndarray:
-    """Map a 0..1 index field to RGBA through the display ramp (opaque)."""
-    stops = np.array([s[0] for s in RAMP], dtype=np.float64)
-    colours = np.array([s[1] for s in RAMP], dtype=np.float64)
-    clipped = np.clip(index, 0.0, 1.0)
-
-    out = np.empty(index.shape + (4,), dtype=np.uint8)
-    for channel in range(3):
-        out[..., channel] = np.interp(clipped, stops, colours[:, channel])
-    out[..., 3] = 255
-    return out
+    cell_m = float(ov.cell_area_m2) ** 0.5
+    return {
+        "svf": sky_view_factor_raster(height, cell_m),
+        "shaded": shade_mask(fps, ov, SITE_LAT_DEG, SITE_LON_DEG, day_of_year,
+                             hour).astype(np.float32),
+        "fad": cell_fad(fps, ov, 45.0).astype(np.float32),
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--resolution", type=float, default=5.0, help="cell size, m")
-    parser.add_argument(
-        "--heatwave",
-        action="store_true",
-        help="apply the heatwave display stretch (display only, not a scenario)",
-    )
     parser.add_argument("--day-of-year", type=int, default=HEAT_SUMMER_DAY_OF_YEAR,
                         help="solar day for the shadow term (default 196, 15 July "
                              "-- matches the July anchor)")
@@ -155,56 +120,60 @@ def main() -> int:
     args = parser.parse_args()
 
     ov = load_overlay(args.resolution)
-    land_index = heat_index(ov.land_class).astype(np.float32)
-    field, report = _blend_field(ov, land_index, args.day_of_year, args.hour)
+    land_index = heat_index(ov.land_class)
+    terms = geometry_terms(ov, args.day_of_year, args.hour)
+    lst_base, lst_meta = load_observed_lst(ov.rows, ov.cols)
 
-    if args.heatwave:
-        field = np.clip(field * HEATWAVE_STRETCH, 0.0, 1.0)
+    # No scenario mean: the baseline anchors to the observed LST scene's own
+    # mean. The slider (a run input) is what moves the mean.
+    fields = temperature_field(
+        land_index=land_index,
+        svf=terms["svf"] if terms else np.ones(ov.land_class.shape, dtype=np.float32),
+        shaded=terms["shaded"] if terms else np.zeros(ov.land_class.shape, dtype=np.float32),
+        fad=terms["fad"] if terms else np.zeros(ov.land_class.shape, dtype=np.float32),
+        lst_base=lst_base,
+        scenario_mean_c=None,
+    )
 
     landcover_meta: dict = {}
     _lc = settings.data_dir / "landcover_hsk.json"
     if _lc.exists():
-        import json as _json
         try:
-            landcover_meta = _json.loads(_lc.read_text())
+            landcover_meta = json.loads(_lc.read_text())
         except (OSError, ValueError):
             landcover_meta = {}
 
     out = Path(args.out) if args.out else settings.rasters_dir / "heatmap_hsk.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(ramp_rgba(field), mode="RGBA").save(out)
+    Image.fromarray(anomaly_rgba(fields["anomalyC"]), mode="RGBA").save(out)
 
     cell_area = ov.cell_area_m2
     counts = {
         name: int((ov.land_class == i).sum()) for i, name in enumerate(LAND_CLASSES)
     }
     area_ha = {k: round(v * cell_area / 10_000.0, 2) for k, v in counts.items()}
-    mean_index = float(field.mean())
-    anchoring = report["anchoring"]
+    anomaly = fields["anomalyC"]
 
     meta = {
         "artefact": "heatmap",
         "generated": date.today().isoformat(),
-        "status": HEAT_STATUS,
+        "status": lst_meta["available"] and "SURFACE_TEMPERATURE_ANCHORED_TO_LST"
+                  or "SURFACE_TEMPERATURE_NO_LST_BASE",
         "warning": (
-            "This is a relative heat-exposure index on a 0-1 scale derived from "
-            "land class, sky view and shade. It is NOT degrees Celsius and NOT a "
-            "modelled air-temperature field. Do not present it as either."
+            "Surface temperature anchored to an observed Landsat LST scene; the "
+            "geometry terms (land class, sky view, shade, wind shelter) shift "
+            "cells away from the site mean as deviations in degrees C. "
+            "Screening output, not a meteorological forecast."
         ),
-        # The anchoring block is the canonical one: the same shape the API
-        # serves, and the only copy. The five top-level duplicates that used to
-        # repeat anchorSource/anchorRangeC/calibrationPath/quantity/heatIndexSource
-        # were removed -- two spellings of one value can drift, which is the
-        # failure mode this project keeps eliminating.
-        "anchoring": anchoring,
-        "blend": {
-            "weights": report["weights"],
-            "components": report["components"],
-            "meanHeatIndex": report["meanHeatIndex"],
-            "maxHeatIndex": report["maxHeatIndex"],
-            "svf": report["svf"],
-            "solarDayOfYear": args.day_of_year,
-            "solarHour": args.hour,
+        "temperature": {
+            "surfaceMeanC": round(float(fields["meanSurfaceC"]), 2),
+            "surfaceMaxC": round(float(fields["maxSurfaceC"]), 2),
+            "meanAnomalyC": round(float(fields["meanAnomalyC"]), 3),
+            "maxAnomalyC": round(float(fields["maxAnomalyC"]), 2),
+            "airMeanC": round(float(fields["meanSurfaceC"]) - float(fields["surfaceToAirOffsetC"]), 2),
+            "observedMeanC": lst_meta.get("observedMeanC"),
+            "lstSource": lst_meta.get("source"),
+            "lstAvailable": lst_meta["available"],
         },
         "inputs": {
             "resolution_m": args.resolution,
@@ -212,19 +181,20 @@ def main() -> int:
             "cols": ov.cols,
             "bounds": list(ov.bounds),
             "cellAreaM2": cell_area,
+            "solarDayOfYear": args.day_of_year,
+            "solarHour": args.hour,
         },
         "assumptions": {
-            "heatIndexByClass": HEAT_INDEX,
-            "heatIndexSource": "Hand-authored screening index; awaiting verification",
-            "heatwaveStretch": HEATWAVE_STRETCH if args.heatwave else None,
-            "heatwaveNote": (
-                "A display transform on the same field, not a scenario. Compare "
-                "runs at the same stretch setting."
-            ),
+            "windBearingDeg": 45.0,
+            "airOffsetC": 12.0,
+            "note": ("Air temperature is estimated as surface minus 12 C, the "
+                     "observed LST-air gap for this scene type. No "
+                     "evapotranspiration model, so temperature never moves "
+                     "rainfall or runoff."),
         },
         "results": {
-            "meanIndex": round(mean_index, 4),
-            "maxIndex": round(float(field.max()), 4),
+            "meanAnomalyC": round(float(anomaly.mean()), 4),
+            "maxAnomalyC": round(float(anomaly.max()), 4),
             "cellCountByClass": counts,
             "areaHaByClass": area_ha,
             "imperviousShare": round(
@@ -251,17 +221,18 @@ def main() -> int:
 
     print(f"[heatmap] {out}")
     print(f"[heatmap] grid {ov.cols} x {ov.rows} @ {args.resolution} m")
-    print(f"[heatmap] mean index   {mean_index:>8.3f}")
-    print(f"[heatmap] blend mean   {report['meanHeatIndex']:>8.3f} "
-          f"(land {report['components']['land']:.3f}, svf {report['components']['svf']:.3f}, "
-          f"shadow {report['components']['shadow']:.3f})")
-    print(f"[heatmap] anchoring    {anchoring['anchorSource']} "
-          f"range={anchoring['anchorRangeC']}")
+    print(f"[heatmap] surface mean {fields['meanSurfaceC']:.2f} C  "
+          f"max {fields['maxSurfaceC']:.2f} C")
+    print(f"[heatmap] anomaly  mean {fields['meanAnomalyC']:+.3f} C  "
+          f"max {fields['maxAnomalyC']:+.2f} C")
+    print(f"[heatmap] air mean (surface {fields['surfaceToAirOffsetC']:+.0f}) "
+          f"{fields['meanSurfaceC'] - fields['surfaceToAirOffsetC']:.2f} C")
+    print(f"[heatmap] LST base: {lst_meta.get('source')} "
+          f"available={lst_meta['available']}")
     print(f"[heatmap] area by class (ha):")
     for name, value in area_ha.items():
         print(f"[heatmap]   {name:<9} {value:>9,.1f}")
     print(f"[heatmap] land cover: {ov.landcover_source}  terrain: {ov.terrain_source}")
-    print(f"[heatmap] RELATIVE INDEX - not degrees, not a modelled temperature field")
     return 0
 
 

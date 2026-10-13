@@ -5,6 +5,85 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-13 (part 4) — flood no longer paints building roofs
+
+### Fixed — water visible on top of towers
+
+The flood overlay was rendering on building roofs. Cause: with 3D Tiles present
+the viewer draws both overlays as a **classified rectangle**
+(`classificationType: BOTH`, SandboxViewer) so they drape onto the visible
+surface — which is the `terrain(TB)` tileset, not the globe terrain. Cesium's
+`ClassificationType` has no per-tileset exemption (`Cesium3DTileset#classificationType`
+configures what a tileset *classifies*, not whether it *receives* classification),
+so terrain-only classification would have hidden the overlay entirely behind the
+terrain tiles. The fix is therefore at the data-to-render boundary, not in Cesium:
+the depth field is solved on **bare earth**, so a pond can land where a tower
+stands, and those cells are now suppressed in the PNG only.
+
+- `_overlay_common.building_footprint_mask()` — one shared mask (rasterise the
+  massing, `height > 0`), used by both the offline script and the live run.
+- `scripts/make_wetgrid.py` and the run render path mask the raster before
+  painting; the sidecar records `render.buildingsMaskedFromRender`.
+- Measure of the size of it: **44.8%** of the grid lies under a footprint and
+  **3142 of 6725** wet cells were being painted onto roofs.
+- The data are untouched — `wetgrid_hsk.npy` keeps every solved cell, and the
+  ledger still counts them. A display transform must not delete a number.
+
+New tests: `tests/test_overlay_masking.py` (3) — mask is a real boolean raster,
+the committed PNG is transparent under every footprint, and the `.npy` still
+holds water under footprints (so the mask cannot start eating solved cells). 95/95.
+
+**Heat is deliberately not masked.** A roof is a real hot surface, and masking
+footprints would delete the built-up heat signal across the largest land class on
+the site. The same artefact (a ground-level value painted onto a tall roof) still
+applies to the heatmap; fixing it means a per-surface treatment, not a blanket mask.
+
+
+## 2026-10-13 (part 3) — the heatmap stops reading as a blank, heat buttons get warning names
+
+### Fixed — anomaly ramp scale
+
+The first browser run of the anomaly map was washed out: a faint tint over a
+mostly-white grid. Cause: the ramp's near-white neutral band was ±1 °C while the
+real site's anomaly distribution is tight (91% of cells within ±2 °C), so
+nearly every cell landed in the neutral band. Two further passes settled it:
+the first transparent-at-zero attempt left only ~20% of cells see-through and
+still read as an opaque cream sheet, so the final ramp (a) carries **no
+white/light stops at all** — every colour is a saturated hue — and (b) uses a
+0.4 °C dead-band (fully invisible near the mean) with alpha ramping to opaque by
+2.5 °C. Result: 0% near-white pixels, ~16% of cells fully transparent, and a
+map whose visible marks are genuinely hot or cool spots.
+
+### Fixed — stale overlay after re-render
+
+`scene_service._resolve_overlay_url` now appends an `?v=<mtime>` cache-buster.
+Without it the browser served the first copy of a regenerated PNG, so a ramp
+change appeared to do nothing until a hard refresh.
+
+### Fixed — ProjectCatalog font
+
+Project names (School, Pond infill, …) used `variant="body2"` (sans) while the
+rest of the panel is monospace; they now carry `hud-mono` like every other
+readout.
+
+### Changed — heat presets become HKO warnings, baseline overlay reuses the live model
+
+- `SlidersPanel.tsx`: the heat buttons now read as HKO warnings (Hot night
+  ≥28 °C air / Very Hot Weather Warning ≥33 °C / "extremely hot weather" alert
+  ≥35 °C), styled like the rainfall signal buttons and highlighting the active
+  one, mirroring how the rainfall side uses the Observatory's rainstorm signals.
+  Dark signal colours were lightened (`#1a1a1a`→`#9aa0a6`, `#d32f2f`→`#ff6b6b`)
+  so "Black"/"Extreme" are legible on the dark HUD, labels no longer clip
+  (`nowrap` removed, "Extreme heat"→"Extreme"), and captions were trimmed to
+  one line each.
+- `scripts/make_heatmap.py` rewritten to render through the same
+  `temperature_field` + `anomaly_rgba` path as the live run, replacing the old
+  0-1 relative index and its `--heatwave` display stretch. Baseline overlay and
+  a live run overlay can no longer drift apart. The sidecar now carries surface/
+  anomaly/air means and the LST source instead of the index stats.
+
+92/92 backend tests pass; frontend typechecks clean.
+
 ## 2026-10-13 (part 2) — the docs stop counting twice
 
 No file was unnecessary; the redundancy was *inside* `README.md`, which had grown

@@ -1,49 +1,17 @@
 {
   "artefact": "heatmap",
   "generated": "2026-10-13",
-  "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
-  "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
-  "anchoring": {
-    "anchorSource": "hko_station",
-    "anchorRangeC": [
-      26.4,
-      32.7
-    ],
-    "calibrationPath": "reference/heat_anchor.json",
-    "quantity": "HKO_air",
-    "heatIndexSource": "Hand-authored screening index; awaiting verification",
-    "status": "ANCHORED_TO_PUBLISHED_REFERENCE",
-    "warning": "Anchored to a cited air-temperature band: HKO Lau Fau Shan station, July 2015-2024 (HKO_air: 26.4-32.7 C). This is a stated band for a Hong Kong summer, not a measurement of this site -- the station is ~20 km away. The field remains a relative 0-1 index, never degrees Celsius. Screening-level; relative, not absolute."
-  },
-  "blend": {
-    "weights": {
-      "land": 0.5,
-      "svf": 0.3,
-      "shadow": 0.2
-    },
-    "components": {
-      "land": 0.9487,
-      "svf": 0.3673,
-      "shadow": 0.1001
-    },
-    "meanHeatIndex": 0.8441,
-    "maxHeatIndex": 1.0,
-    "svf": {
-      "meanSvf": 0.3673,
-      "meanOpenFieldSvf": 0.6651,
-      "minSvf": 0.0,
-      "maxSvf": 0.9706,
-      "azimuthBins": 16,
-      "searchRadiusM": 300.0,
-      "searchRadiusCells": 60,
-      "buildingCells": 7753,
-      "method": "Per-cell sky view factor from a horizon search over the massing height raster: SVF = 1 - (1/N) sum_i sin(gamma_i), where gamma_i is the horizon elevation angle in azimuth bin i (16 bins), searched to a 300 m (60-cell) radius. A cell under massing is inside the building and scores 0.",
-      "limitation": "Geometry, not radiation. SVF is a sky-exposure fraction -- how much sky a ground point sees -- not a temperature. No sun, no surface energy balance, no air temperature. The horizon is sampled on 16 azimuth rays, so a narrow slot between two buildings can fall between rays and be missed.",
-      "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
-      "warning": "Heat is not a temperature. This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade -- not degrees Celsius and not a modelled air-temperature field. Screening-level; relative, not absolute."
-    },
-    "solarDayOfYear": 196,
-    "solarHour": 14.0
+  "status": "SURFACE_TEMPERATURE_ANCHORED_TO_LST",
+  "warning": "Surface temperature anchored to an observed Landsat LST scene; the geometry terms (land class, sky view, shade, wind shelter) shift cells away from the site mean as deviations in degrees C. Screening output, not a meteorological forecast.",
+  "temperature": {
+    "surfaceMeanC": 41.26,
+    "surfaceMaxC": 45.37,
+    "meanAnomalyC": 0.0,
+    "maxAnomalyC": 4.11,
+    "airMeanC": 29.26,
+    "observedMeanC": 41.258,
+    "lstSource": "Landsat 8/9 C2 L2 ST_B10 (Planetary Computer)",
+    "lstAvailable": true
   },
   "inputs": {
     "resolution_m": 5.0,
@@ -55,25 +23,18 @@
       113.9994,
       22.4363
     ],
-    "cellAreaM2": 25.122139213634153
+    "cellAreaM2": 25.122139213634153,
+    "solarDayOfYear": 196,
+    "solarHour": 14.0
   },
   "assumptions": {
-    "heatIndexByClass": {
-      "paved": 1.0,
-      "bare": 0.85,
-      "green": 0.64,
-      "wetland": 0.2,
-      "water": 0.05,
-      "floodable": 0.64,
-      "tank": 1.0
-    },
-    "heatIndexSource": "Hand-authored screening index; awaiting verification",
-    "heatwaveStretch": null,
-    "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
+    "windBearingDeg": 45.0,
+    "airOffsetC": 12.0,
+    "note": "Air temperature is estimated as surface minus 12 C, the observed LST-air gap for this scene type. No evapotranspiration model, so temperature never moves rainfall or runoff."
   },
   "results": {
-    "meanIndex": 0.8441,
-    "maxIndex": 1.0,
+    "meanAnomalyC": 0.0,
+    "maxAnomalyC": 4.114,
     "cellCountByClass": {
       "water": 0,
       "wetland": 0,
