@@ -63,6 +63,10 @@ SCENE_ID = _seeded_scene_id()
 SIDECAR = json.loads(
     (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.json").read_text(
         encoding="utf-8"))
+# The committed artefact's own rainfall: the baseline run must be scored at the
+# same depth to reproduce it (the artefact moved 450 -> 50 mm when the slider
+# default became intensity x duration).
+ARTEFACT_MM = float(SIDECAR["inputs"]["rainfall_mm"])
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -83,11 +87,12 @@ def main() -> int:
         return 1
 
     # ---- 1. a baseline run is the committed overlay ------------------------
-    base = run_service.run_scenario(SCENE_ID, 450.0, 30.0, None, [])
+    base = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 30.0, None, [])
     check("a run returns the screening status",
           base["status"] == run_service.RUN_STATUS, base["status"])
     check("and the screening warning is in the body",
-          "not a flood prediction" in base["warning"].lower())
+          "flood extent" in base["warning"].lower()
+          or "not engineering-grade" in base["warning"].lower())
 
     offline = SIDECAR["results"]
     check("the baseline unstored volume is the offline artefact's",
@@ -131,7 +136,7 @@ def main() -> int:
           len({base["runId"], wet["runId"], storm["runId"]}) == 3)
 
     # ---- 3. the heatwave preset is display, not physics --------------------
-    hot = run_service.run_scenario(SCENE_ID, 450.0, 38.0, None, [])
+    hot = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 38.0, None, [])
     check("a high temperature selects the heatwave preset",
           hot["inputs"]["heatPreset"] == "heatwave"
           and base["inputs"]["heatPreset"] == "normal")
@@ -154,18 +159,23 @@ def main() -> int:
     # test does not depend on which plans happen to be seeded.
     x0, y0, x1, y1 = grids.bounds
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-    span = 0.004  # well under the 25% coverage limit
+    # Sized to the real study area (a small fraction of the extent), not a fixed
+    # degree count: 0.004° used to be "well under 25%", but the real bounds are
+    # far smaller and 0.004° is now the whole grid. ~1/8 of each axis -> ~1.5% coverage.
+    span = (x1 - x0) / 8.0
+    span = min(span, (y1 - y0) / 8.0)
     ring = [[cx - span, cy - span], [cx + span, cy - span],
             [cx + span, cy + span], [cx - span, cy + span],
             [cx - span, cy - span]]
     features = [{"id": "test-basin", "intervention_type": "flood_storage",
                  "geometry": {"type": "Polygon", "coordinates": [ring]},
                  "params": {"basis": "test"}}]
-    run_with = run_service.run_scenario(SCENE_ID, 450.0, 30.0, "test-plan",
+    run_with = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 30.0, "test-plan",
                                         features)
     check("a retention basin is applied to the grid",
           len(run_with["interventionsApplied"]) == 1,
-          str(run_with["interventionsApplied"][0]["areaM2"]))
+          (str(run_with["interventionsApplied"][0]["areaM2"])
+           if run_with["interventionsApplied"] else "none applied"))
     check("and it leaves less water unstored than today",
           run_with["stats"]["delta"]["unstoredM3"] < -1.0,
           f"{run_with['stats']['delta']['unstoredM3']:,.0f} m3")
@@ -179,7 +189,7 @@ def main() -> int:
     noop = [{"id": "test-drain", "intervention_type": "drainage_alignment",
              "geometry": {"type": "Polygon", "coordinates": [ring]},
              "params": {}}]
-    run_noop = run_service.run_scenario(SCENE_ID, 450.0, 30.0, "test-plan",
+    run_noop = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 30.0, "test-plan",
                                         noop)
     check("an intervention the model cannot score is skipped with a reason",
           len(run_noop["interventionsSkipped"]) == 1
@@ -204,13 +214,13 @@ def main() -> int:
               f"{path.stat().st_size:,} bytes")
     sidecar = (settings.rasters_dir / "run" / f"wetgrid_{base['runId']}.json")
     check("the wet-grid sidecar records the run's inputs",
-          json.loads(sidecar.read_text())["inputs"]["rainfallMm"] == 450.0)
+          json.loads(sidecar.read_text())["inputs"]["rainfallMm"] == ARTEFACT_MM)
 
     # ---- 7. honesty and refusal --------------------------------------------
     check("the explanation names the rainfall the run used",
-          "450 mm" in base["explanation"], base["explanation"][:70] + "…")
-    check("and says it is not a flood prediction",
-          "flood prediction" in base["explanation"].lower())
+          f"{ARTEFACT_MM:g} mm" in base["explanation"], base["explanation"][:70] + "…")
+    check("and says it is a screening flood extent",
+          "flood" in base["explanation"].lower())
     check("the explanation source is reported, never implied",
           base["explanationSource"] in ("anthropic", "openai-compatible",
                                         "template"),

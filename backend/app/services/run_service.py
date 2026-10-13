@@ -60,16 +60,21 @@ from app.services.sandbox_model import (  # noqa: E402
 # imported -- never re-implemented. A second copy of the fill or the colour
 # ramp would let a live run and the committed artefact disagree about what the
 # same numbers look like.
-from make_wetgrid import _fill_to_volume, to_rgba  # noqa: E402
+from make_wetgrid import (  # noqa: E402
+    FLOOD_DEPTH_M,
+    _fill_to_volume,
+    flood_rgba,
+    to_rgba,
+)
 from make_heatmap import HEATWAVE_STRETCH, ramp_rgba  # noqa: E402
 from _overlay_common import HEAT_INDEX, LAND_CLASSES  # noqa: E402
+from hydrology import fill_and_spill  # noqa: E402
 
-RUN_STATUS = "SCREENING_LIVE_RUN_NOT_A_FLOOD_PREDICTION"
+RUN_STATUS = "SCREENING_LIVE_RUN_FLOOD_EXTENT"
 RUN_WARNING = (
-    "Screening-level SCS Curve Number runoff with a level-pool allocation on "
-    "real (Priority-Flood conditioned) terrain, plus a relative 0-1 "
-    "heat-exposure index. Not a flood prediction, not degrees Celsius, not "
-    "engineering-grade."
+    "Screening-level flood extent: SCS Curve Number runoff routed down the D8 "
+    "receiver chain, cells with >= %.2f m standing water shown as flooded. Not "
+    "engineering-grade, not a regulatory flood map." % FLOOD_DEPTH_M
 )
 
 # The slider temperature at which the heatwave *display* preset kicks in. The
@@ -238,7 +243,10 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
             "The heatwave preset is a display stretch on the same field, not a "
             "different scenario -- compare runs at the same preset."
         )
-    parts.append("Screening-level SCS-CN on real terrain; not a flood prediction.")
+    parts.append(
+        "Screening-level SCS-CN runoff routed to a flood extent (>= %.2f m "
+        "standing water); not engineering-grade." % FLOOD_DEPTH_M
+    )
     return " ".join(parts)
 
 
@@ -282,15 +290,17 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "You are explaining one screening-level land-use simulation run to an "
         "urban planner. Write at most 110 words. Rules: use ONLY the numbers "
         "in the JSON below -- never invent a figure; say 'unstored runoff' "
-        "for unstoredM3; mention the wet area and the mean heat-exposure "
-        "index; if no interventions are applied, say this is the baseline "
-        "today's land cover and no project is selected; if the scenario "
-        "matches the baseline, state that explicitly rather than calling it "
-        "better or worse; otherwise state whether the scenario is better or "
-        "worse than today and by how much; if the heatwave display preset is "
-        "on, say it is a display transform, not a different scenario; end by "
-        "stating this is a screening-level estimate, not a flood prediction, "
-        "and that the heat index is relative, not a temperature.\n\n"
+        "for unstoredM3; mention the flood extent (floodAreaHa, cells with at "
+        "least %.2f m standing water) and the mean heat-exposure index; if no "
+        "interventions are applied, say this is the baseline today's land "
+        "cover and no project is selected; if the scenario matches the "
+        "baseline, state that explicitly rather than calling it better or "
+        "worse; otherwise state whether the scenario is better or worse than "
+        "today and by how much; if the heatwave display preset is on, say it "
+        "is a display transform, not a different scenario; end by stating "
+        "this is a screening-level flood extent (>= %.2f m standing water), "
+        "not engineering-grade, and that the heat index is relative, not a "
+        "temperature.\n\n" % (FLOOD_DEPTH_M, FLOOD_DEPTH_M)
         + json.dumps(_rounded(facts), indent=1)
     )
 
@@ -354,6 +364,26 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     wet_cells = int((depth_field > 0).sum())
     wet_area_ha = wet_cells * cell_area / 10_000.0
 
+    # ---- flood extent: route the unstored volume down the D8 cascade --------
+    # The flood map is the *routed* depth field (water actually flowing downhill
+    # into depressions and outfalls), not the level-pool field. A cell is
+    # "flooded" where the routed standing depth reaches FLOOD_DEPTH_M. Falls back
+    # to the level-pool depth when routing is unavailable (receiver/raw surface
+    # not yet generated), and says so in the sidecar.
+    routed_depth: np.ndarray | None = None
+    if grids.receiver is not None and grids.raw_elevation_5m is not None:
+        cascade = fill_and_spill(
+            filled=np.asarray(grids.elevation_5m, dtype=np.float64),
+            raw=np.asarray(grids.raw_elevation_5m, dtype=np.float64),
+            receiver=grids.receiver,
+            runoff_in_m3=unstored_m * cell_area,
+            cell_area_m2=cell_area,
+        )
+        routed_depth = np.asarray(cascade["depthField"], dtype=np.float32)
+    flood_cells = int((routed_depth >= FLOOD_DEPTH_M).sum()) if routed_depth is not None else None
+    flood_area_ha = (flood_cells * cell_area / 10_000.0
+                     if flood_cells is not None else None)
+
     # Baseline wet extent under the same rainfall, for the delta. The fill is
     # the cheap part (bisection over a flat array); the volume is the ledger's.
     base_unstored_m3 = storage_ledger(grids, grids.land_class, rainfall_mm)[
@@ -363,6 +393,21 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         cell_area
     )
     base_wet_area_ha = float((base_depth > 0).sum()) * cell_area / 10_000.0
+
+    # Baseline routed flood extent (same rainfall, today's land cover), for the
+    # flood-area delta. Computed the same way as the scenario so the two compare.
+    base_flood_area_ha: float | None = None
+    if grids.receiver is not None and grids.raw_elevation_5m is not None:
+        base_runoff_m = _runoff_and_unstored(grids.land_class, rainfall_mm)[1]
+        base_cascade = fill_and_spill(
+            filled=np.asarray(grids.elevation_5m, dtype=np.float64),
+            raw=np.asarray(grids.raw_elevation_5m, dtype=np.float64),
+            receiver=grids.receiver,
+            runoff_in_m3=base_runoff_m * cell_area,
+            cell_area_m2=cell_area,
+        )
+        base_routed = np.asarray(base_cascade["depthField"], dtype=np.float32)
+        base_flood_area_ha = float((base_routed >= FLOOD_DEPTH_M).sum()) * cell_area / 10_000.0
 
     # ---- heat field ---------------------------------------------------------
     heatwave = temperature_c >= HEATWAVE_THRESHOLD_C
@@ -379,11 +424,13 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "baseline": {
             **base_ledger,
             "wetAreaHa": round(base_wet_area_ha, 2),
+            "floodAreaHa": round(base_flood_area_ha, 2) if base_flood_area_ha is not None else None,
             "heatBlendedMean": round(float(base_heat.mean()), 4),
         },
         "scenario": {
             **scen_ledger,
             "wetAreaHa": round(wet_area_ha, 2),
+            "floodAreaHa": round(flood_area_ha, 2) if flood_area_ha is not None else None,
             "heatBlendedMean": round(float(scen_heat.mean()), 4),
         },
         "delta": {
@@ -392,6 +439,9 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "runoffM3": round(
                 scen_ledger["runoffM3"] - base_ledger["runoffM3"], 1),
             "wetAreaHa": round(wet_area_ha - base_wet_area_ha, 2),
+            "floodAreaHa": round(
+                (flood_area_ha - base_flood_area_ha), 2)
+                if (flood_area_ha is not None and base_flood_area_ha is not None) else None,
             "heatMean": round(
                 scen_ledger["heatMean"] - base_ledger["heatMean"], 4),
             "heatBlendedMean": round(
@@ -460,7 +510,12 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     # in the URL as a cache-buster, which hid the collision rather than fixing it.
     wet_png = run_dir / f"wetgrid_{run_id}.png"
     heat_png = run_dir / f"heatmap_{run_id}.png"
-    Image.fromarray(to_rgba(depth_field), mode="RGBA").save(wet_png)
+    # Flood map when routing is available (routed depth >= threshold), else the
+    # continuous ponding ramp — the fallback says why in the sidecar.
+    if routed_depth is not None:
+        Image.fromarray(flood_rgba(routed_depth), mode="RGBA").save(wet_png)
+    else:
+        Image.fromarray(to_rgba(depth_field), mode="RGBA").save(wet_png)
     Image.fromarray(ramp_rgba(scen_heat), mode="RGBA").save(heat_png)
 
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -474,6 +529,12 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "landCoverSource": grids.landcover_source,
         "inputs": {"rainfallMm": rainfall_mm, "planId": plan_id,
                    "planIds": plan_ids or ([plan_id] if plan_id else [])},
+        "flood": {
+            "thresholdM": FLOOD_DEPTH_M,
+            "routed": routed_depth is not None,
+            "floodedCells": flood_cells,
+            "floodAreaHa": round(flood_area_ha, 2) if flood_area_ha is not None else None,
+        },
         "results": {
             "unstoredVolumeM3": round(volume_m3, 1),
             "wetAreaHa": round(wet_area_ha, 2),

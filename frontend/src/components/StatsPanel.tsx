@@ -87,8 +87,10 @@ export default function StatsPanel() {
     >
       <Stack direction="row" spacing={2} sx={{ mb: 1.25 }}>
         <Stat
-          label="Unstored runoff"
-          value={`${m3(stats.scenario.unstoredM3)} m³`}
+          label="Flood extent (≥0.3 m)"
+          value={stats.scenario.floodAreaHa != null
+            ? `${stats.scenario.floodAreaHa.toFixed(2)} ha`
+            : '—'}
           accent="#5cff9d"
         />
       </Stack>
@@ -99,7 +101,15 @@ export default function StatsPanel() {
         </Typography>
       </Stack>
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Wet area</Typography>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Flood area Δ</Typography>
+        <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
+          {delta.floodAreaHa != null
+            ? `${signed(delta.floodAreaHa, ' ha', 2)}`
+            : '—'}
+        </Typography>
+      </Stack>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Ponding area</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
           {stats.scenario.wetAreaHa.toFixed(1)} ha
         </Typography>

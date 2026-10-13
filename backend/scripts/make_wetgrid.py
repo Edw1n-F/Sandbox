@@ -67,6 +67,13 @@ from _overlay_common import (  # noqa: E402
 MIN_VIS_DEPTH_M = 0.02
 MAX_VIS_DEPTH_M = 0.30
 
+# The flood-extent threshold: a cell with at least this much standing water after
+# D8 routing is classed as "flooded". 0.30 m is a common screening proxy for
+# ankle-depth — enough to matter to a pedestrian or a ground-floor entrance, and
+# deep enough to be a defensible "flood" rather than a puddle. It is a JUDGEMENT,
+# not a measurement, and is stated everywhere it is applied.
+FLOOD_DEPTH_M = 0.30
+
 
 def _fill_to_volume(
     elevation: np.ndarray, volume_m3: float, cell_area_m2: float
@@ -211,6 +218,32 @@ def to_rgba(depth_field: np.ndarray) -> np.ndarray:
     )
     alpha = (norm * 235).astype(np.uint8)
     # Deep blue -> cyan as depth increases, so the gradient reads as depth.
+    red = (30 * (1.0 - norm)).astype(np.uint8)
+    green = (90 + 120 * (1.0 - norm)).astype(np.uint8)
+    blue = np.full_like(alpha, 235)
+    return np.dstack([red, green, blue, alpha])
+
+
+def flood_rgba(depth_field: np.ndarray,
+               threshold_m: float = FLOOD_DEPTH_M) -> np.ndarray:
+    """Routed depth field -> RGBA flood map: transparent below the threshold.
+
+    Unlike :func:`to_rgba` (a continuous ponding ramp), this renders a binary
+    "flooded / not flooded" picture: a cell is opaque only where its standing
+    depth after D8 routing reaches ``threshold_m``. Above the threshold the
+    opacity still grades with depth so deeper flooding reads stronger, but the
+    floor is a hard cut — below it the cell is invisible, which is what makes the
+    overlay mean "flood extent" rather than "wet ground". The same ramp colours
+    as :func:`to_rgba` keep the two overlays visually continuous.
+    """
+    norm = np.clip(
+        (depth_field - threshold_m) / max(MAX_VIS_DEPTH_M - threshold_m, 1e-9),
+        0.0, 1.0,
+    )
+    # Mask cells strictly below the threshold to fully transparent.
+    below = depth_field < threshold_m
+    norm[below] = 0.0
+    alpha = (norm * 235).astype(np.uint8)
     red = (30 * (1.0 - norm)).astype(np.uint8)
     green = (90 + 120 * (1.0 - norm)).astype(np.uint8)
     blue = np.full_like(alpha, 235)

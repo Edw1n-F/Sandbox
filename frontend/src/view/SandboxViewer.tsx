@@ -407,7 +407,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         }
         if (!want || drapedRef.current[key]) continue
         const ent = viewer.entities.add({
-          name: key === 'wetGrid' ? 'Wet grid overlay' : 'Heat map overlay',
+          name: key === 'wetGrid' ? 'Flood extent' : 'Heat map overlay',
           rectangle: {
             coordinates: rectangle,
             material: new ImageMaterialProperty({

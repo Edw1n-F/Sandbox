@@ -48,7 +48,7 @@ function LayerToggles() {
         onClick={() => toggleLayer('wetGrid')}
         sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1 }}
       >
-        Wet
+        Flood
       </Button>
       <Button
         size="small"

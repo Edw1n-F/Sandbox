@@ -179,6 +179,8 @@ export interface RunLedgerSide {
   greenAreaM2: number
   pavedAreaM2: number
   wetAreaHa: number
+  /** Routed cells with >= flood threshold standing water, in ha (null if routing unavailable). */
+  floodAreaHa?: number | null
   heatBlendedMean: number
   /** Total assumed usable storage across the grid, in m3. */
   storageCapacityM3?: number
@@ -209,6 +211,8 @@ export interface RunResult {
       unstoredM3: number
       runoffM3: number
       wetAreaHa: number
+      /** Change in routed flood extent, in ha (null if routing unavailable). */
+      floodAreaHa?: number | null
       heatMean: number
       heatBlendedMean: number
       greenAreaM2: number
