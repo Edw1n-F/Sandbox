@@ -15,7 +15,9 @@ import {
   Cartesian4,
   ClippingPlane,
   ClippingPlaneCollection,
+  ClassificationType,
   Color,
+  ImageMaterialProperty,
   ConstantProperty,
   Math as CesiumMath,
   Material,
@@ -226,6 +228,15 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   // Each entry also records the URL its provider was built from: a live run
   // writes a new overlay PNG and hands the store a new URL, and a provider
   // built from the old URL would keep showing the old texture forever.
+  // Overlays draped over the 3D tiles are entities, not imagery layers: an imagery layer
+  // paints on the globe, which sits UNDER the tile meshes, so the overlay was hidden by
+  // the very surface it describes. A classification rectangle is drawn on whatever
+  // geometry is there, so it follows buildings and terrain and does not care how the
+  // tile meshes were cleaned or decimated.
+  const drapedRef = useRef<Record<'wetGrid' | 'heatmap', { id: string; url: string } | null>>({
+    wetGrid: null,
+    heatmap: null,
+  })
   const overlaysRef = useRef<Record<'wetGrid' | 'heatmap', { layer: ImageryLayer; url: string } | null>>({
     wetGrid: null,
     heatmap: null,
@@ -294,6 +305,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
     return () => {
       overlaysRef.current = { wetGrid: null, heatmap: null }
+      drapedRef.current = { wetGrid: null, heatmap: null }
       baseRef.current = null
       boundaryRef.current = null
       viewerRef.current = null
@@ -471,6 +483,38 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           // Already destroyed by a viewer teardown; nothing to do.
         }
       }, 2000)
+    }
+
+    const drape = Boolean(terrainMeta.terrain3DUrl || terrainMeta.cityModel3DUrl || terrainMeta.cityModel3dUrl)
+    if (drape) {
+      for (const [key, url, alpha] of wanted) {
+        const cur = drapedRef.current[key]
+        const want = layers[key] && Boolean(url)
+        if (cur && (!want || cur.url !== url)) {
+          const ent = viewer.entities.getById(cur.id)
+          if (ent) viewer.entities.remove(ent)
+          drapedRef.current[key] = null
+        }
+        if (!want || drapedRef.current[key]) continue
+        const ent = viewer.entities.add({
+          name: key === 'wetGrid' ? 'Wet grid overlay' : 'Heat map overlay',
+          rectangle: {
+            coordinates: rectangle,
+            material: new ImageMaterialProperty({
+              image: url as string,
+              transparent: true,
+              color: Color.WHITE.withAlpha(Math.min(1, alpha + 0.2)),
+            }),
+            classificationType: ClassificationType.BOTH,
+          },
+        })
+        drapedRef.current[key] = { id: ent.id, url: url as string }
+        setOverlayStatus(key, 'ready')
+      }
+      viewer.scene.requestRender()
+      return () => {
+        cancelled = true
+      }
     }
 
     for (const [key, url, alpha] of wanted) {

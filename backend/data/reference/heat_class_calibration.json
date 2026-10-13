@@ -1,0 +1,39 @@
+{
+  "artefact": "heat_class_calibration",
+  "source": "Landsat 8/9 C2 L2 ST_B10 (Planetary Computer), pure 35 m cells",
+  "scenes": [
+    {
+      "scene": "LC08_L2SP_122044_20250826_02_T1",
+      "date": "2025-08-26",
+      "greenC": 43.21,
+      "pavedC": 45.97,
+      "gapC": 2.76,
+      "spreadC": 9.83,
+      "nGreen": 46,
+      "nPaved": 3439
+    },
+    {
+      "scene": "LC09_L2SP_121045_20240707_02_T1",
+      "date": "2024-07-07",
+      "greenC": 47.81,
+      "pavedC": 48.94,
+      "gapC": 1.14,
+      "spreadC": 4.24,
+      "nGreen": 37,
+      "nPaved": 1711
+    },
+    {
+      "scene": "LC08_L2SP_122044_20220903_02_T1",
+      "date": "2022-09-03",
+      "greenC": 39.52,
+      "pavedC": 41.49,
+      "gapC": 1.97,
+      "spreadC": 3.81,
+      "nGreen": 49,
+      "nPaved": 4932
+    }
+  ],
+  "greenIndex": 0.64,
+  "note": "green = 1 - mean(gap/site p5-p95 spread). water, wetland, bare not observed on this site: literature-assumed values kept.",
+  "generated": "2026-10-13"
+}

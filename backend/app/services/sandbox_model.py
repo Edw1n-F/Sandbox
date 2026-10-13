@@ -393,10 +393,10 @@ def context_for(
         "Flood depth is read from the solved depth field. It is not routed "
         "hydraulics and does not model pipes, culverts, backflow or barriers.",
         f"Ground elevation is nearest-neighbour from a {grids.dem_shape[0]}"
-        f"x{grids.dem_shape[1]} DEM (about 90 m cells), so it is a neighbourhood "
+        f"x{grids.dem_shape[1]} DEM from the Open3Dhk terrain tiles, so it is a neighbourhood "
         f"value, not a spot height.",
     ]
-    if grids.terrain_source != "open-meteo":
+    if grids.terrain_source != "open3dhk-tiles":
         notes.append(f"Terrain source is '{grids.terrain_source}', not real elevation.")
 
     return BuildingContext(

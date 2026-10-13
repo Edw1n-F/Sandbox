@@ -22,21 +22,21 @@
       "shadow": 0.2
     },
     "components": {
-      "land": 0.9343,
-      "svf": 0.1545,
-      "shadow": 0.0822
+      "land": 0.9487,
+      "svf": 0.3673,
+      "shadow": 0.1001
     },
-    "meanHeatIndex": 0.9044,
+    "meanHeatIndex": 0.8441,
     "maxHeatIndex": 1.0,
     "svf": {
-      "meanSvf": 0.1545,
-      "meanOpenFieldSvf": 0.3379,
+      "meanSvf": 0.3673,
+      "meanOpenFieldSvf": 0.6651,
       "minSvf": 0.0,
-      "maxSvf": 0.8404,
+      "maxSvf": 0.9706,
       "azimuthBins": 16,
       "searchRadiusM": 300.0,
       "searchRadiusCells": 60,
-      "buildingCells": 9401,
+      "buildingCells": 7753,
       "method": "Per-cell sky view factor from a horizon search over the massing height raster: SVF = 1 - (1/N) sum_i sin(gamma_i), where gamma_i is the horizon elevation angle in azimuth bin i (16 bins), searched to a 300 m (60-cell) radius. A cell under massing is inside the building and scores 0.",
       "limitation": "Geometry, not radiation. SVF is a sky-exposure fraction -- how much sky a ground point sees -- not a temperature. No sun, no surface energy balance, no air temperature. The horizon is sampled on 16 azimuth rays, so a narrow slot between two buildings can fall between rays and be missed.",
       "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
@@ -61,10 +61,10 @@
     "heatIndexByClass": {
       "paved": 1.0,
       "bare": 0.85,
-      "green": 0.4,
+      "green": 0.64,
       "wetland": 0.2,
       "water": 0.05,
-      "floodable": 0.4,
+      "floodable": 0.64,
       "tank": 1.0
     },
     "heatIndexSource": "Hand-authored screening index; awaiting verification",
@@ -72,27 +72,27 @@
     "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
   },
   "results": {
-    "meanIndex": 0.9044,
+    "meanIndex": 0.8441,
     "maxIndex": 1.0,
     "cellCountByClass": {
       "water": 0,
       "wetland": 0,
-      "green": 1840,
-      "bare": 229,
-      "paved": 15247,
+      "green": 2426,
+      "bare": 100,
+      "paved": 14790,
       "floodable": 0,
       "tank": 0
     },
     "areaHaByClass": {
       "water": 0.0,
       "wetland": 0.0,
-      "green": 4.62,
-      "bare": 0.58,
-      "paved": 38.3,
+      "green": 6.09,
+      "bare": 0.25,
+      "paved": 37.16,
       "floodable": 0.0,
       "tank": 0.0
     },
-    "imperviousShare": 0.8805
+    "imperviousShare": 0.8543
   },
   "landClasses": [
     "water",

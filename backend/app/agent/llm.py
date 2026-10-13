@@ -392,3 +392,30 @@ def stream_text(*, system: str, messages: list[Message], max_tokens: int = 700) 
         yield from _anthropic_stream(system, messages, max_tokens)
     else:
         yield from _openai_stream(system, messages, max_tokens)
+
+
+def complete_text(*, system: str, prompt: str, max_tokens: int = 400) -> str:
+    """Plain prose, no JSON contract, walking the model chain past 429s and empty replies.
+
+    For callers that want a paragraph (the run explanation), not a card. Raises
+    ProviderUnavailable / LLMError when no model in the chain answers.
+    """
+    kind, _, _ = _require()
+    if kind == "anthropic":
+        return _anthropic_json(system, [Message("user", prompt)], {"type": "object"}, max_tokens).text
+    headers = _openai_headers(getattr(settings, "llm_api_key", "") or "")
+    last: Exception | None = None
+    for model in model_chain():
+        body = {"model": model, "max_tokens": max_tokens,
+                "messages": [{"role": "system", "content": system},
+                             {"role": "user", "content": prompt}]}
+        try:
+            raw = _post(_openai_endpoint(), headers, body)
+        except LLMError as exc:
+            last = exc
+            continue
+        for choice in raw.get("choices", []) or []:
+            text = str(((choice.get("message") or {}).get("content")) or "").strip()
+            if text:
+                return text
+    raise last or LLMError("no model answered", retryable=True)

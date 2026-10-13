@@ -61,29 +61,6 @@ export default defineConfig({
       '@mui/material/styles',
     ],
   },
-  // Pre-bundle every MUI entry point up front. A new import found mid-session makes
-  // Vite re-optimise and swap the whole deps folder, and that swap is a bulk delete
-  // which this environment's safe-delete guard kills the dev server over.
-  optimizeDeps: {
-    include: [
-      '@mui/material/Alert',
-      '@mui/material/AlertTitle',
-      '@mui/material/Box',
-      '@mui/material/Button',
-      '@mui/material/Chip',
-      '@mui/material/CircularProgress',
-      '@mui/material/Collapse',
-      '@mui/material/CssBaseline',
-      '@mui/material/Fab',
-      '@mui/material/Fade',
-      '@mui/material/IconButton',
-      '@mui/material/Slider',
-      '@mui/material/Stack',
-      '@mui/material/TextField',
-      '@mui/material/Typography',
-      '@mui/material/styles',
-    ],
-  },
   build: {
     target: 'esnext',
   },

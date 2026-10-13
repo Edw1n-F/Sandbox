@@ -39,6 +39,8 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.config import settings  # noqa: E402
 from app.services.design_metrics import (  # noqa: E402
+    SITE_LAT_DEG,
+    SITE_LON_DEG,
     HEAT_STATUS,
     HEAT_SUMMER_DAY_OF_YEAR,
     blended_heat_field,
@@ -114,7 +116,7 @@ def _blend_field(ov, land_index: np.ndarray, day_of_year: int, hour: float
     fps = footprints_from_geojson(features)
     height = rasterise_height(fps, ov)
     svf = sky_view_factor_raster(height, cell_m)
-    shaded = shade_mask(fps, ov, 22.44, 114.01, day_of_year, hour)
+    shaded = shade_mask(fps, ov, SITE_LAT_DEG, SITE_LON_DEG, day_of_year, hour)
     field = blended_heat_field(land_index, svf, shaded.astype(np.float32))
     report = heat_field_report(land_index, svf, shaded.astype(np.float32),
                                calibration=calibration, cell_m=cell_m)

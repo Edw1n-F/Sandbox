@@ -1,7 +1,7 @@
 {
   "artefact": "landcover",
-  "generated": "2026-10-06",
-  "status": "REAL_LANDCOVER",
+  "generated": "2026-10-13",
+  "status": "REAL_LANDCOVER_FUSED",
   "source": {
     "name": "ESA WorldCover 10 m v200 (2021)",
     "urls": [
@@ -74,5 +74,41 @@
     "WorldCover is a 2021 single-epoch product; it does not show change since then, which is a real gap for a study area under construction.",
     "10 m source resampled to the 5 m analysis grid, so it adds no detail below 10 m -- it is not an error to treat the 5 m land class as really 10 m.",
     "ESA codes are modelled classifications, not ground truth."
-  ]
+  ],
+  "fusion": {
+    "base": "ESA WorldCover 10 m v200 (2021)",
+    "sentinel2": {
+      "scenes": [
+        "S2C_MSIL2A_20250324T025551_R032_T49QHE_20250324T084014",
+        "S2C_MSIL2A_20250324T025551_R032_T49QGE_20250324T084014",
+        "S2C_MSIL2A_20250403T025551_R032_T49QGE_20250403T084014",
+        "S2C_MSIL2A_20250403T025551_R032_T49QHE_20250403T084014",
+        "S2A_MSIL2A_20250103T030121_R032_T49QGE_20250103T063149"
+      ],
+      "ndviGreen": 0.35,
+      "ndwiWater": 0.2
+    },
+    "trees": "tall non-building blobs from Open3Dhk tiles",
+    "buildings": "citymodel_hsk.json footprints -> paved"
+  },
+  "classCounts": {
+    "before": {
+      "water": 0,
+      "wetland": 0,
+      "green": 1840,
+      "bare": 229,
+      "paved": 15247,
+      "floodable": 0,
+      "tank": 0
+    },
+    "after": {
+      "water": 0,
+      "wetland": 0,
+      "green": 2426,
+      "bare": 100,
+      "paved": 14790,
+      "floodable": 0,
+      "tank": 0
+    }
+  }
 }

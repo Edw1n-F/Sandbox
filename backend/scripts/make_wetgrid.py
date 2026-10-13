@@ -383,7 +383,7 @@ def main() -> int:
         "generated": "2026-10-06",
         "status": (
             "REAL_TERRAIN_SATISFACTORY"
-            if ov.terrain_source == "open-meteo"
+            if ov.terrain_source == "open3dhk-tiles"
             else "SCREENING_VIEW_SYNTHETIC_TERRAIN"
         ),
         "terrainSource": ov.terrain_source,
@@ -408,7 +408,7 @@ def main() -> int:
             "reported, but the runoff VOLUME is still allocated by solving for a "
             "water level rather than routed downhill cell by cell. It is a "
             "screening view, not a flood prediction."
-            if ov.terrain_source == "open-meteo"
+            if ov.terrain_source == "open3dhk-tiles"
             else "Terrain is SYNTHETIC (see _overlay_common). Run "
                  "scripts/fetch_dem.py to replace it with real elevation."
         ),

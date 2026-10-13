@@ -1,20 +1,20 @@
 {
-  "status": "PROVISIONAL_MASSING_NOT_SURVEYED",
-  "features": 197,
+  "status": "DERIVED_FROM_OPEN3DHK_AND_OVERTURE",
+  "features": 396,
   "heightM": {
-    "min": 10.9,
-    "max": 130.3,
-    "mean": 35.3
+    "min": 3.0,
+    "max": 94.2,
+    "mean": 10.863888888888889
   },
-  "byClass": {
-    "new_town_block": 77,
-    "village_house": 85,
-    "landmark_tower": 5,
-    "newer_tower": 30
+  "overtureKept": 369,
+  "tileOnlyAdded": 27,
+  "heightSource": "90th percentile of tile surface minus tile terrain",
+  "footprintSource": "Overture Maps 2026-09-23.0 (ODbL/CDLA) fused with tile-derived blobs",
+  "rules": {
+    "keepOvertureIfP90AtLeast": 3.0,
+    "tileOnlyMinM2": 40,
+    "tileOnlyMinHeight": 7.0
   },
-  "footprintSource": "derived from ESA WorldCover 10 m paved class",
-  "heightSource": "ASSUMED_DISTRIBUTION_NOT_SURVEYED",
-  "whyNotOsm": "Tried and unreachable from this host: Overpass returned 504 from the main endpoint and 000 from four mirrors, with an empty result from the one instance that answered; Microsoft GlobalML Building Footprints now returns 409 'Public access is not permitted on this storage account'; a Geofabrik HK extract is ~90 MB and its PBF parser will not build here either.",
-  "editable": true,
-  "note": "Massing envelopes for visual context, and something for the AI module to change. Not surveyed buildings. When real footprints become available this file is the thing that gets replaced, and it is deliberately a plain GeoJSON FeatureCollection so that is a data swap rather than a rewrite."
+  "generated": "2026-10-13",
+  "editable": true
 }

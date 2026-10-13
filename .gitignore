@@ -78,3 +78,6 @@ backend/data/interventions/*
 
 # Agent memory, not project source
 .workbuddy/
+
+# Session screenshots and transient scratch from agent tools.
+.tmp/

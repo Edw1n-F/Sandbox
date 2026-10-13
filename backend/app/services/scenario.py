@@ -59,6 +59,8 @@ from typing import Any
 import numpy as np
 
 from app.services.design_metrics import (
+    SITE_LAT_DEG,
+    SITE_LON_DEG,
     Footprint,
     footprint_from_ring,
     footprints_from_geojson,
@@ -416,8 +418,8 @@ def evaluate(
     rainfall_mm: float | None = None,
     sun_hours: tuple[int, ...] = (9, 14),
     day_of_year: int = 355,
-    lat_deg: float = 22.44,
-    lon_deg: float = 114.01,
+    lat_deg: float = SITE_LAT_DEG,
+    lon_deg: float = SITE_LON_DEG,
 ) -> dict[str, Any]:
     """Score one candidate scheme against the baseline on all three axes.
 

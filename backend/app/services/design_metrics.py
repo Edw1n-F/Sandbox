@@ -68,6 +68,11 @@ import numpy as np
 
 from app.config import settings
 
+# Sun position is computed at the sandbox centre (the Open3Dhk tile origin), not a hardcoded
+# district-scale point. One definition; every shade/heat caller imports it.
+SITE_LAT_DEG = 22.43338
+SITE_LON_DEG = 113.99575
+
 M_PER_DEG_LAT = 110_540.0
 
 # Meteorological convention: the direction a wind comes FROM. Named explicitly
@@ -589,8 +594,8 @@ def shade_fraction(footprints: list[Footprint], grids: Any, lat_deg: float,
 def design_report(
     footprints: list[Footprint],
     grids: Any,
-    lat_deg: float = 22.44,
-    lon_deg: float = 114.01,
+    lat_deg: float = SITE_LAT_DEG,
+    lon_deg: float = SITE_LON_DEG,
     sun_hours: tuple[int, ...] = (9, 14),
     day_of_year: int = 355,
 ) -> dict[str, Any]:

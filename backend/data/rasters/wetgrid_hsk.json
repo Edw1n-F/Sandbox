@@ -2,14 +2,14 @@
   "artefact": "wetgrid",
   "generated": "2026-10-06",
   "status": "REAL_TERRAIN_SATISFACTORY",
-  "terrainSource": "open-meteo",
+  "terrainSource": "open3dhk-tiles",
   "conditioning": {
     "method": "Priority-Flood (Barnes et al. 2014)",
     "enabled": true,
-    "cellsRaised": 7,
+    "cellsRaised": 2033,
     "cellsTotal": 17316,
-    "raisedFraction": 0.0004,
-    "maxFlowAccumulationCells": 2027.0,
+    "raisedFraction": 0.1174,
+    "maxFlowAccumulationCells": 1211.0,
     "note": "Implemented in scripts/hydrology.py. richdem and hydrotools are the standard open-source tools for this; both were installed and neither is usable on this host because richdem needs GDAL headers to build."
   },
   "landCoverSource": "esa-worldcover",
@@ -59,13 +59,13 @@
     "verticalDatum": "mPD"
   },
   "results": {
-    "runoffVolumeM3": 190137.9,
-    "unstoredVolumeM3": 181437.6,
-    "wetCells": 6501,
-    "wetAreaHa": 16.33,
+    "runoffVolumeM3": 189266.6,
+    "unstoredVolumeM3": 180566.3,
+    "wetCells": 6725,
+    "wetAreaHa": 16.89,
     "totalAreaHa": 43.5,
-    "wetAreaFraction": 0.3754,
-    "meanDepthInWetAreaM": 1.1109
+    "wetAreaFraction": 0.3884,
+    "meanDepthInWetAreaM": 1.0688
   },
   "render": {
     "minVisibleDepthM": 0.005,
@@ -85,23 +85,23 @@
   "routed": {
     "status": "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
     "warning": "Not a flood prediction. Not engineering-grade. Screening-level D8 fill-and-spill on a Priority-Flood conditioned 5 m surface.",
-    "runoffInM3": 181437.6,
-    "storedM3": 0.4,
-    "dischargedM3": 181437.3,
+    "runoffInM3": 180566.3,
+    "storedM3": 6962.4,
+    "dischargedM3": 173604.0,
     "massBalance": {
-      "runoffInM3": 181437.64839036058,
-      "storedM3": 0.3810058800651115,
-      "dischargedM3": 181437.26738448016,
-      "residualM3": 3.4924596548080444e-10,
-      "relativeResidual": 1.9248814597145053e-15,
+      "runoffInM3": 180566.34303411708,
+      "storedM3": 6962.371101430807,
+      "dischargedM3": 173603.971932686,
+      "residualM3": 2.6193447411060333e-10,
+      "relativeResidual": 1.4506273412266658e-15,
       "tol": 1e-06,
       "balanced": true
     },
-    "wetCells": 7,
-    "maxDepthM": 0.0042,
+    "wetCells": 2033,
+    "maxDepthM": 1.5023,
     "depressions": {
-      "count": 1,
-      "maxDepthM": 0.0042
+      "count": 251,
+      "maxDepthM": 2.2524
     }
   }
 }

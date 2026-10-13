@@ -136,6 +136,8 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
         return _HEAT_TERMS_CACHE["terms"]
 
     from app.services.design_metrics import (
+        SITE_LAT_DEG,
+        SITE_LON_DEG,
         HEAT_SUMMER_DAY_OF_YEAR,
         footprints_from_geojson,
         rasterise_height,
@@ -155,7 +157,7 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
                 # 14:00 on the July anchor day: the same solar inputs the
                 # committed heatmap artefact uses, so a live run and the
                 # offline overlay differ only in land cover, never in sun.
-                "shaded": shade_mask(fps, grids, 22.44, 114.01,
+                "shaded": shade_mask(fps, grids, SITE_LAT_DEG, SITE_LON_DEG,
                                      HEAT_SUMMER_DAY_OF_YEAR, 14.0
                                      ).astype(np.float32),
             }
@@ -240,6 +242,17 @@ def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
     return " ".join(parts)
 
 
+def _rounded(node: Any) -> Any:
+    """Round floats for the prompt so the model quotes readable figures."""
+    if isinstance(node, float):
+        return round(node) if abs(node) >= 100 else round(node, 3)
+    if isinstance(node, dict):
+        return {k: _rounded(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_rounded(v) for v in node]
+    return node
+
+
 def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
                      temperature_c: float, heatwave: bool,
                      applied: list[dict], skipped: list[dict]
@@ -251,8 +264,6 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
     project is built on. Any failure -- no key, network, malformed reply --
     returns None and the caller falls back to the template, labelled.
     """
-    from app.services import ai_plan
-
     facts = {
         "rainfallMm": rainfall_mm,
         "temperatureC": temperature_c,
@@ -277,49 +288,21 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "transform, not a different scenario; end by stating this is a "
         "screening-level estimate, not a flood prediction, and that the heat "
         "index is relative, not a temperature.\n\n"
-        + json.dumps(facts, indent=1)
+        + json.dumps(_rounded(facts), indent=1)
     )
 
-    anthropic = ai_plan.LLMProvider()
-    if anthropic.available:
-        try:
-            raw = ai_plan._post_json(
-                ai_plan.ANTHROPIC_URL, anthropic.api_key,
-                {
-                    "model": anthropic.model,
-                    "max_tokens": 320,
-                    "temperature": 0,
-                    "messages": [{"role": "user", "content": prompt}],
-                },
-            )
-            text = "".join(
-                str(block.get("text", ""))
-                for block in raw.get("content", []) or []
-                if isinstance(block, dict) and block.get("type") == "text"
-            ).strip()
-            if text:
-                return text, "anthropic"
-        except Exception:  # noqa: BLE001 - fall through to the next provider
-            pass
+    # The chat panel's client: it walks LLM_FALLBACK_MODELS, so one throttled
+    # free-tier model no longer drops the explanation to the template.
+    from app.agent import llm
 
-    compat = ai_plan.OpenAICompatProvider()
-    if compat.available:
-        try:
-            raw = ai_plan._post_json(
-                compat._endpoint(), compat.api_key,
-                {
-                    "model": compat.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0,
-                    "max_tokens": 320,
-                },
-            )
-            text = str(((raw.get("choices") or [{}])[0]
-                        .get("message", {}) or {}).get("content") or "").strip()
-            if text:
-                return text, "openai-compatible"
-        except Exception:  # noqa: BLE001 - the template covers this
-            pass
+    try:
+        text = llm.complete_text(
+            system="You write one short planner-facing paragraph in plain prose. No JSON, no markdown.",
+            prompt=prompt, max_tokens=1500)
+        if text:
+            return text, llm.provider_name()
+    except Exception:  # noqa: BLE001 - the labelled template covers this
+        pass
     return None
 
 

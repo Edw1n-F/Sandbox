@@ -45,7 +45,11 @@ LAND_CLASSES = ("water", "wetland", "green", "bare", "paved",
 HEAT_INDEX: dict[str, float] = {
     "paved": 1.00,
     "bare": 0.85,
-    "green": 0.40,
+    # Green 0.64 is MEASURED (data/reference/heat_class_calibration.json): on three clear
+    # summer Landsat 8/9 scenes, pure green cells run 1.1-2.8 C below pure paved cells while
+    # the site spans 3.8-9.8 C, i.e. green sits ~0.64 of the way to paved. Water, wetland and
+    # bare are not present as pure cells on this site, so their values stay literature-assumed.
+    "green": 0.64,
     "wetland": 0.20,
     "water": 0.05,
     # A floodable park is landscaped ground that is *intermittently* wet, so it
@@ -53,7 +57,7 @@ HEAT_INDEX: dict[str, float] = {
     # water, not a permanent water body. Giving it the water value would be the
     # error this class exists to remove -- it made a floodable park score as a
     # lake, understating its heat and overstating the green loss.
-    "floodable": 0.40,
+    "floodable": 0.64,
     # An underground tank leaves the surface as it was. The model cannot express
     # "unchanged", so it carries the paved value, which is correct for the
     # typical Hong Kong case (a service reservoir under a paved platform) and is
@@ -193,7 +197,7 @@ class Overlay:
     elevation: np.ndarray  # metres; real DEM when available, else synthetic
     land_class: np.ndarray  # index into LAND_CLASSES
     grid: dict[str, Any]
-    terrain_source: str  # "open-meteo" | "synthetic" -- reported, never hidden
+    terrain_source: str  # "open3dhk-tiles" | "synthetic" -- reported, never hidden
     landcover_source: str  # "esa-worldcover" | "synthetic"
 
     def class_mask(self, name: str) -> np.ndarray:
@@ -331,7 +335,7 @@ def _load_or_synthesise_dem(
             dem = np.load(dem_file).astype(np.float64)
             if dem.ndim == 2 and dem.shape[0] > 1 and dem.shape[1] > 1:
                 if not np.isnan(dem).any():
-                    return _bilinear_resample(dem, rows, cols), "open-meteo"
+                    return _bilinear_resample(dem, rows, cols), "open3dhk-tiles"
         except (OSError, ValueError):
             pass
     return _synthetic_surface(rows, cols, land), "synthetic"

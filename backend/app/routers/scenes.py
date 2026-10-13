@@ -27,7 +27,7 @@ from app.schemas.scene import (
 )
 from app.config import settings
 from app.services import scene_service
-from app.services.design_metrics import HEAT_SUMMER_DAY_OF_YEAR
+from app.services.design_metrics import HEAT_SUMMER_DAY_OF_YEAR, SITE_LAT_DEG, SITE_LON_DEG
 from app.services.massing_fit import height_options
 from app.services.sandbox_model import (
     DEFAULT_RAINFALL_MM,
@@ -474,11 +474,27 @@ def get_ventilation(scene_id: str) -> dict:
                     * math.cos(math.radians((lat0 + lat1) / 2))
                     * (lat1 - lat0) * 110_540.0)
 
+    def _exterior_points(geom: dict) -> list[tuple[float, float]]:
+        """All exterior-ring points, flat, for Polygon or MultiPolygon."""
+        coords = geom["coordinates"]
+        if geom["type"] == "Polygon":
+            rings = coords
+        elif geom["type"] == "MultiPolygon":
+            rings = [poly[0] for poly in coords]
+        else:
+            return []
+        pts: list[tuple[float, float]] = []
+        for ring in rings:
+            pts.extend((p[0], p[1]) for p in ring)
+        return pts
+
     footprints = []
     for f in features:
-        ring = f["geometry"]["coordinates"][0]
-        xs = [p[0] for p in ring]
-        ys = [p[1] for p in ring]
+        pts = _exterior_points(f["geometry"])
+        if not pts:
+            continue
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
         mid_lat = (min(ys) + max(ys)) / 2
         footprints.append({
             "widthM": (max(xs) - min(xs)) * 111_320.0 * math.cos(math.radians(mid_lat)),
@@ -975,7 +991,7 @@ def get_heat_field(scene_id: str, day_of_year: int = HEAT_SUMMER_DAY_OF_YEAR,
     fps = footprints_from_geojson(features)
     height = rasterise_height(fps, grids)
     svf = sky_view_factor_raster(height, cell_m)
-    masks = [shade_mask(fps, grids, 22.44, 114.01, day_of_year, h).astype(np.float32)
+    masks = [shade_mask(fps, grids, SITE_LAT_DEG, SITE_LON_DEG, day_of_year, h).astype(np.float32)
              for h in hours_local]
     shaded = np.mean(masks, axis=0).astype(np.float32)
 
