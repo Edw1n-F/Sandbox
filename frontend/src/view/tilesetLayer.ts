@@ -40,8 +40,6 @@ export async function add3DTileset(
 ): Promise<TilesetHandle | null> {
   if (viewer.isDestroyed()) return null
 
-  console.log('[3dtiles] loading tileset from', url)
-
   const { modelMatrix, maximumScreenSpaceError = 16, name } = options
   const report = name ? useTileLoadStore.getState() : null
   if (name) report?.set(name, 'loading')
@@ -85,7 +83,6 @@ export async function add3DTileset(
     }
 
     tileset.allTilesLoaded.addEventListener(() => {
-      console.log('[3dtiles] all tiles loaded')
       if (!viewer.isDestroyed()) viewer.scene.requestRender()
     })
 
@@ -102,7 +99,6 @@ export async function add3DTileset(
 
     viewer.scene.primitives.add(tileset)
     viewer.scene.requestRender()
-    console.log('[3dtiles] tileset added to scene')
     return {
       tileset,
       dispose: () => {

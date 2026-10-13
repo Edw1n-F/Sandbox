@@ -46,6 +46,7 @@ from app.services.design_metrics import (  # noqa: E402
     HEAT_SUMMER_DAY_OF_YEAR,
     cell_fad,
     footprints_from_geojson,
+    load_heat_calibration,
     rasterise_height,
     shade_mask,
     sky_view_factor_raster,
@@ -83,6 +84,53 @@ def heat_index(land: np.ndarray) -> np.ndarray:
 
     lut = np.array([HEAT_INDEX[name] for name in LAND_CLASSES], dtype=np.float32)
     return lut[land]
+
+
+def _anchoring_block(lst_meta: dict) -> dict:
+    """What the °C field is anchored to, stated once and nested.
+
+    The anchor is the **observed Landsat LST scene** — that is the base the
+    absolute level comes from. The HKO station band on disk
+    (``data/reference/heat_anchor.json``) is carried as a *sanity* anchor only:
+    it is air temperature at a station ~20 km away, so treating it as this
+    site's measurement would be the `HKO_air` / `LST_skin` confusion the
+    project refuses elsewhere. Both are named, and neither is silently dropped.
+    """
+    calibration = load_heat_calibration() or {}
+    rng = calibration.get("rangeC")
+    sanity = None
+    if isinstance(rng, (list, tuple)) and len(rng) == 2:
+        sanity = {
+            "anchorSource": "hko_station",
+            "quantity": calibration.get("quantity"),
+            "anchorRangeC": [float(rng[0]), float(rng[1])],
+            "calibrationPath": str(calibration.get("path") or
+                                   "data/reference/heat_anchor.json"),
+            "note": (
+                "Air-temperature band at HKO Lau Fau Shan (July 2015-2024), "
+                "~20 km away. A sanity anchor for the scene's level, NEVER a "
+                "measurement of this site and never the anchor of the field."
+            ),
+        }
+    return {
+        "anchorSource": "landsat_lst",
+        "anchorScene": lst_meta.get("source"),
+        "anchorSceneDate": "2022-09-03",
+        "quantity": "LST_skin",
+        "observedMeanC": lst_meta.get("observedMeanC"),
+        "sanityAnchor": sanity,
+        "heatIndexSource": (
+            "Hand-authored land-class weights except green (0.64, measured); "
+            "they shift cells from the site mean, they do not set the level"
+        ),
+        "status": HEAT_STATUS,
+        "warning": (
+            "Anchored to an observed Landsat 8/9 land-surface-temperature "
+            "scene over the site. LST is a *skin* temperature; air temperature "
+            "is an estimate ~12 C lower and the HKO station band is a sanity "
+            "anchor, not a site measurement. Screening-level."
+        ),
+    }
 
 
 def geometry_terms(ov, day_of_year: int, hour: float) -> dict[str, np.ndarray] | None:
@@ -181,9 +229,19 @@ def main() -> int:
             "cols": ov.cols,
             "bounds": list(ov.bounds),
             "cellAreaM2": cell_area,
+        },
+        # The render day is declared, not implied: a winter render under a
+        # summer anchor is the inconsistency a reviewer spots first.
+        "blend": {
             "solarDayOfYear": args.day_of_year,
             "solarHour": args.hour,
+            "windBearingDeg": 45.0,
+            "components": ["landClass", "skyView", "shade", "windShelter"],
         },
+        # What the °C field is anchored TO. The base is the observed LST scene;
+        # the HKO band is a sanity anchor only, and saying so here is what stops
+        # a reader taking the station band for a site measurement.
+        "anchoring": _anchoring_block(lst_meta),
         "assumptions": {
             "windBearingDeg": 45.0,
             "airOffsetC": 12.0,

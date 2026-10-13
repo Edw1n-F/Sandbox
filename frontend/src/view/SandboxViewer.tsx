@@ -669,7 +669,6 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       terrainTilesetHandle?.dispose()
       terrainTilesetHandle = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terrainMeta?.terrain3DUrl])
 
   // ---- intervention features ---------------------------------------------

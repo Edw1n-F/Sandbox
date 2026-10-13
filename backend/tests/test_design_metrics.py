@@ -576,9 +576,18 @@ def main() -> int:
         check("the sidecar render day is the summer default (196)",
               sidecar.get("blend", {}).get("solarDayOfYear") == 196,
               str(sidecar.get("blend", {}).get("solarDayOfYear")))
-        check("the sidecar anchoring is anchored to the station",
-              sidecar.get("anchoring", {}).get("anchorSource") == "hko_station",
+        # The anchor moved from the HKO station band to the observed LST scene
+        # when the heat field became a °C surface-temperature field (gap 8): the
+        # band is now a *sanity* anchor only, and it must still be declared here
+        # rather than dropped -- a field that stops naming its anchor is the
+        # silence this assertion exists to prevent.
+        check("the sidecar anchoring is anchored to the observed LST scene",
+              sidecar.get("anchoring", {}).get("anchorSource") == "landsat_lst",
               str(sidecar.get("anchoring", {}).get("anchorSource")))
+        check("the sidecar keeps the HKO band as a declared sanity anchor",
+              sidecar.get("anchoring", {}).get("sanityAnchor", {})
+              .get("anchorSource") == "hko_station",
+              str(sidecar.get("anchoring", {}).get("sanityAnchor")))
     else:
         check("the heat sidecar is committed", False, f"missing {sidecar_path}")
 

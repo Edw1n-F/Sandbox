@@ -23,9 +23,38 @@
       113.9994,
       22.4363
     ],
-    "cellAreaM2": 25.122139213634153,
+    "cellAreaM2": 25.122139213634153
+  },
+  "blend": {
     "solarDayOfYear": 196,
-    "solarHour": 14.0
+    "solarHour": 14.0,
+    "windBearingDeg": 45.0,
+    "components": [
+      "landClass",
+      "skyView",
+      "shade",
+      "windShelter"
+    ]
+  },
+  "anchoring": {
+    "anchorSource": "landsat_lst",
+    "anchorScene": "Landsat 8/9 C2 L2 ST_B10 (Planetary Computer)",
+    "anchorSceneDate": "2022-09-03",
+    "quantity": "LST_skin",
+    "observedMeanC": 41.258,
+    "sanityAnchor": {
+      "anchorSource": "hko_station",
+      "quantity": "HKO_air",
+      "anchorRangeC": [
+        26.4,
+        32.7
+      ],
+      "calibrationPath": "data/reference/heat_anchor.json",
+      "note": "Air-temperature band at HKO Lau Fau Shan (July 2015-2024), ~20 km away. A sanity anchor for the scene's level, NEVER a measurement of this site and never the anchor of the field."
+    },
+    "heatIndexSource": "Hand-authored land-class weights except green (0.64, measured); they shift cells from the site mean, they do not set the level",
+    "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
+    "warning": "Anchored to an observed Landsat 8/9 land-surface-temperature scene over the site. LST is a *skin* temperature; air temperature is an estimate ~12 C lower and the HKO station band is a sanity anchor, not a site measurement. Screening-level."
   },
   "assumptions": {
     "windBearingDeg": 45.0,

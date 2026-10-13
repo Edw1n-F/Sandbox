@@ -113,34 +113,46 @@ implements)
 
 ### Test suites
 
-Counts were produced by running the suites on **2026-10-13**; all green. Lint and
-typecheck are clean. The chat's model call is the one thing no suite exercises —
-gap 9.
+Counts measured by running every suite on **2026-10-13 (evening)**. Lint and
+typecheck are clean. **Six of the sixteen backend suites are not green**: three
+carry stale pins, three stop before finishing. Every one of the six is pinned to
+state that the real-data switches replaced — the procedural massing envelope, the
+~90 m synthetic DEM, and the 0–1 heat index — and none of them touches the run
+loop, the contract, the temperature field or the overlay masking, which are green.
 
-| Suite | Count | Command |
+| Suite | Result | Command |
 |---|---|---|
-| backend `test_design_metrics` | 90/90 | `python tests/test_design_metrics.py` |
-| backend `test_scenario` | 66/66 | `python tests/test_scenario.py` |
-| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
-| backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
-| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
-| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
-| backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
+| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
+| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
-| backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding + fact assembly, no key |
-| frontend unit (`vitest`) | 56/56 | `npm test` |
+| backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
+| backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding, no key |
+| backend `test_overlay_masking` | 3/3 | `python tests/test_overlay_masking.py` |
+| backend `test_design_metrics` | **86/91** | 5 pins stale: 395/396 envelopes convert, 3 shade values, `green 0.40` |
+| backend `test_ledger` | **39/42** | 3 pins stale: 2 artefact md5s, the sea-level ground range |
+| backend `test_hydrology` | **28/32** | 4 pins stale: depression count and cells, HAND cells, headline |
+| backend `test_ventilation` | **20/45, then `TypeError`** | `test_ventilation.py:124` divides a list |
+| backend `test_building_fit` | **4 checks, then `IndexError`** | reads `features[900]`; the model holds 396 |
+| backend `test_scenario` | **does not run** | imports `placement_footprints`, absent from `ai_plan` |
+| frontend unit (`vitest`) | 36/36 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` — needs live servers |
 
-**498 backend assertions across fourteen suites, 56 frontend unit tests.** The two
-`verify-*` suites are **not** part of `npm test`: they need the dev server on
-`:5173` and the backend on `:8000`, and folding them in would let a missing server
-read as a pass. Their counts date from 12 Oct; the rest were run on 13 Oct.
+**385 backend assertions ran: 373 green, 12 red, and 131 never ran at all.**
+Report the three crashing suites as crashing rather than as failures — a suite
+that dies on line 124 hides the 25 checks behind it, and a pinned count of 900
+buildings was never a statement about the world, only about the placeholder that
+used to be there.
+
+The two `verify-*` suites are **not** part of `npm test`: they need the dev server
+on `:5173` and the backend on `:8001`, and folding them in would let a missing
+server read as a pass. Their counts date from 12 Oct; the rest were run on 13 Oct.
+
+The chat's model call is the one thing no suite exercises — gap 9.
 
 `scipy` is required by `test_ventilation` and `test_contract`. Two timing
 assertions use host-measured ratios rather than absolute wall-clock bounds, so they
@@ -423,13 +435,15 @@ pan workaround documented.
 **The issue, resolved.** The slider is no longer a silent display-stretch. It now
 sets the **scenario mean surface temperature (°C)** — the temperature analogue of
 the rainfall slider's intensity — and re-anchors the whole heatmap so its mean
-matches, with presets (*Mean summer / Hot day / Extreme heatwave*) mirroring the
-rainfall Amber/Red/Black buttons. The spatial pattern (shade, green, wind shelter)
-still decides which cells are hotter or cooler than average, so a well-designed
-site reads near-neutral rather than "all red". The slider is labelled: it is
-surface (skin) temperature anchored to observed Landsat LST, air is estimated as
-~12 °C lower, and it changes no rainfall or runoff figure — temperature still
-cannot drive SCS-CN without an evapotranspiration term the project does not have.
+matches, with presets naming the **HKO heat warnings** (*Hot night* ≥28 °C air,
+*Very Hot Weather Warning* ≥33 °C, *Extreme heat* ≥35 °C) the way the rainfall
+buttons name the rainstorm signals. The spatial pattern (shade, green, wind
+shelter) still decides which cells are hotter or cooler than average, so a
+well-designed site reads near-neutral rather than "all red". The slider is
+labelled: it is surface (skin) temperature anchored to observed Landsat LST, air
+is estimated as ~12 °C lower, and it changes no rainfall or runoff figure —
+temperature still cannot drive SCS-CN without an evapotranspiration term the
+project does not have.
 
 **What remains.** Nothing blocking. The one honest caveat is already stated beside
 the slider: this is surface temperature, not air temperature, and the anomaly
@@ -513,7 +527,8 @@ false.
 - **Frontal area density is not a velocity ratio**, and the two are never
   interchanged. They differ by orders of magnitude and share no calibration.
 - **Shade is two solar instants, not a daily mean radiant temperature.** No surface
-  energy balance, no air temperature, no humidity. Heat is not a temperature.
+  energy balance, no air temperature, no humidity. Heat is a *surface* temperature
+  field, not an air-temperature or comfort model.
 - **Height does not change runoff.** A footprint is already impervious whatever its
   height, so a height-only scheme returns a drainage delta of exactly zero. That is
   arithmetic, not a bug, and the response says so in the axis limitation.
@@ -526,11 +541,17 @@ false.
   from the closed set in
   [`docs/research/ch05_way_forward.md`](docs/research/ch05_way_forward.md) §5.2.
   `status` is never a verdict.
-- **The heat field is a relative index, not a temperature.** The anchor band on disk
-  (HKO Lau Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is what the 0–1 scale is
-  *read against*; the field itself is still not °C and never becomes °C. Do not
-  convert it, do not call the band a site measurement (the station is ~20 km away),
-  and do not conflate `HKO_air` with `LST_skin`.
+- **The heat field is a surface temperature anchored to observed LST — and it is
+  the one quantity here that is in °C.** The base is the Landsat 8/9 LST scene of
+  2022-09-03 resampled 30 m → 5 m, so the absolute level is measured, not modelled;
+  the geometry terms (land class, sky view, shade, wind shelter) only move a cell
+  away from the site mean. Two conflations must be refused. **`LST_skin` is not
+  `HKO_air`**: air is an estimate at surface − 12 °C, and the band on disk (HKO Lau
+  Fau Shan, July 2015–2024, `[26.4, 32.7] °C`) is a sanity anchor from a station
+  ~20 km away, never a site measurement. And the **anomaly** map is a deviation
+  from the site mean, never an absolute temperature. The `HEAT_INDEX` land-class
+  weights stay hand-authored except `green 0.64` (measured from the LST
+  calibration): they perturb an observed base, they do not constitute it.
 - **A FAD *ratio* is a comparison, not a velocity ratio.** `fad_ratio` compares two
   schemes' geometry; it does not become a VR by being divided.
 - **The corridors are geometry, not flow, and they cannot separate NE from SW.**
