@@ -16,7 +16,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
       },
       // Overlay PNGs are served by the backend at /static (StaticFiles mount in
@@ -25,7 +25,7 @@ export default defineConfig({
       // the layer silently never appears. In production the API and the static
       // files are same-origin, so no proxy is involved.
       '/static': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
       },
       // /health reports the GenAI configuration, and the panel's provider badge
@@ -33,7 +33,7 @@ export default defineConfig({
       // the badge would silently never resolve and the UI would fall back to
       // saying nothing -- which is the same as saying "fine".
       '/health': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:8001',
         changeOrigin: true,
       },
     },

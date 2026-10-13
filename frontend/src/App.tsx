@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography'
 
 import AppErrorBoundary from './components/AppErrorBoundary'
 import ChatPanel from './components/ChatPanel'
+import LayerToggle from './components/LayerToggle'
 import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
@@ -79,6 +80,7 @@ export default function App() {
           pointerEvents: 'none',
         }}>
           <SlidersPanel />
+          <LayerToggle />
           <Box sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', pointerEvents: 'auto' }}>
             <ProjectCatalog />
           </Box>

@@ -161,8 +161,13 @@ const theme = createTheme({
     MuiSwitch: {
       styleOverrides: {
         root: { padding: 4 },
-        switchBase: { color: 'rgba(160,190,175,0.4)' },
-        checked: { color: SIGNAL.green, '& + .MuiSwitch-track': { backgroundColor: 'rgba(92,255,157,0.3)' } },
+        switchBase: {
+          color: 'rgba(160,190,175,0.4)',
+          '&.Mui-checked': {
+            color: SIGNAL.green,
+            '& + .MuiSwitch-track': { backgroundColor: 'rgba(92,255,157,0.3)' },
+          },
+        },
         track: { backgroundColor: 'rgba(160,190,175,0.18)', borderRadius: 8 },
         thumb: { backgroundColor: '#dce8e2', width: 11, height: 11 },
       },

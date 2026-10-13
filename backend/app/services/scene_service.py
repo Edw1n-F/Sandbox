@@ -102,6 +102,7 @@ def _scene_to_read(doc: dict[str, Any]) -> SceneRead:
     # later. Same existence check, same meta helper.
     read.city_model_url = _resolve_overlay_url(doc, "city_model_path")
     read.city_model_meta = _city_model_meta()
+    read.city_model_3d_url = _resolve_model_3d_url(doc, "city_model_3d_path")
     return read
 
 
@@ -119,6 +120,26 @@ def _resolve_overlay_url(doc: dict[str, Any], key: str) -> str | None:
     if not absolute.exists():
         return None
     return settings.public_url(rel)
+
+
+def _resolve_model_3d_url(doc: dict[str, Any], key: str) -> str | None:
+    """Turn a model-relative path (``city_model/tileset.json``) into a URL.
+
+    Strips a leading ``model/`` prefix if present so that the stored value can
+    be either ``model/city_model/tileset.json`` or ``city_model/tileset.json``
+    and both resolve correctly under ``/static/model/``.
+    """
+    rel = doc.get(key)
+    if not rel:
+        return None
+    rel = rel.lstrip("/")
+    # Accept legacy full path "model/city_model/..." or bare "city_model/..."
+    if rel.startswith("model/"):
+        rel = rel[len("model/"):]
+    absolute = settings.model_dir / rel
+    if not absolute.exists():
+        return None
+    return settings.public_model_url(rel)
 
 # --------------------------------------------------------------------------- #
 # Scene CRUD
@@ -374,6 +395,10 @@ def get_terrain(scene_id: str) -> TerrainRead:
         heatmap_url=_resolve_overlay_url(doc, "heatmap_path"),
         city_model_url=_resolve_overlay_url(doc, "city_model_path"),
         city_model_meta=_city_model_meta(),
+        city_model_3d_url=_resolve_model_3d_url(doc, "city_model_3d_path"),
+        terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
+        waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
+        infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
     )
 
 

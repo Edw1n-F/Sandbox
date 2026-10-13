@@ -92,6 +92,9 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   interventions: true,
   cityModel: true,
   props: true,
+  realBuildings: true,
+  waterbody: true,
+  infrastructure: true,
 }
 
 export const useSceneStore = create<SceneState>((set, get) => ({

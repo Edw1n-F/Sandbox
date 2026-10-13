@@ -71,5 +71,7 @@
   },
   "terrain_source": "terrain-rgb / open-meteo / srtm-1arcsec",
   "terrain_url": "dem_terrain_rgb.png",
-  "city_model_path": "rasters/citymodel_hsk.json"
+  "city_model_path": "rasters/citymodel_hsk.json",
+  "city_model_3d_path": "city_model/tileset.json",
+  "terrain_3d_path": "terrain(TB)/tileset.json"
 }

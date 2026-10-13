@@ -67,6 +67,14 @@ export interface TerrainMeta {
    */
   cityModelUrl?: string | null
   cityModelMeta?: CityModelMeta | null
+  /** Real 3D Tiles tileset with textured meshes from 6-NW-12D. */
+  cityModel3DUrl?: string | null
+  /** Alias: the API serialises as camelCase; accept both spellings. */
+  cityModel3dUrl?: string | null
+  /** Visual terrain mesh from 6-NW-12D terrain(TB) 3D Tiles. */
+  terrain3DUrl?: string | null
+  waterbodyUrl?: string | null
+  infrastructureUrl?: string | null
 }
 
 export type PlanType =
@@ -144,6 +152,12 @@ export interface LayerVisibility {  imagery: boolean
   cityModel: boolean
   /** Online glTF assets fetched from the Khronos sample set. */
   props: boolean
+  /** Real 3D buildings from 6-NW-12D 3D Tiles (textured meshes). */
+  realBuildings: boolean
+  /** Water bodies from 6-NW-12D WATERBODY glTF. */
+  waterbody: boolean
+  /** Infrastructure structures from 6-NW-12D INFRASTRUCTURE glTF. */
+  infrastructure: boolean
 }
 
 /**

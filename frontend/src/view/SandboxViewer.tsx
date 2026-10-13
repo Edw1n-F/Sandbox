@@ -37,6 +37,8 @@ import {
   type MassingOpResult,
 } from './cityModel'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
+import { add3DTileset, type TilesetHandle } from './tilesetLayer'
+import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions } from './interventionLayer'
 import { demElevationRange } from './demProvider'
 import {
@@ -60,6 +62,8 @@ import { applyViewMode, boundaryColour } from './viewModes'
 /** The live city-model handle, so the panel can edit geometry without prop drilling. */
 let cityModelHandle: CityModelHandle | null = null
 let propsHandle: OnlinePropHandle | null = null
+let tilesetHandle: TilesetHandle | null = null
+let terrainTilesetHandle: TilesetHandle | null = null
 
 /** Massing ops from the active plan, held until the city model exists. */
 const pendingMassingOps = { current: [] as MassingOp[] }
@@ -231,6 +235,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showCityModel = useSceneStore((s) => s.layers.cityModel ?? true)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
+  const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
   const layers = useSceneStore((s) => s.layers)
   const viewMode = useSceneStore((s) => s.viewMode)
 
@@ -716,6 +721,64 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     for (const e of cityModelHandle.entities.values()) e.show = showCityModel
     viewerRef.current.scene.requestRender()
   }, [showCityModel])
+
+  // ---- 3D Tiles real buildings (6-NW-12D textured meshes) ----------------
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.cityModel3DUrl ?? terrainMeta?.cityModel3dUrl
+    if (!isLive(viewer) || !url) {
+      tilesetHandle = null
+      return
+    }
+
+    let cancelled = false
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 16 }).then((handle) => {
+      if (cancelled || !handle) return
+      tilesetHandle = handle
+      handle.tileset.show = showRealBuildings
+      viewer.scene.requestRender()
+    })
+
+    return () => {
+      cancelled = true
+      tilesetHandle?.dispose()
+      tilesetHandle = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terrainMeta?.cityModel3DUrl, terrainMeta?.cityModel3dUrl])
+
+  useEffect(() => {
+    if (!tilesetHandle) return
+    tilesetHandle.tileset.show = showRealBuildings
+    viewerRef.current?.scene.requestRender()
+  }, [showRealBuildings])
+
+  // ---- 3D Tiles terrain visual mesh (6-NW-12D terrain(TB)) ----------------
+  // Loaded as a Primitive alongside the globe TerrainProvider.  The globe
+  // provider stays as the clamping / elevation-sampling source; terrain(TB) is
+  // the visual surface only.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.terrain3DUrl
+    if (!isLive(viewer) || !url) {
+      terrainTilesetHandle = null
+      return
+    }
+
+    let cancelled = false
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 16 }).then((handle) => {
+      if (cancelled || !handle) return
+      terrainTilesetHandle = handle
+      viewer.scene.requestRender()
+    })
+
+    return () => {
+      cancelled = true
+      terrainTilesetHandle?.dispose()
+      terrainTilesetHandle = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terrainMeta?.terrain3DUrl])
 
   // ---- intervention features ---------------------------------------------
   //

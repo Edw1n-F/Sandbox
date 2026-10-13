@@ -264,6 +264,9 @@ class SceneRead(SceneBase):
     # viewer draw" -- and the viewer should not need a fourth request to boot.
     city_model_url: str | None = None
     city_model_meta: dict[str, Any] | None = None
+    # Real 3D Tiles tileset (textured meshes), distinct from the editable GeoJSON
+    # massing above.
+    city_model_3d_url: str | None = None
 
     @model_validator(mode="after")
     def _fill_camera_from_center(self) -> "SceneRead":
@@ -296,6 +299,13 @@ class TerrainRead(RowModel):
     # viewer draw" -- and the viewer should not need a fourth request to boot.
     city_model_url: str | None = None
     city_model_meta: dict[str, Any] | None = None
+    # Real 3D Tiles tileset (textured meshes from 6-NW-12D), distinct from the
+    # editable GeoJSON massing above.
+    city_model_3d_url: str | None = None
+    # Visual terrain mesh from 6-NW-12D terrain(TB) 3D Tiles.
+    terrain_3d_url: str | None = None
+    waterbody_url: str | None = None
+    infrastructure_url: str | None = None
 
 
 PlanType = Literal[

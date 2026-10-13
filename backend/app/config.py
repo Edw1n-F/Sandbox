@@ -24,6 +24,7 @@ class Settings(BaseSettings):
         env_file=str(BACKEND_DIR / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        protected_namespaces=("settings_",),
     )
 
     app_title: str = "SDG T1 API"
@@ -33,6 +34,9 @@ class Settings(BaseSettings):
 
     # Root of the file store.  Holds scenes/, plans/, interventions/ and rasters/.
     data_dir: Path = BACKEND_DIR / "data"
+
+    # Root of the 3D Tiles model store.  Holds city_model/ and terrain(TB)/.
+    model_dir: Path = BACKEND_DIR / "model"
 
     # Prefix the frontend uses to resolve terrain_url / imagery_url / overlay
     # URLs.  Empty string means "same origin as the API" -- which is what the
@@ -77,6 +81,8 @@ class Settings(BaseSettings):
     cors_origins: list[str] = [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
 
     @field_validator("data_dir", mode="after")
@@ -89,6 +95,12 @@ class Settings(BaseSettings):
         sibling directory.  Anchoring here means the store, the ``/static``
         mount and the seed script all agree no matter where the process starts.
         """
+        return v if v.is_absolute() else (BACKEND_DIR / v).resolve()
+
+    @field_validator("model_dir", mode="after")
+    @classmethod
+    def _anchor_model_dir(cls, v: Path) -> Path:
+        """Resolve a relative MODEL_DIR against ``backend/``, never against cwd."""
         return v if v.is_absolute() else (BACKEND_DIR / v).resolve()
 
     @property
@@ -121,6 +133,12 @@ class Settings(BaseSettings):
         rel = relative.lstrip("/")
         base = self.static_base_url.rstrip("/")
         return f"{base}/{rel}"
+
+    def public_model_url(self, relative: str) -> str:
+        """Turn a model-relative path such as ``city_model/tileset.json`` into a URL."""
+        rel = relative.lstrip("/")
+        base = self.static_base_url.rstrip("/")
+        return f"{base}/model/{rel}"
 
 
 @lru_cache
