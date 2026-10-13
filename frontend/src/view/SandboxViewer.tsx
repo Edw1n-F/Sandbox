@@ -346,14 +346,21 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       // guaranteed.
     })
 
-    const base = createBaseImageryLayer(terrainMeta)
-    viewer.imageryLayers.add(base)
+    // When the 3D terrain tiles are present they are the map floor. Drawing the
+    // flat OSM imagery on the globe underneath them z-fights with the mesh, so
+    // the base layer is skipped and the globe is left as a dark, untextured
+    // surface (it still carries the wet-grid / heat-map overlays and the
+    // elevation used for grounding).
+    const hasTerrainTiles = Boolean(terrainMeta.terrain3DUrl)
+    const base = hasTerrainTiles ? null : createBaseImageryLayer(terrainMeta)
+    if (base) viewer.imageryLayers.add(base)
     baseRef.current = base
+    viewer.scene.globe.baseColor = hasTerrainTiles ? Color.fromCssColorString('#0b0f14') : Color.BLUE
 
     return () => {
       cancelled = true
       // Guarded: under StrictMode this cleanup can run after destroy().
-      if (isLive(viewer) && viewer.imageryLayers.contains(base)) {
+      if (base && isLive(viewer) && viewer.imageryLayers.contains(base)) {
         viewer.imageryLayers.remove(base, false)
       }
       baseRef.current = null
@@ -732,7 +739,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
 
     let cancelled = false
-    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 16 }).then((handle) => {
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24 }).then((handle) => {
       if (cancelled || !handle) return
       tilesetHandle = handle
       handle.tileset.show = showRealBuildings
@@ -766,7 +773,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
 
     let cancelled = false
-    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 16 }).then((handle) => {
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24 }).then((handle) => {
       if (cancelled || !handle) return
       terrainTilesetHandle = handle
       viewer.scene.requestRender()

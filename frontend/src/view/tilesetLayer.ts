@@ -43,6 +43,18 @@ export async function add3DTileset(
   try {
     const tileset = await Cesium3DTileset.fromUrl(url, {
       maximumScreenSpaceError,
+      // Lower the detail while the camera is moving or looking at distant tiles,
+      // so the first view and orbiting do not queue every high-detail tile.
+      dynamicScreenSpaceError: true,
+      dynamicScreenSpaceErrorDensity: 0.0004,
+      dynamicScreenSpaceErrorFactor: 16,
+      // Give the 300 MB textured city model room before tiles get evicted and
+      // re-fetched, which reads as flicker when orbiting.
+      cacheBytes: 768 * 1024 * 1024,
+      maximumCacheOverflowBytes: 512 * 1024 * 1024,
+      // Do not fetch tiles that are only just outside the view.
+      cullRequestsWhileMoving: true,
+      cullRequestsWhileMovingMultiplier: 60,
     })
     if (viewer.isDestroyed()) {
       tileset.destroy()
