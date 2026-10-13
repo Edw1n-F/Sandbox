@@ -131,12 +131,16 @@ class Settings(BaseSettings):
     def public_url(self, relative: str) -> str:
         """Turn a store-relative path such as ``rasters/x.png`` into a URL."""
         rel = relative.lstrip("/")
+        # Windows stores ``rasters\wetgrid_hsk.png``; a backslash is not a URL
+        # separator, so the browser cannot resolve it. Normalise before joining.
+        rel = rel.replace("\\", "/")
         base = self.static_base_url.rstrip("/")
         return f"{base}/{rel}"
 
     def public_model_url(self, relative: str) -> str:
         """Turn a model-relative path such as ``city_model/tileset.json`` into a URL."""
         rel = relative.lstrip("/")
+        rel = rel.replace("\\", "/")
         base = self.static_base_url.rstrip("/")
         return f"{base}/model/{rel}"
 

@@ -337,7 +337,7 @@ class RunRequest(WireModel):
     entry, so a single-project client and a cumulative one share one code path.
     """
 
-    rainfall_mm: float = Field(default=450.0, ge=0.0, le=800.0)
+    rainfall_mm: float = Field(default=50.0, ge=0.0, le=800.0)
     temperature_c: float = Field(default=30.0, ge=-10.0, le=50.0)
     plan_id: str | None = None
     plan_ids: list[str] = Field(default_factory=list)

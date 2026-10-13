@@ -42,11 +42,15 @@ function isScene(value: unknown): value is Scene {
 /**
  * Slider defaults, used when the scene carries no `envParams` of its own.
  *
- * 450 mm is the project's rainfall assumption and the number every committed
- * overlay was generated at, so a first run reproduces the artefact the user
- * can see before they move anything.
+ * Rainfall is expressed as *intensity* (mm/hr) plus a *duration* (hours); the
+ * two multiply to the storm-total depth the SCS-CN equation actually consumes.
+ * 50 mm/hr × 1 h = 50 mm total — a routine-to-heavy HK storm, well above the
+ * ~20 mm on-site depression-storage floor so it still produces visible runoff
+ * without reading as an extreme. 450 mm total — a 1-in-50 yr design storm —
+ * remains the value the committed overlay artefacts were baked at.
  */
-export const DEFAULT_RAINFALL_MM = 450
+export const DEFAULT_RAINFALL_MMH = 50
+export const DEFAULT_DURATION_HOURS = 1
 export const DEFAULT_TEMPERATURE_C = 30
 
 export interface SceneState {
@@ -177,8 +181,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
     try {
       const result = await runSimulation(sceneId, {
         rainfallMm: Number(
-          scene?.envParams.precipitation ?? DEFAULT_RAINFALL_MM,
-        ),
+          scene?.envParams.precipitation ?? DEFAULT_RAINFALL_MMH,
+        ) * Number(scene?.envParams.durationHours ?? DEFAULT_DURATION_HOURS),
         temperatureC: Number(
           scene?.envParams.temperature ?? DEFAULT_TEMPERATURE_C,
         ),

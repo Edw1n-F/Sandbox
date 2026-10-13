@@ -56,7 +56,15 @@ from _overlay_common import (  # noqa: E402
 # arithmetic when scoring a candidate intervention; there is now one definition.
 
 # Ramp for the PNG: transparent below this depth, opaque at MAX_VIS_DEPTH_M.
-MIN_VIS_DEPTH_M = 0.005
+#
+# MIN_VIS_DEPTH_M is set to DEPRESSION_STORAGE_M (0.02 m) on purpose: that is the
+# routine on-site ponding every rainstorm produces before water runs off. Painting
+# cells below that floor made the raster read as "the whole site floods" at any
+# moderate rainfall, which is misleading — the model is not a flood prediction and
+# blue is ponding depth, not inundation. Only water in excess of the routine
+# depression storage is shown, so the picture answers "where does water actually
+# accumulate" rather than "everything is wet".
+MIN_VIS_DEPTH_M = 0.02
 MAX_VIS_DEPTH_M = 0.30
 
 

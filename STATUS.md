@@ -11,12 +11,13 @@ Nothing here is a target. The architecture rationale is in
 ### The user flow, today
 
 1. **Open the app.** The Cesium viewer boots on the HSK / San Tin study area with
-   terrain, OSM imagery and the city model already drawn — 2,639 *provisional*
-   massing envelopes standing on the terrain, in an oblique default view. No
-   Cesium Ion token required.
+   terrain, OSM imagery and the real building model already drawn — **396 real
+   building footprints** extracted from Open3Dhk tiles fused with Overture, and
+   the textured 3D Tiles meshes standing on the terrain, in an oblique default
+   view. No Cesium Ion token required.
 2. **Move around.** Left-drag pans, right-drag orbits, wheel/pinch zooms, arrow
    keys nudge, and three buttons reframe (3D / top-down / reset). Two view modes:
-   **survey** (daylight, lit envelopes) and **tactical** (dark, emissive neon,
+   **survey** (daylight, lit meshes) and **tactical** (dark, emissive neon,
    height ramp, 200 m grid, bloom) — same data, and the tactical legend says so.
 3. **Pick projects.** The catalog is multi-select: tick several phases and the run
    merges them, so *cumulative* effects are one run rather than one project at a
@@ -43,8 +44,8 @@ Nothing here is a target. The architecture rationale is in
    `source: "template"`.
 8. **Generate a plan (optional).** A sentence becomes a draft FeatureCollection via
    `ai_plan`, badged "LLM ready" / "no LLM key" / "LLM status unknown", and the NL
-   geometry ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `place`,
-   `reset`) apply scoped by a ring. This path is driven from the plan panel, not
+   geometry ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `reset`)
+   apply scoped by a ring. This path is driven from the plan panel, not
    from the chat. Ops are idempotent — a second application cannot compound.
 
 Empty states are named rather than blank: a scene with no terrain, or a plan with
@@ -55,10 +56,12 @@ no interventions, renders a `SceneNotice` instead of an empty surface.
 **Scene and model**
 
 - `GET /api/scenes/{id}` boots terrain + OSM imagery + overlays, token-free.
-- 2,639 procedural massing envelopes, extruded and terrain-grounded, with a
-  quantised height ramp in tactical view. **This is provisional massing, not
-  surveyed buildings** — the `provisional` chip and the terrain-grounding
-  disclosure stay.
+- **396 real building footprints** (`buildings_hsk.json`, `buildings_meta.json`),
+  extruded and terrain-grounded from Open3Dhk tiles fused with Overture, plus the
+  textured 3D Tiles meshes (`buildings3DUrl`). **This is surveyed geometry, not
+  procedural massing** — the old 2,639-square `citymodel_hsk.json` placeholder is
+  deleted, and the `buildingsMeta.status` says
+  `DERIVED_FROM_OPEN3DHK_AND_OVERTURE`.
 - Per-run output paths (`data/rasters/run/<runId>/…`), so two concurrent planners
   cannot overwrite each other's overlay.
 
@@ -217,45 +220,21 @@ land-cover conversion each implies, the assumed environmental changes, and a
 source / date / confidence per field. (`ProjectCatalog.tsx` already flags this in
 the panel rather than hiding it.)
 
-### 3. The base model is procedural, not real — so it is also direction-blind and cannot be dated
+### 3. The base model is real footprints, not procedural blocks — done
 
-**The issue.** All 2,639 envelopes are the same 30 m × 30 m axis-aligned square
-tiled on a 45 m pitch (`BLOCK_CELLS = 6`, `GAP_CELLS = 3`); only height varies, and
-`height_source` is `ASSUMED_DISTRIBUTION_NOT_SURVEYED`. Two consequences are one
-fix. **Orientation:** `cell_fad` is 180°-periodic, so the NE and SW cost surfaces
-are bit-identical and their corridor paths are the same cells — there is no
-orientation to recover, only to introduce, and real footprints supply it for free.
-**Age:** a real build-year/phase join (old CSDI `BDBIAR` records) is blocked for the
-same reason — joining age records to *invented* blocks is a spatial coincidence,
-but against real footprints it becomes a genuine overlap test. Frontal area density
-additionally *cannot* be made direction-sensitive for any orientation; that is
-exact geometry, not a gap to close later.
+**The issue, resolved.** The 2,639 square placeholder envelopes are deleted. In
+their place, **396 real building footprints** (`buildings_hsk.json`) are extracted
+from Open3Dhk tiles fused with Overture, with heights from the 90th percentile of
+tile surface minus tile terrain, and the textured 3D Tiles meshes render at
+`buildings3DUrl`. `buildings_meta.json` carries the provenance
+(`DERIVED_FROM_OPEN3DHK_AND_OVERTURE`, footprint source, height rule, generated
+date). The heat/shade/SVF/wind analyses all read `buildings_hsk.json`, so every
+number is computed from measured geometry, not invented blocks.
 
-**The replacement is measured, not hypothetical.** Overture Maps' `buildings` theme
-is reachable from this host — OSM is not, see the `make_citymodel.py` docstring —
-and holds **5,743 footprints** inside the study-area bbox. Measured on release
-`2026-09-23.1`: median footprint **69 m²** (mean 184, max 19,378) against a uniform
-900 m² today; **20.6 % are not simple quads** (6.1 % six-vertex, 5.2 % seven-to-nine,
-8.1 % ten or more, max 245 vertices); and only **57.7 % sit within 5° of
-axis-aligned**, so ~42 % carry a genuine orientation. Honest limit: heights are
-*not* in the data — 18 of 5,743 carry `height` and 1,092 carry `num_floors` — so
-height stays modelled, but conditioned on real area and storeys.
-
-**What to do.** The work has two halves: the data, then the geometry built on it.
-
-- **The data half:** ingest the real footprints (Overture, and/or Open3Dhk's
-  LandsD 3D Digital Map that Chenxu is already cleaning), reproject to lon/lat, and
-  publish them as a **GeoJSON contract** with a storeys-conditioned height. Also
-  the real terrain (gap 12) ships on the same contract.
-- **The geometry half:** replace the procedural massing generator so it consumes
-  real footprints and extrudes actual building shapes — outline, orientation, a
-  height conditioned on storeys — instead of tiling squares.
-
-**The trap, which is why the contract is not optional.** `make_heatmap.py:82` reads
-`citymodel_hsk.json` *directly*. A photoreal mesh with no matching lon/lat footprint
-GeoJSON leaves every heat, shade, SVF and wind number computed from the old fake
-blocks. The contract must carry footprints as lon/lat GeoJSON, **not only a mesh**.
-Not yet ingested.
+**Remaining (stage 2/3, not blocking stage 1).** Height is still a model (p90
+surface-minus-terrain), not a surveyed storey count — an honest limit, stated in
+`buildings_meta.heightSource`. A build-year/phase join (old CSDI `BDBIAR`) is now
+*possible* against real footprints but not yet done.
 
 ### 4. An intervention is an axis-aligned slab, not a shaped object
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -409,10 +410,21 @@ def complete_text(*, system: str, prompt: str, max_tokens: int = 400) -> str:
         body = {"model": model, "max_tokens": max_tokens,
                 "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": prompt}]}
-        try:
-            raw = _post(_openai_endpoint(), headers, body)
-        except LLMError as exc:
-            last = exc
+        # Free-tier 429s are usually a shared-pool hiccup of a few seconds, not a
+        # hard outage: retry the SAME model briefly before advancing. Advancing
+        # to another model does not help when the whole free family is throttled
+        # at once (both Gemma ids 429 together), so backoff is the real lever.
+        for attempt in range(3):
+            try:
+                raw = _post(_openai_endpoint(), headers, body)
+                break
+            except LLMError as exc:
+                last = exc
+                if not exc.retryable:
+                    raise
+                if attempt < 2:
+                    time.sleep(1.5 * (attempt + 1))
+        else:
             continue
         for choice in raw.get("choices", []) or []:
             text = str(((choice.get("message") or {}).get("content")) or "").strip()

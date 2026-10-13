@@ -40,7 +40,7 @@ function LayerToggles() {
   const hasWet = Boolean(terrain?.wetGridUrl)
   const hasHeat = Boolean(terrain?.heatmapUrl)
   return (
-    <Stack direction="row" spacing={0.75}>
+    <Stack spacing={0.75} sx={{ alignItems: 'stretch' }}>
       <Button
         size="small"
         variant={layers.wetGrid ? 'contained' : 'outlined'}
@@ -101,23 +101,32 @@ export default function App() {
 
         {chatOpen && <ChatPanel />}
 
-        {/* Right column: scenario inputs, project catalog (scrolls), stats
-            (bottom-anchored). One shared column so the three never overlap
-            each other — the previous layout had the expanded catalog running
-            under a separately-positioned stats panel. pointer-events:none on
-            the wrapper lets empty space fall through to the canvas; each
-            panel opts back in via HudPanel's pointerEvents:'auto'. */}
+        {/* Right column: scenario inputs, project catalog, stats. The whole
+            column scrolls as ONE unit (not the catalog alone) so the catalog's
+            project toggles are never clipped by a sibling panel or a fixed
+            bottom anchor. pointer-events:auto on the scroll surface lets the
+            column scroll; HudPanel opts each panel back in, and the thin
+            scrollbar + panel padding keep canvas drags reachable outside it. */}
         <Box sx={{
           position: 'absolute', top: 12, right: 12, bottom: 16, zIndex: 1200,
           display: 'flex', flexDirection: 'column', gap: 1.25, width: 300,
           pointerEvents: 'none',
         }}>
-          <LayerToggles />
-          <SlidersPanel />
-          <Box sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', pointerEvents: 'auto' }}>
-            <ProjectCatalog />
+          {/* Wet/Heat toggles sit to the LEFT of the scenario inputs, aligned
+              to the top of that panel, not stacked on top of it. */}
+          <Box sx={{
+            position: 'absolute', top: 0, right: '100%', mr: 0.75,
+            display: 'flex', alignItems: 'flex-start', pointerEvents: 'auto',
+          }}>
+            <LayerToggles />
           </Box>
-          <Box sx={{ mt: 'auto', pointerEvents: 'auto' }}>
+          <Box sx={{
+            display: 'flex', flexDirection: 'column', gap: 1.25,
+            overflowY: 'auto', minHeight: 0, pointerEvents: 'auto',
+            pr: 0.5, mr: -0.5,
+          }}>
+            <SlidersPanel />
+            <ProjectCatalog />
             <StatsPanel />
           </Box>
         </Box>

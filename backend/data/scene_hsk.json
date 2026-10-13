@@ -47,7 +47,7 @@
   },
   "envParams": {
     "temperature": 28.5,
-    "precipitation": 450
+    "precipitation": 50
   },
   "provenance": {
     "status": "PROVISIONAL_OPERATIONAL_EXTENT",

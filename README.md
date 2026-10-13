@@ -52,9 +52,9 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **Chat** — ask why, get an answer card whose numbers are checked against the run | **Live.** OpenRouter `:free` model; no key needed to fall back | verified against a real key: 2/2 cards `source: model`, one fully grounded, one flagged a derived 95 % |
 | **Streamed steps** — the reader watches the three steps happen | Working | `run_started` → 3 × `step_started`/`step_finished` → `delta` → `grounding` → `answer` → `done` |
 | **Number grounding** — every figure in a card traced back to the run | Working | invented "42,000 m³" and "99.9" are caught and named |
-| **AI 3D placement** — new massing on real land cover | Working, screening-grade | 3 blocks × 60 m rendered, pixel-verified, selectable |
-| **AI 3D alteration, scoped** — height / density / orientation, by region or site | Working | 1,232 of 2,639 buildings for "western blocks"; west/east visible in the render |
-| **3D city model** — 2,639 massing envelopes, extruded and **directly editable** | Working, provisional massing | seeded; click-to-select + per-building height, browser-verified |
+| **AI 3D placement** — new massing on real land cover | Removed (stage 1) | the `place` op and procedural generator are deleted |
+| **AI 3D alteration, scoped** — height / density / orientation, by region or site | Removed (stage 1) | superseded by real Open3Dhk buildings |
+| **3D city model** — real Open3Dhk buildings + terrain, rendered as 3D Tiles | Working | 396 real footprints (`buildings_hsk.json`), heights from tile surface − terrain |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 10.3% of DEM cells are depressions |
 | **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |
@@ -579,99 +579,25 @@ footprint, and it cannot move a block.
 
 ## 3D city model, and editing it
 
-The sandbox has a 2,639-building massing model that you can change directly, and
-that the language model can change for you.
+The sandbox renders the **real Open3Dhk buildings and terrain** as 3D Tiles
+(`buildings3DUrl` → `city_model/tileset.json`, terrain via `terrain(TB)/tileset.json`).
+There is no procedural massing: the 2,639-square `citymodel_hsk.json` placeholder
+and its generator `make_citymodel.py` were removed in stage 1.
 
-**Where the geometry comes from — and what was tried first.** OSM building
-footprints were the first choice and are **unreachable from this host**. Overpass
-returned `504` from the main endpoint and `000` from four mirrors, with an empty
-result from the one instance that answered; Microsoft's GlobalML Building
-Footprints now returns `409 Public access is not permitted on this storage
-account`; a Geofabrik Hong Kong extract is ~90 MB and its PBF parser will not
-build here either. All of that is recorded in `citymodel_meta.json` so nobody
-re-derives it.
+**Where the geometry comes from.** Footprints come from **Overture Maps** (369 kept)
+fused with **27 tile-derived blobs** — cells where the Open3Dhk tile surface stands
+≥7 m above the tile terrain but Overture recorded nothing (mostly trees/sheds are
+filtered out at <40 m²). Building height is the **90th percentile of tile surface
+minus tile terrain** inside each footprint, so it is measured from the real tiles,
+not an assumed distribution. The provenance is recorded in `buildings_meta.json`
+(`status: DERIVED_FROM_OPEN3DHK_AND_OVERTURE`). The footprint GeoJSON
+(`buildings_hsk.json`) is the *analysis* contract that heat, shade, SVF and wind
+read; the `.b3dm` meshes are the *render*.
 
-So the massing is **procedural, derived from real land cover**: the ESA
-WorldCover 10 m `paved` class says where the ground *is* built up, and blocks go
-only there. The land-use input is real; the footprints are not surveyed, heights
-are an assumed distribution (11–131 m, mean 35 m, four classes), and every
-feature records `height_source: ASSUMED_DISTRIBUTION_NOT_SURVEYED`. The panel
-carries a **provisional** chip for exactly this reason. Overture Maps is a
-measured replacement and the next thing to do here — see
-[`STATUS.md`](STATUS.md) gap 3.
-
-**Why geometry and not a glTF massing model.** A mesh would be one draw call but
-would be *opaque* — you cannot change a building's height inside it. Cesium
-entities are per-feature property bags, so a height edit is a property
-assignment: no rebuild, no re-upload, no regeneration. Changing the model is
-the point. ([Decision 12](docs/ARCHITECTURE.md#decision-12--geometry-not-a-mesh-for-the-city-model).)
-
-**Editing by hand, three ways:**
-
-| Gesture | What it does |
-|---|---|
-| **+25% / −20% height** | Scales every building. The scenario question — "what if the district were taller?" |
-| **Click a building** | Selects it (highlighted), then type a height in metres |
-| **Reset** | Back to the generated heights, orientations and block count |
-
-Verified in a browser: mean height 35.3 m → 40.2 m for "western blocks 30%
-taller", which reaches 1,232 of 2,639 buildings — and in the render the western
-half is visibly taller while the eastern half is untouched. The generator is
-seeded, so the same command twice produces an identical file.
-
-**Editing by language, five ways.** Every one of these is grounded — the model
-names a region or a catalogue site, never a coordinate:
-
-| Instruction | Operation | What it does |
-|---|---|---|
-| "make the district 25% taller" | `scale_all` | Every building's height × 1.25 |
-| "set the buildings in the west to 60 m" | `set_site` | Absolute height, one region |
-| "make the eastern blocks 30 m taller" | `set_site` | A **change** in metres, not an absolute — reading it as absolute would silently set every building to 30 m |
-| "rotate the northern blocks 20 degrees" | `rotate` | Turns the footprints about their own centroids, in metres |
-| "add three 60 m residential towers in the east" | `place` | **Adds** three real footprints |
-| "reset the building heights" | `reset` | Back to generated |
-
-### Scope: the part that was missing, and why it mattered
-
-`place` is placement. The other four are alteration — and alteration is
-meaningless without *where*.
-
-The first version of this had no way to say "the western blocks". The region word
-was parsed, then discarded, and `scale_all` came back for every building in the
-district. The screen filled with a taller, plausible, entirely wrong skyline, and
-the panel cheerfully reported success. It is the worst failure mode in this
-project: not an error, not a wrong number, but a 3D result that answers a
-question nobody asked.
-
-So every operation now carries a **scope**, resolved in the backend from three
-sources and nowhere else: a **region** (one of ten named fractions of the locked
-study-area bbox — plain arithmetic over a constant the project already owns, so
-there is nothing for a model to hallucinate); a **site id** from the grounded
-catalogue (`water_reservoir#0`, `permeable_paving#2`), whose polygon the analysis
-already derived; or nothing, meaning the whole study area.
-
-A region we do not recognise produces **no edit at all**, never a fallback to
-"everything". A test asserts that directly, because the fallback is the bug.
-([Decision 13](docs/ARCHITECTURE.md#decision-13--a-scope-is-resolved-in-code-or-the-operation-does-not-happen).)
-
-### Where a placed block comes from
-
-The model chooses a count, a height and a region. It never chooses a coordinate.
-The footprints are generated by `placement_footprints()` from the same ESA
-WorldCover `paved` mask and the same block pitch `make_citymodel.py` uses — and
-cells already occupied by an existing envelope are excluded, so a new tower lands
-on unbuilt paved land rather than inside an existing block. If a scope has no
-unbuilt land left, the filter is dropped and `params.basis` says so.
-
-The result is a real, selectable, editable entity in the same model as the
-generated ones: click it, type a height, and it changes like any other. The panel
-reports how many blocks a plan added, and how many buildings an alteration
-reached — because a 3D view looks identical whether an operation hit 400
-buildings or all 2,639.
-
-> **Placed blocks are not a design.** They sit on real land cover, at a height
-> the model asked for, in a region the model named. That is a scenario, not a
-> scheme.
+**Editing.** Building geometry is not hand-editable in this stage. Interventions
+become land-cover and storage changes (stage 3), not new massing. The old
+`scale_all` / `set_site` / `rotate` / `place` / `reset` massing vocabulary was
+removed with the procedural model.
 
 ## Online 3D assets
 
@@ -786,7 +712,7 @@ implementations of one formula in two languages. History in
 **A clean `tsc` did not mean the frontend worked.** Four runtime bugs passed the
 type checker, including a `tsconfig` path alias that TypeScript resolved and Vite
 did not. Frontend changes here are verified by driving a real headless-Chromium
-render and asserting what the *viewer* reports — "1,232 of 2,639 buildings" — not
+render and asserting what the *viewer* reports, not
 by the compiler and not by what the backend was asked for.
 
 ---
@@ -864,8 +790,7 @@ T1/
     │   │   ├── cameraRig.ts      bbox framing, orbit, zoom, gesture bindings
     │   │   ├── terrainLoader.ts  imagery + terrain binding, with honest fallback
     │   │   ├── demProvider.ts    terrain-RGB → CustomHeightmapTerrainProvider
-    │   │   ├── cityModel.ts      the editable 3D massing model; scoped AI ops
-    │   │   ├── techMaterial.ts   the emissive building shader
+    │   │   ├── tilesetLayer.ts   the real Open3Dhk 3D Tiles layer
     │   │   ├── viewModes.ts      survey / tactical scene dressing
     │   │   └── interventionLayer.ts  discrete features (extrusion)
     │   ├── components/           ChatPanel, HudPanel, StatsPanel, SlidersPanel,

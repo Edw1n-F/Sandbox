@@ -146,11 +146,12 @@ describe('run', () => {
 
   it('sends the slider values and the selected plans, not the scene defaults', async () => {
     useSceneStore.setState({ sceneId: 's1', scene })
-    useSceneStore.getState().setEnvParams({ precipitation: 600, temperature: 38 })
+    useSceneStore.getState().setEnvParams({ precipitation: 30, durationHours: 4, temperature: 38 })
     runSimulation.mockResolvedValue(result)
     await useSceneStore.getState().run(['plan-1'])
     expect(runSimulation).toHaveBeenCalledWith('s1', {
-      rainfallMm: 600,
+      // intensity 30 mm/hr × 4 h = 120 mm storm-total, the value SCS-CN needs.
+      rainfallMm: 120,
       temperatureC: 38,
       planId: 'plan-1',
       planIds: ['plan-1'],
@@ -164,7 +165,7 @@ describe('run', () => {
     runSimulation.mockResolvedValue(result)
     await useSceneStore.getState().run(['plan-1', 'plan-2', 'plan-3'])
     expect(runSimulation).toHaveBeenCalledWith('s1', {
-      rainfallMm: 450,
+      rainfallMm: 50,
       temperatureC: 30,
       planId: 'plan-1',
       planIds: ['plan-1', 'plan-2', 'plan-3'],
@@ -176,7 +177,7 @@ describe('run', () => {
     runSimulation.mockResolvedValue(result)
     await useSceneStore.getState().run(null)
     expect(runSimulation).toHaveBeenCalledWith('s1', {
-      rainfallMm: 450,
+      rainfallMm: 50,
       temperatureC: 30,
       planId: null,
       planIds: [],

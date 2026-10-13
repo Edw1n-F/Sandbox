@@ -46,26 +46,25 @@ and `src/view/` must not be imported from state.
 
 | File | Owns | Depends on |
 |---|---|---|
-| `SandboxViewer.tsx` | the Cesium `Viewer` and every wiring effect; publishes `cameraControl`, `cityModelStats`, the overlay/prop status hooks | almost everything below |
+| `SandboxViewer.tsx` | the Cesium `Viewer` and every wiring effect; publishes `cameraControl`, the overlay/prop status hooks | almost everything below |
 | `cameraRig.ts` | bbox framing, orbit, zoom, and the gesture bindings (left-drag moves/spins the slab, right-drag and middle-drag tilt, pinch and ctrl+wheel zoom) | cesium |
-| `cityModel.ts` | 2,639 massing envelopes as entities; height/rotation ops. **No** click-to-select — the pick handler was removed as a lag source | `demProvider`, `techMaterial` |
-| `techMaterial.ts` | the emissive building shader and the `MaterialProperty` protocol | cesium |
 | `viewModes.ts` | survey/tactical scene dressing; restores everything it changes | cesium |
 | `demProvider.ts` | terrain-RGB decode, **the ground sampler**, terrain provider | canvas |
 | `terrainLoader.ts` | imagery providers, bbox -> `Rectangle` | cesium |
 | `interventionLayer.ts` | intervention GeoJSON styling | cesium |
 | `onlineProps.ts` | the online 3D assets layer | cesium |
+| `tilesetLayer.ts` | the real Open3Dhk 3D Tiles layer (buildings + terrain) | cesium |
 
-`geometry.test.ts` and `cityModel.test.ts` sit alongside the modules they cover.
+`geometry.test.ts` sits alongside the module it covers. The procedural
+`cityModel.ts` / `techMaterial.ts` (2,639 massing envelopes) were removed in stage 1 —
+buildings are now the real Open3Dhk tiles via `buildings3DUrl`.
 
 ### Why `sampleAt`, `pointInRing` and friends are exported
 
-`demProvider.sampleAt`, `client.toApiError`, `cityModel.pointInRing`, `ringCentroid`,
+`demProvider.sampleAt`, `client.toApiError`, `ringCentroid`,
 `rotateRing` and `translateRing` are exported **for tests**. They are pure, and they are exactly where
 silent damage happens: `sampleAt` once indexed a 256 px grid against a raster that is
-really 28 x 37 and reported "no terrain" for the whole district without throwing, and
-`pointInRing` decides which buildings a scoped plan touches. Neither was reachable from
-a test while module-private.
+really 28 x 37 and reported "no terrain" for the whole district without throwing.
 
 ## `src/components/` — UI only
 
@@ -81,15 +80,14 @@ a test while module-private.
 | `AppErrorBoundary.tsx` | last-resort boundary: a render throw becomes a sentence, not a white page |
 
 `theme.ts` (at `src/`, not in `components/`) is the single MUI dark theme. Its
-signal colours are **reused** from `view/techMaterial.ts`'s `TECH_STATES`, so the 2D
-chrome and the 3D tactical renderer cannot drift apart. It is imported by
+signal colours drive the 2D chrome. It is imported by
 `main.tsx` and by no component.
 
 `index.css` holds the `hud-label` / `hud-mono` / `hud-edge-text` / `hud-dot`
 utilities, the thin scrollbars and the pulse keyframes.
 
-`SandboxViewer` publishes two action registries — `cameraControl` and
-`cityModelStats` — so a component can trigger a viewer action without the Cesium
+`SandboxViewer` publishes the `cameraControl` action registry
+so a component can trigger a viewer action without the Cesium
 instance being drilled into the tree. `ViewButtons` is the current consumer.
 
 ### Removed 13 Oct 2026 — orphaned, imported by nothing
