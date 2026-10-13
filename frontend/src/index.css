@@ -98,3 +98,64 @@ body,
   animation: hud-pulse 2.4s ease-in-out infinite;
   flex: none;
 }
+
+/* In-progress affordance. A moving highlight reads as "working" where a static
+   label reads as "stuck", which matters for the ~11 s run and the streamed answer.
+   Text only: the gradient is clipped to the glyphs. */
+@keyframes hud-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.hud-shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(220, 232, 226, 0.45) 0%,
+    rgba(220, 232, 226, 0.45) 35%,
+    #5cff9d 50%,
+    rgba(220, 232, 226, 0.45) 65%,
+    rgba(220, 232, 226, 0.45) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  animation: hud-shimmer 2.2s linear infinite;
+}
+
+/* Placeholder block for content that has a shape but not yet a value. */
+.hud-skeleton {
+  border-radius: 4px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 0%,
+    rgba(255, 255, 255, 0.10) 50%,
+    rgba(255, 255, 255, 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: hud-shimmer 1.6s linear infinite;
+}
+
+/* Reduced motion: stop the decorative motion, keep the information. The shimmer
+   becomes a steady, fully visible label; the pulsing dot stops. Nothing here
+   removes a spinner or a status, because those carry meaning, not decoration. */
+@media (prefers-reduced-motion: reduce) {
+  .hud-shimmer {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    color: #5cff9d;
+  }
+  .hud-skeleton {
+    animation: none;
+    background: rgba(255, 255, 255, 0.07);
+  }
+  .hud-dot {
+    animation: none;
+  }
+}

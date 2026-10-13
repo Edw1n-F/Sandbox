@@ -36,6 +36,7 @@ import {
   type StreamEvent,
 } from '@/api/chatApi'
 import { createAiPlan } from '@/api/planApi'
+import { buildReceipt, type Receipt } from '@/api/receipt'
 import { useSceneStore } from '@/state/sceneStore'
 
 interface Step {
@@ -51,6 +52,8 @@ interface Message {
   role: 'ai' | 'user'
   text?: string
   card?: AnswerCard
+  /** What the card rests on, snapshotted when the question was asked. */
+  receipt?: Receipt | null
   chips?: string[]
 }
 
@@ -84,6 +87,38 @@ function partialField(raw: string, field: string): string | null {
   } catch {
     return m[1]
   }
+}
+
+/**
+ * "What is this based on?" -- collapsed by default, because most readers want the
+ * answer first and the ones who want the receipt really want it. A native
+ * <details> gives keyboard and screen-reader behaviour for free.
+ */
+function ReceiptView({ receipt }: { receipt: Receipt }) {
+  return (
+    <Box
+      component="details"
+      sx={{ mt: 1, '& summary': { cursor: 'pointer', listStyle: 'none' }, '& summary::-webkit-details-marker': { display: 'none' } }}
+    >
+      <Typography
+        component="summary"
+        className="hud-mono"
+        sx={{ fontSize: 9, color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
+      >
+        ▸ BASED ON · {receipt.summary.toUpperCase()}
+      </Typography>
+      <Box sx={{ mt: 0.5, pl: 1.25, borderLeft: '1px solid', borderColor: 'divider' }}>
+        {receipt.lines.map((l) => (
+          <Stack key={l.label} direction="row" spacing={1} alignItems="baseline">
+            <Typography sx={{ fontSize: 10, color: 'text.secondary', minWidth: 96 }}>{l.label}</Typography>
+            <Typography className="hud-mono" sx={{ fontSize: 10, wordBreak: 'break-word' }}>
+              {l.value}
+            </Typography>
+          </Stack>
+        ))}
+      </Box>
+    </Box>
+  )
 }
 
 /** One answer card, rendered by field. */
@@ -201,10 +236,10 @@ function StepperView({ steps }: { steps: Step[] }) {
             {s.state === 'done' ? '✓' : '·'}
           </Box>
           <Typography
+            className={s.state === 'running' ? 'hud-shimmer' : undefined}
             sx={{
               fontSize: 11,
               color: s.state === 'done' ? 'text.primary' : 'text.secondary',
-              animation: s.state === 'running' ? 'hud-pulse 1.4s ease-in-out infinite' : undefined,
             }}
           >
             {s.title}
@@ -236,6 +271,9 @@ export default function ChatPanel() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<Step[]>([])
+  // What a screen reader is told. The thread itself is not a live region: it would
+  // re-announce every card on each render. This one line carries only what is new.
+  const [announcement, setAnnouncement] = useState('')
   const [draft, setDraft] = useState<{ title: string | null; sentence: string | null } | null>(null)
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
   const lastRunId = useRef<string | null>(null)
@@ -284,10 +322,15 @@ export default function ChatPanel() {
     setSteps([])
     setDraft(null)
 
+    // Snapshot now: if the planner runs again while this streams, the card must
+    // still name the run it was actually asked about.
+    const receipt = buildReceipt(runResult)
+
     let raw = ''
     const onEvent = (event: StreamEvent) => {
       switch (event.event) {
         case 'step_started':
+          setAnnouncement(`${event.title}…`)
           setSteps((prev) => [
             ...prev.filter((s) => s.index !== event.index),
             { index: event.index, title: event.title, desc: event.desc, state: 'running' },
@@ -308,12 +351,21 @@ export default function ChatPanel() {
           })
           break
         case 'answer':
+          setAnnouncement(`${event.answer.title}. ${event.answer.sentence}`)
           setMessages((prev) => [
             ...prev,
-            { id: mkId(), role: 'ai', card: event.answer, chips: event.answer.followups },
+            {
+              id: mkId(),
+              role: 'ai',
+              card: event.answer,
+              // A "general" answer did not use the run's data, so it carries no receipt.
+              receipt: event.answer.kind === 'run' ? receipt : null,
+              chips: event.answer.followups,
+            },
           ])
           break
         case 'error':
+          setAnnouncement(`Note: ${event.message}`)
           setMessages((prev) => [
             ...prev,
             { id: mkId(), role: 'ai', text: `Note: ${event.message}` },
@@ -427,6 +479,24 @@ export default function ChatPanel() {
         )}
       </Stack>
 
+      {/* Announces progress and the finished answer to assistive tech. Visually
+          hidden rather than display:none, which would remove it from the tree. */}
+      <Box
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        sx={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          overflow: 'hidden',
+          clip: 'rect(0 0 0 0)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {announcement}
+      </Box>
+
       {/* Thread */}
       <Box ref={scrollRef} sx={{ flex: 1, overflowY: 'auto', px: 2, py: 2 }}>
         <Stack spacing={1.75}>
@@ -445,7 +515,10 @@ export default function ChatPanel() {
               }}
             >
               {m.card ? (
-                <CardView card={m.card} />
+                <>
+                  <CardView card={m.card} />
+                  {m.receipt && <ReceiptView receipt={m.receipt} />}
+                </>
               ) : (
                 <Typography
                   variant="body2"
@@ -465,7 +538,7 @@ export default function ChatPanel() {
           ))}
 
           {/* Live progress while the agent works */}
-          {busy && (steps.length > 0 || draft) && (
+          {busy && (
             <Box
               sx={{
                 alignSelf: 'flex-start',
@@ -491,7 +564,7 @@ export default function ChatPanel() {
                 </Typography>
               )}
               {!draft?.sentence && steps.length === 0 && (
-                <Typography variant="caption" color="text.secondary">working…</Typography>
+                <Typography className="hud-shimmer" variant="caption">working…</Typography>
               )}
             </Box>
           )}

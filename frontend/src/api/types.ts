@@ -219,6 +219,8 @@ export interface RunResult {
   }
   /** Cache-busted by `runId`, and named per run, so a new run always repaints. */
   overlays: { wetGridUrl: string; heatmapUrl: string }
+  /** The data this run stood on, as the backend loaded it. Absent on older runs. */
+  sources?: { terrain: string; landCover: string; lst: string | null }
   stats: {
     /** The screening tidal-backwater condition this run applied, if any. */
     tide?: {
