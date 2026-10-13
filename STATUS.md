@@ -188,7 +188,7 @@ copied from the code's output.
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
-| backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding, no key |
+| backend `test_agent` | 11/11 | `python tests/test_agent.py` — grounding, no key |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
 | frontend unit (`vitest`) | 36/36 | `npm test` |

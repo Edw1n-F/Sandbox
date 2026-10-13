@@ -147,6 +147,21 @@ def test_build_facts_forwards_the_run_verbatim() -> None:
     assert set(facts["ratios"]) == {"unstoredOverRunoff"}
 
 
+def test_the_system_prompt_introduces_no_number_a_card_could_echo_ungrounded() -> None:
+    """Any figure written into the prompt is one a model may copy into a card, and
+    grounding would then reject it as "not from this run". An example like
+    "-0.12 million m3" or a hard-coded site area does exactly that, so the prompt
+    may contain only the small integers grounding already treats as free."""
+    import re
+
+    from app.agent.prompts import SYSTEM
+
+    for token in re.findall(r"\d+(?:\.\d+)?", SYSTEM):
+        assert "." not in token and int(token) <= 12, (
+            f"SYSTEM contains {token!r}, which a model could quote and fail grounding"
+        )
+
+
 def test_fact_values_admits_every_rounding_of_a_fact() -> None:
     allowed = fact_values({"scenario": {"runoffM3": 1077749.54}})
     # The fact itself, its roundings at 0-4 places, and its reported scales.
