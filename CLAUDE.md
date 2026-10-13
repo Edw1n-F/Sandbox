@@ -13,7 +13,8 @@ current phase delivers the chain **geographic data → storage → scene managem
 API → CesiumJS 3D frontend**. Physics, AI modules and PostGIS are out of scope
 for now.
 
-Study area: **Hung Shui Kiu / Ha Tsuen (HSK/HT)**, ~786 ha. The 27-task project
+Study area: **Hung Shui Kiu / Ha Tsuen (HSK/HT)**, an analysis window of ~43.5 ha
+cropped to the Open3Dhk tile coverage on 13 Oct 2026. The 27-task project
 plan points at Deep Bay; that conflict was resolved on 6 Oct 2026 in favour of
 HSK/HT, which has the stronger public evidence base. Do not silently switch.
 
@@ -36,27 +37,39 @@ OpenStreetMap explicitly, so the app runs with zero credentials. Leave
 ## Commands
 
 ```bash
-# Backend -- always activate the venv first; there are two Pythons on this host
-cd backend && source .venv/bin/activate
+# Backend. Run from backend/. There is no committed venv on this host -- it uses
+# the system Python (3.14), and `pip install -r requirements.txt` is the setup.
+cd backend
 python scripts/preflight.py                  # environment check; exits 1 if not runnable
-python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy
-python scripts/fetch_dem.py                 # Open-Meteo -> dem_hsk.npy
+python scripts/fetch_landcover.py            # ESA WorldCover -> landclass_hsk.npy (needs rasterio)
+python scripts/fetch_dem.py                  # Open-Meteo -> dem_hsk.npy
+python scripts/tiles_to_rasters.py           # Open3Dhk tiles -> 5 m DTM + flow rasters
+python scripts/build_buildings.py            # Open3Dhk + Overture -> buildings_hsk.json
+python scripts/build_landclass.py            # fuse WorldCover + trees + real buildings
 python scripts/seed_scene.py                 # prints the sceneId
-python scripts/seed_interventions.py --reset # derive intervention sites from the analysis
-python scripts/make_citymodel.py        # 3D massing envelopes (provisional)
-python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
-python -m uvicorn app.main:app --reload      # :8000
+python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
+python -m uvicorn app.main:app --reload --port 8001   # :8001 -- vite.config.ts proxies here
 
-# Every suite is a standalone script, not a pytest run. For the counts and what
-# each one covers, read STATUS.md -- do not trust a number typed into a comment.
-for f in tests/test_*.py; do python "$f"; done
+# Every suite is a standalone script, not a pytest run. On Windows set PYTHONUTF8=1,
+# or three suites die on a cp950 decode error before running a check. For the counts
+# and what each one covers, read STATUS.md -- do not trust a number typed into a comment.
+PYTHONUTF8=1 python -m pytest tests/          # or: for f in tests/test_*.py; do python "$f"; done
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
 npx tsc --noEmit                             # must be clean
+npm run lint && npm test                     # eslint --max-warnings 0, vitest
+# Browser suites: need BOTH servers up. They exit 2 if the servers are missing,
+# so a missing server can never read as a pass. Setup once:
+#   npm i --no-save playwright && npx playwright install chromium
+node scripts/verify-3d.mjs && node scripts/verify-ux.mjs
 ```
+
+`seed_interventions.py` and `make_citymodel.py` are gone: the derived-intervention
+seed was authored against the retired 786 ha extent and was purged, and the
+procedural massing generator was replaced by `build_buildings.py`.
 
 Test counts move. `STATUS.md` carries the measured ones; if you add a check,
 update that table in the same commit rather than editing the inline counts in
@@ -137,8 +150,8 @@ mandates both. The frontend has one error branch.
 `scene -> plan -> intervention`, with a cascade delete chain.
 
 `backend/data/{scenes,plans,interventions}/` is a **runtime store, not source.**
-Only three files in it are committed — the seeded scene, the baseline plan and
-`seed_interventions.py`'s output — and `.gitignore` allowlists exactly those.
+Only two files in it are committed — the seeded scene and the baseline plan — and
+`.gitignore` allowlists exactly those.
 Everything else is residue, from hand-poking the API. The suites that create
 records now redirect `settings.*_dir` at a temp copy of `data/`
 (`backend/tests/_tmpstore.py`, used by `isolate_store()`), so running them no
@@ -164,11 +177,18 @@ Storage keeps the spec's `id` column; the API exposes `sceneId` / `planId` as an
 Rasters are **generated artefacts, not source**. Reproduce with:
 
 ```bash
-python scripts/fetch_landcover.py            # ESA WorldCover 10 m, CC BY 4.0
-python scripts/fetch_dem.py                 # Open-Meteo, ~90 m
+python scripts/tiles_to_rasters.py           # Open3Dhk tiles -> 5 m DTM + flow rasters
+python scripts/build_buildings.py            # Open3Dhk + Overture -> buildings_hsk.json
+python scripts/build_landclass.py            # WorldCover + trees + buildings -> landclass
+python scripts/fetch_landcover.py            # the ESA base, needs rasterio
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 ```
+
+The DTM is the **real 5 m Open3Dhk/LandsD surface** (117 x 148, 3.4-17.3 m), not a
+~90 m global model. It is the terrain-tile mesh surface, not a surveyed bare-earth
+release. A run re-solves the water level on the conditioned surface but does not
+re-condition it, so a DEM change needs `make_wetgrid.py` re-run.
 
 No MinIO, no `gdal_translate`, no COG pipeline. Elevation reaches Cesium as a
 **mapbox terrain-RGB** raster via `CustomHeightmapTerrainProvider`
@@ -181,8 +201,9 @@ registers itself against the seeded scene.
 ## Conventions that will bite you
 
 - **Run `scripts/preflight.py` before debugging anything.** Most failures here
-  are environmental, not code: a stale 3.10 `.venv` without numpy looks exactly
-  like a broken script.
+  are environmental, not code: missing `numpy`/`rasterio`/`scipy` looks exactly
+  like a broken script. On Windows, `PYTHONUTF8=1` too, or three suites die on a
+  cp950 decode error.
 - **Verify data sources against control points.** The AWS
   `elevation-tiles-prod` bucket returns HTTP 200 with non-terrarium pixels that
   decode Everest to ~1,000,000 m. `fetch_dem.py` asserts Everest and the open
@@ -200,14 +221,19 @@ registers itself against the seeded scene.
 - **A clean `tsc` does not mean the frontend works.** `tsconfig.json` declares a
   `@/*` alias that `vite.config.ts` must also register; TypeScript resolves it
   and Vite does not. Verify frontend changes in a real browser render.
-- **A derived feature's geometry must match its stated size.** The first
+- **A derived feature's geometry must match its stated size.** An early
   intervention seeder drew a polygon for a connected component's *centroid
   cell* while reporting the whole component's area, so a "155 ha" feature was
-  0.003 ha and invisible. `test_constants.py` now asserts the two agree.
-- **The city model is massing, not buildings.** Footprints are procedural from
-  the ESA WorldCover paved class because OSM is unreachable here; heights are an
-  assumed distribution. Never describe it as surveyed, and keep the provisional
-  chip.
+  0.003 ha and invisible. `test_constants.py` asserts the two agree.
+- **The buildings are measured geometry, not generated massing.** The 396
+  footprints come from Open3Dhk tiles fused with Overture (`buildings_hsk.json`,
+  `buildings_meta.json`), and heights are the 90th percentile of tile surface
+  minus tile terrain. Never describe it as surveyed storeys, and keep the
+  provenance disclosure. No generated mesh is ever presented as what is there now.
+- **The natural-language front door does not create geometry.** `place` is not in
+  the parser, the tool schema or `_massing_feature`; a model that emits one is
+  refused. `scenario.apply_massing` still *scores* a `place` op handed to it
+  directly, but nothing reaches it from an instruction.
 - **richdem/hydrotools will not install here** (richdem needs GDAL headers;
   hydrotools gates everything behind it). The algorithms live in
   `scripts/hydrology.py`. Do not try to add them as dependencies.

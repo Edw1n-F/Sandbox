@@ -5,6 +5,113 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-14 — close stage 2: finish the `place` deletion, purge the orphan store, report a 429
+
+### Removed — `place` from the natural-language front door
+
+`8557458` removed `place` from `ai_plan.py`'s parser but left it declared in
+`MassingOp.SUPPORTED` and callable from `scenario.py`, so nine `test_ai_plan`
+checks went red against a capability no instruction could reach. The deletion is
+now finished on the **front door**: `place` is absent from the parser, the tool
+schema and `_massing_feature`, and a model that emits one is refused. The **dormant
+capability stays** — `scenario.apply_massing` still scores a `place` op handed to
+it directly through `POST /scenario/evaluate`, and `placement_footprints` is kept
+rather than restored later. The three placement tests are replaced by one that
+pins the new behaviour (a model-emitted `place` returns nothing, the schema no
+longer offers it, and a tower sentence is not read as an edit), and the other stale
+assertions are repointed at ops that still exist. `test_ai_plan` 32/41 → 40/40.
+
+### Fixed — a rate-limited provider returned a 500
+
+Found against the live free-tier model: `urllib.error.HTTPError 429` escaped
+`generate_plan` uncaught, `scenes.py` caught only `PlanGenerationError`, and
+`ProjectCatalog.toggle()`'s `try/finally` has no `catch` — so a throttle silently
+did nothing and the user saw no error. `generate_plan` now catches
+`URLError`/`TimeoutError`/`ConnectionError`. With `provider=auto` the failure is
+named in the response (`"rate limited (HTTP 429)"`) and the labelled heuristic
+answers if it can; with an explicit `provider=llm` it raises `PlanGenerationError`,
+which the router already turns into a 422 — the same rule as "no key → 422". New
+test covers both. A 429 is now reported, not hidden.
+
+### Fixed — all three scenario sliders were unnamed to a screen reader
+
+`SliderField` set `aria-labelledby` to `${label}-slider`, an id no element carried,
+so every slider's accessible name resolved to nothing. The `<Typography>` caption
+now carries the (slugged) id. Found by the rewritten `verify-ux` check; 26/26
+focusable controls now have accessible names.
+
+### Removed — the store residue that could never change a number
+
+The seeded derived-intervention plan, its 7 interventions, 2 residue plans and 6
+loose interventions were all authored against the retired 786 ha extent, so every
+polygon fell outside the 43.5 ha grid and scored exactly zero. Deleted, and
+`.gitignore`'s allowlist narrowed to the two files that remain committed (the
+seeded scene and the baseline plan). Seven tracked deletions are recoverable from
+git; the untracked residue is gone.
+
+### Fixed — `scipy` had no wheel on this host
+
+`requirements.txt` pinned `scipy<1.14`, a macOS workaround, and 1.13.1 has no
+cp314 wheel — so `test_contract` and `test_ventilation` could not run here at all.
+Now `scipy>=1.16.1` (the first release with a cp314 wheel; 1.16.0 and earlier have
+none). Installed 1.18.1. `rasterio` installed so `preflight.py` reports Ready.
+
+### Fixed — hydrology and ledger pins were stating the pre-swap world
+
+`test_hydrology` and `test_ledger` still pinned counts and hashes from before the
+real-data swap. Each value was **recounted independently** rather than copied from
+the code's output, because re-pinning to whatever the code prints turns a test into
+a snapshot: 251 depressions confirmed against a scipy `ndimage.label` count at
+8-connectivity, 2,033 depression cells, 35 drainage cells at the accumulation
+threshold, ground range 3.41–17.29 m, headline 180,566.3 m³. The two artefact
+hashes changed because the rasters were regenerated on 13 Oct.
+
+### Rewritten — both browser suites
+
+`verify-3d.mjs` and `verify-ux.mjs` were bound to one developer's machine (a
+hardcoded Playwright path) and gated on the deleted procedural model's entity count
+(`n > 2000` against 2,639 envelopes, so the wait always timed out and the script
+still exited `0`). Rewritten around what the app actually does: tileset load as the
+readiness gate, overlays read from the named Cesium entities that carry the per-run
+PNG URL, and camera checks measured on the camera state. New shared
+`scripts/_verify-common.mjs` resolves Playwright from `$PLAYWRIGHT_PATH` or the
+repo, and both scripts now exit `2` when a server or Playwright is missing — so a
+missing server can never read as a pass. `verify-3d` 17/17, `verify-ux` 21/21.
+
+### Deleted — `dump-shader.mjs` and `alembic.ini`
+
+`dump-shader.mjs` printed the GLSL for `techMaterial.ts`, deleted in stage 1.
+`backend/alembic.ini` was empty and contradicted the documented "no alembic, no
+migrations" position.
+
+### Docs — the substrate swap is now recorded, not just done
+
+`STATUS.md` rewritten: a stage table (0–5) with 2 marked complete, the placeholder
+catalog and the massing-only parser named as such rather than described as working,
+measured test counts, and the gap list replaced by one "Open work" list with a
+short resolved block. The "who does what" lane table is **removed** — it was
+written before the substrate swap and its ownership no longer described the work.
+`DATA_SOURCES.md` now documents what actually ships: the Open3Dhk terrain tiles
+(the real DTM, with the mesh-surface caveat), Overture + tiles for buildings (with
+the fusion thresholds and the "not surveyed storeys" caveat), the fused land class
+(WorldCover + Sentinel-2 + trees + footprints), and the Landsat LST anchor. It also
+records two findings that were only in code: **the window has zero water and zero
+wetland because the raw ESA tile really is 87.9 % built-up**, so this is an honest
+crop that leaves almost no sponge to squeeze; and the **0.146 m mPD/mCD offset is
+now live** rather than dormant, because the tide toggle quotes mCD against
+elevation in mPD and no correction is applied. `README.md` and `CLAUDE.md` corrected
+throughout: port `8000` → `8001`, Python `3.13` → `3.14`, the stale "~90 m
+Open-Meteo" elevation row, the deleted `seed_interventions.py`/`make_citymodel.py`
+steps, the removed-venv instructions, and the stale "~786 ha" extent.
+
+### Measured — the run is ~11 s, not 0.7 s
+
+The `0.7 s warm` claim in `STATUS.md`, `README.md` and `ARCHITECTURE.md` was
+authored before the real-data swap and does not reproduce. Measured at the API and
+again in a browser: **~11 s, cold and warm alike.** The figure is removed rather
+than restated, because the honest claim is "far faster than the 10-day workflow it
+replaces", not a number that only held on a synthetic grid.
+
 ## 2026-10-13 (part 4) — flood no longer paints building roofs
 
 ### Fixed — water visible on top of towers

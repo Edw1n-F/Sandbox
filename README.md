@@ -4,7 +4,8 @@ A 3D planning sandbox for climate-adaptation scenarios: load a study area, put a
 development plan on it, and see where water collects and where heat is trapped.
 
 **Study area:** Hung Shui Kiu / Ha Tsuen New Development Area (HSK/HT), northern
-New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
+New Territories. The analysis window is 113.9922–113.9994 °E, 22.431–22.4363 °N,
+about 43.5 ha, cropped to the Open3Dhk tile coverage on 13 Oct 2026.
 
 > **This is a prototype, not an engineering tool.** It is built to demonstrate a
 > decision chain, not to produce numbers you can defend in a statutory
@@ -42,10 +43,10 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | camelCase wire contract with `sceneId`/`planId` aliases | Working | `test_contract` |
 | Single error envelope (`detail` **and** `error`) | Working | `test_contract` |
 | 3D viewer: real terrain, imagery, boundary, camera | Working | headless-browser render, zero console errors |
-| **Real elevation** (~90 m, Open-Meteo global model) | Working | control-point assertions on every fetch; resolution measured, not assumed |
+| **Real elevation** (5 m Open3Dhk/LandsD terrain tiles, 117 x 148, 3.4–17.3 m) | Working | `terrain_source = open3dhk-tiles`; it is the tile-mesh surface, not a surveyed bare-earth release |
 | **Real land cover** (ESA WorldCover 10 m, CC-BY) | Working | 2 tiles, windowed COG read |
 | Wet-grid overlay (CN runoff → storage → level-pool fill) | Working, screening-grade | monotonic in rainfall |
-| Heat-exposure overlay — land class **+ sky view + cast shadow**, a relative 0–1 index | Working, screening-grade | a lone thin tower reads SVF 0.9913; a uniform block reads 0.0 |
+| Heat-exposure overlay — a **°C surface-temperature field anchored to observed Landsat LST**, moved off the site mean by land class + sky view + cast shadow + wind shelter | Working, screening-grade | a lone thin tower reads SVF 0.9913; a uniform block reads 0.0. Air is an *estimate* (surface − 12 °C) |
 | **Heat anchor** — the cited band that index is read against | Working | HKO Lau Fau Shan, July [26.4, 32.7] °C; reproducible via `fetch_heat_anchor.py --check` |
 | **Interventions** — derived sites, plan selection, styled 3D rendering | Working, screening-grade | stated area vs geometry, draft status + provenance |
 | **Generative AI** — natural language → grounded 3D edits | **Live.** Local `qwen2.5:3b-instruct` via Ollama, no key; deterministic fallback if absent | real-HTTP round trips replayed on every run |
@@ -121,7 +122,7 @@ paid or token-gated API are deliberately not used, each with a stated reason, in
 
 | Requirement | Version tested | Notes |
 |---|---|---|
-| Python | **3.13** | 3.10+ works. Avoid 3.9 — the code uses `X \| None` syntax. |
+| Python | **3.14** | 3.11+ works. Avoid 3.9 — the code uses `X \| None` syntax. `scipy>=1.16.1` needs 3.14 wheels; 1.13 has none. |
 | Node.js | **22** | 20+ should be fine. |
 | npm | 10 | Ships with Node 22. |
 | GDAL / Docker / Postgres | **not needed** | Deliberately. |
@@ -157,7 +158,7 @@ STATIC_BASE_URL=/static
 
 ```bash
 cd backend
-python3 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
@@ -225,24 +226,13 @@ Writes `backend/data/rasters/*.png` plus a `.json` sidecar per raster listing
 every constant, assumption and source. Both scripts attach their output to the
 seeded scene automatically, so the viewer's overlay switches become live.
 
-### Step 5b — derive interventions (recommended)
+### Step 5b — intervention data
 
-The spec's model is **scene → plan → intervention**, and the interventions level
-shipped empty. This script fills it — and derives every site from the analysis
-rather than placing arbitrary polygons:
-
-```bash
-python scripts/seed_interventions.py --reset
-```
-
-- **Flood storage** in the deepest connected basins of the wet grid
-- **Retention / heat mitigation** on the largest contiguous vegetated blocks
-- **Drainage alignment** traced steepest-descent from the deepest basin
-
-Each feature records the raster it came from in `params.basis`, and all are
-`status="draft"` — the engine refuses to compute on draft geometry
-([ARCHITECTURE Decision 13](docs/ARCHITECTURE.md#decision-13--a-scope-is-resolved-in-code-or-the-operation-does-not-happen)).
-Re-running with `--reset` replaces only plans this script created.
+There is no derived-intervention seed. The old `seed_interventions.py` authored its
+sites against the retired 786 ha extent, so every polygon fell outside the current
+43.5 ha grid and scored exactly zero; it and its output were purged on 14 Oct 2026.
+Interventions are authored through the API (`POST /scenes/{id}/ai-plan`) or drawn by
+hand, and the baseline plan alone is committed.
 
 ### Step 6 — frontend
 
@@ -269,7 +259,7 @@ npm run dev
 Vite prints a URL — usually <http://localhost:5173>. Open it.
 
 > The dev server proxies **both** `/api` and `/static` to
-> `http://localhost:8000` (see `vite.config.ts`). If you see a layer silently
+> `http://localhost:8001` (see `vite.config.ts`). If you see a layer silently
 > failing to appear, check that proxy first.
 
 ### Step 7 — run the two servers side by side
@@ -278,14 +268,13 @@ The backend must be running too. In a second terminal:
 
 ```bash
 cd backend
-source .venv/bin/activate
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8001
 ```
 
 Confirm it is healthy:
 
 ```bash
-curl -s localhost:8000/health
+curl -s localhost:8001/health
 ```
 
 ### Step 8 — verify the whole chain
@@ -293,18 +282,18 @@ curl -s localhost:8000/health
 ```bash
 SCENE_ID=$(python -c "import json,glob,os;print(os.path.splitext(os.path.basename(glob.glob('data/scenes/*.json')[0]))[0])")
 
-curl -s "localhost:8000/api/scenes/$SCENE_ID"          | head -c 400
-curl -s "localhost:8000/api/scenes/$SCENE_ID/terrain"  | head -c 400
-curl -s "localhost:8000/api/scenes/$SCENE_ID/plans"    | head -c 400
+curl -s "localhost:8001/api/scenes/$SCENE_ID"          | head -c 400
+curl -s "localhost:8001/api/scenes/$SCENE_ID/terrain"  | head -c 400
+curl -s "localhost:8001/api/scenes/$SCENE_ID/plans"    | head -c 400
 
 # Overlays and the DEM raster must be reachable, not just listed.
 curl -s -o /dev/null -w "wet grid  %{http_code} %{size_download}b\n" \
-  "localhost:8000/static/rasters/wetgrid_hsk.png"
+  "localhost:8001/static/rasters/wetgrid_hsk.png"
 curl -s -o /dev/null -w "dem rgb   %{http_code} %{size_download}b\n" \
-  "localhost:8000/static/dem_terrain_rgb.png"
+  "localhost:8001/static/dem_terrain_rgb.png"
 
 # Interactive API docs
-open http://localhost:8000/docs
+open http://localhost:8001/docs
 ```
 
 You should see the HSK/HT area with real relief, and toggling **Wet grid** and
@@ -315,14 +304,17 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 ```bash
 cd backend
 python scripts/preflight.py                    # environment; exits non-zero if not runnable
-for f in tests/test_*.py; do ./.venv/bin/python "$f"; done
+PYTHONUTF8=1 python -m pytest tests/           # or: for f in tests/test_*.py; do python "$f"; done
 
 cd ../frontend
 npx tsc --noEmit                               # must be clean
+npm run lint && npm test                       # eslint --max-warnings 0, vitest
 ```
 
-Fourteen standalone suites, no pytest. Each prints `N/N passed` and exits
-non-zero on any failure, so a red suite fails a CI run. **The counts are in
+Sixteen backend suites. Most are standalone scripts that print `N/N passed` and exit
+non-zero on any failure, so a red suite fails a CI run; `test_overlay_masking` is
+pytest-style with no `__main__`, which is why `pytest tests/` is the recommended form.
+**The counts are in
 [`STATUS.md`](STATUS.md)** — one table, measured, and the only place they are
 written down.
 
@@ -330,7 +322,7 @@ written down.
 
 ```bash
 # terminal 1
-cd backend && source .venv/bin/activate && python -m uvicorn app.main:app --reload
+cd backend && python -m uvicorn app.main:app --reload --port 8001
 
 # terminal 2
 cd frontend && npm run dev
@@ -486,7 +478,7 @@ rather than merely fluent:
 
 1. **It explains, it does not compute.** The run's own numbers are handed over as
    a FACTS block. Nothing is recalculated inside a Q&A — recomputing would turn a
-   fast reply into a 0.7 s simulation *and* let the answer drift from the numbers
+   fast reply into a full simulation *and* let the answer drift from the numbers
    on screen. ([Decision 16](docs/ARCHITECTURE.md#decision-16--the-chat-explains-a-run-it-never-computes-one).)
 2. **The answer is a card, not a paragraph.** Title, one-sentence answer, cause,
    next step, stats, confidence with a reason, caveats, follow-ups. The same
@@ -544,7 +536,7 @@ Check it, and make one real call:
 
 ```bash
 python scripts/llm_probe.py --instruction "make the district 25% taller"
-curl -s localhost:8000/health | grep -A6 '"llm"'      # isAi: true
+curl -s localhost:8001/health | grep -A6 '"llm"'      # isAi: true
 ```
 
 `llm_probe.py` never prints a key — only whether one is set and its length. It
@@ -594,10 +586,12 @@ not an assumed distribution. The provenance is recorded in `buildings_meta.json`
 (`buildings_hsk.json`) is the *analysis* contract that heat, shade, SVF and wind
 read; the `.b3dm` meshes are the *render*.
 
-**Editing.** Building geometry is not hand-editable in this stage. Interventions
-become land-cover and storage changes (stage 3), not new massing. The old
-`scale_all` / `set_site` / `rotate` / `place` / `reset` massing vocabulary was
-removed with the procedural model.
+**Editing.** Building geometry is not hand-editable in this stage, and the
+natural-language path cannot add a building: `place` is no longer in the parser or
+the tool schema. Interventions become land-cover and storage changes (stage 3), not
+new massing. `scenario.apply_massing` can still *score* a `place` op handed to it
+directly through `POST /scenario/evaluate`, but no instruction reaches it — the
+front door is closed and the capability is dormant.
 
 ## Online 3D assets
 
@@ -689,14 +683,19 @@ frontend store only; re-running the script is a manual step. The panel says so.
 
 ```bash
 cd backend
-for f in tests/test_*.py; do ./.venv/bin/python "$f"; done
-cd ../frontend && npx tsc --noEmit
+PYTHONUTF8=1 python -m pytest tests/     # or: for f in tests/test_*.py; do python "$f"; done
+cd ../frontend && npx tsc --noEmit && npm run lint && npm test
+
+# Browser suites, run with both servers up (they exit 2 if the servers are missing):
+#   npm i --no-save playwright && npx playwright install chromium
+node scripts/verify-3d.mjs && node scripts/verify-ux.mjs
 ```
 
-Every suite is a standalone script that prints `N/N passed` and exits non-zero on
-any failure — there is no pytest in the venv. **The per-suite counts and what each
-one covers live in [`STATUS.md`](STATUS.md)**, which is the only place they are
-written down; a count repeated in a second file is a count that goes stale in it.
+Sixteen backend suites. Most are standalone scripts that print `N/N passed` and exit
+non-zero on any failure; `test_overlay_masking` is pytest-style with no `__main__`,
+which is why `pytest tests/` above is the recommended form. **The per-suite counts and
+what each one covers live in [`STATUS.md`](STATUS.md)**, which is the only place they
+are written down; a count repeated in a second file is a count that goes stale in it.
 
 What this suite exists to catch, in one example: the source documents name
 constants that *fail silently*. Written as `S = 25400/CN − 2540` the retention
@@ -723,19 +722,20 @@ by the compiler and not by what the backend was asked for.
 |---|---|---|
 | Overlay switches are greyed out | The scene has no `wetGridUrl` / `heatmapUrl` | Run `make_wetgrid.py` and `make_heatmap.py`, then reload the scene |
 | Switch is enabled but nothing appears | The PNG never reached the backend | Check `STATIC_BASE_URL=/static` in `backend/.env` **and** that `/static` is in the Vite proxy |
-| "An overlay failed to load" in the panel | Image failed to decode, or the request 404'd | Open the console; `curl` the URL from `/terrain` against port 8000 |
+| "An overlay failed to load" in the panel | Image failed to decode, or the request 404'd | Open the console; `curl` the URL from `/terrain` against port 8001 |
 | Blank globe, "Cesium is not defined" | Cesium's static assets not copied | Ensure `vite-plugin-cesium` is in `vite.config.ts` plugins |
 | `401`/`403`-looking globe, or Bing imagery missing | Cesium Ion token expected | Leave `VITE_CESIUM_ION_TOKEN` empty; the app sets `baseLayer: false` |
-| Terrain is flat | `terrainUrl` is null | Run `fetch_dem.py`; the fetcher registers the raster on the scene |
-| `fetch_dem.py` exits with HTTP 429 | The free API throttles on request frequency | Just re-run it — every batch is cached, so it resumes where it stopped |
+| Terrain is flat | `terrainUrl` is null | Run `tiles_to_rasters.py`; the script registers the raster on the scene. (`fetch_dem.py` still exists for the Open-Meteo fallback, but the shipped DEM is the 5 m Open3Dhk tiles) |
+| `fetch_dem.py` exits with HTTP 429 | The free Open-Meteo API throttles on request frequency | Just re-run it — every batch is cached, so it resumes where it stopped |
 | `ModuleNotFoundError: rasterio` | Deps not installed in the active venv | `pip install -r requirements.txt`; check `which python` |
-| Two Python versions fighting | `backend/.venv` (3.10) is stale and lacks numpy | Use one interpreter; `source backend/.venv/bin/activate` first |
+| Two Python versions fighting | A stale `backend/.venv` (3.10) lacks numpy and rasterio | Use one interpreter; delete the stale venv or activate the right one |
 
-> **Known environment wart:** there are two Python environments on this
-> machine — `backend/.venv` (3.10, missing numpy and rasterio) and a managed
-> 3.13. Only the 3.13 one can run the raster scripts. `scripts/preflight.py`
-> reports which interpreter it is running under and exits 1 if the raster
-> stack is unavailable, so run it before debugging anything else.
+> **Known environment wart:** a stale `backend/.venv` (3.10, missing numpy and
+> rasterio) can shadow the interpreter you think you are using. Only the managed
+> 3.14 resolves the raster stack. `scripts/preflight.py` reports which interpreter
+> it is running under and exits 1 if the raster stack is unavailable, so run it
+> before debugging anything else. On Windows also set `PYTHONUTF8=1`, or three
+> suites die on a cp950 decode error before running a check.
 
 ---
 
@@ -768,13 +768,15 @@ T1/
 │   ├── scripts/
 │   │   ├── preflight.py          is this machine able to run it? exits 1 if not
 │   │   ├── seed_scene.py         create the scene from the locked study area
-│   │   ├── seed_interventions.py derive intervention sites from the analysis
-│   │   ├── fetch_landcover.py    ESA WorldCover  → landclass_hsk.npy
+│   │   ├── tiles_to_rasters.py   Open3Dhk tiles → 5 m DTM + flow rasters
+│   │   ├── build_buildings.py    Open3Dhk + Overture → buildings_hsk.json
+│   │   ├── build_landclass.py    WorldCover + trees + buildings → land class
+│   │   ├── fetch_landcover.py    ESA WorldCover → landclass_hsk.npy
 │   │   ├── fetch_dem.py          Open-Meteo → dem_hsk.npy (+ terrain-RGB)
 │   │   ├── _overlay_common.py    shared grid, land classes, CN, resampling
 │   │   ├── make_wetgrid.py       CN runoff → storage → level-pool fill
-│   │   └── make_heatmap.py       land class → index → RGBA
-│   ├── tests/                    fourteen standalone suites
+│   │   └── make_heatmap.py       LST-anchored surface temperature → anomaly RGBA
+│   ├── tests/                    sixteen suites (pytest or standalone)
 │   ├── data/                     the file store (see docs/FILE_STRUCTURE.md)
 │   ├── requirements.txt
 │   └── .env.example
@@ -794,14 +796,16 @@ T1/
     │   │   ├── viewModes.ts      survey / tactical scene dressing
     │   │   └── interventionLayer.ts  discrete features (extrusion)
     │   ├── components/           ChatPanel, HudPanel, StatsPanel, SlidersPanel,
-    │   │                         ProjectCatalog, ViewButtons, SceneNotice
+    │   │                         ProjectCatalog, ViewButtons, SceneNotice,
+    │   │                         SliderField, LoadingScreen, AppErrorBoundary
     │   └── App.tsx  main.tsx  index.css
-    ├── vite.config.ts            @ alias + /api and /static dev proxies
+    ├── scripts/                  _verify-common.mjs + verify-3d / verify-ux
+    ├── vite.config.ts            @ alias + /api, /static and /health dev proxies
     ├── .env.local.example
     └── package.json
 ```
 
-`backend/data/` is a **runtime store** with three committed fixtures, so a fresh
+`backend/data/` is a **runtime store** with two committed fixtures, so a fresh
 clone runs without fetching anything; everything else under it is residue from
 running the suites or poking the API. Which files are committed, why a raster is
 a render rather than data, and what is safe to delete are stated once, in

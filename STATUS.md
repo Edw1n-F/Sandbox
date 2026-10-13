@@ -1,8 +1,51 @@
 # Status
 
-The live state of the HSK / San Tin planning sandbox, **measured on 2026-10-13**.
+The live state of the HSK / HT planning sandbox, **measured on 2026-10-14**.
 Nothing here is a target. The architecture rationale is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+> **Read the stage table below before reading the flow.** "Works" here means
+> *verified by running it on 14 Oct* — not *designed*. Anything authored against
+> the retired 786 ha extent was purged on 14 Oct and is not described here.
+
+---
+
+## Where the project is
+
+| Stage | Content | State |
+|---|---|---|
+| 0 | Scaffold and the first feature buildout | Discarded — built on a placeholder world |
+| 1 | Real spatial foundation: terrain, land cover, buildings | **Done** |
+| 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Current, complete** |
+| 3 | Scenario composition: fixed project footprints and toggles | **Not started** |
+| 4 | Intervention authoring: AI suggestions, NL → card, parameter card, pin/unpin | **Not started** |
+| 5 | Demo narrative, validation, pitch | Not started |
+
+Stage 2 is closed. Stage 3 is the next build, and it is additive: the run loop
+already consumes interventions correctly, so Stage 3 supplies footprints rather
+than machinery.
+
+### What the two unbuilt stages mean for a demo
+
+The catalog in the UI (`ProjectCatalog.tsx`) is a **placeholder**: four hardcoded
+projects whose phases are English sentences piped through `ai_plan` on every
+click. It is not project data, placements are re-derived per click and therefore
+non-deterministic, and a rate-limited provider makes the click a no-op. Do not
+demo it as a working feature, and do not read it as evidence that Stage 3 exists.
+
+The natural-language path is **massing-only**. Measured:
+
+| Instruction | Parsed |
+|---|---|
+| "make the western blocks 40% taller" | `scale_all(1.4, west)` |
+| "add a retention basin north of canal" | *nothing* |
+| "remove the pond in the south" | *nothing* |
+| "add permeable paving around the school" | *nothing* |
+
+The blue-green intervention vocabulary the brief is actually about is not in the
+parser, and the `remove` op does not exist at all. Intervention *application*
+works — an in-bounds polygon moves the run (−302.1 m³ unstored, −0.03 ha wet) —
+but nothing in the product generates one yet.
 
 ---
 
@@ -10,43 +53,44 @@ Nothing here is a target. The architecture rationale is in
 
 ### The user flow, today
 
-1. **Open the app.** The Cesium viewer boots on the HSK / San Tin study area with
-   terrain, OSM imagery and the real building model already drawn — **396 real
-   building footprints** extracted from Open3Dhk tiles fused with Overture, and
-   the textured 3D Tiles meshes standing on the terrain, in an oblique default
-   view. No Cesium Ion token required.
-2. **Move around.** Left-drag pans, right-drag orbits, wheel/pinch zooms, arrow
-   keys nudge, and three buttons reframe (3D / top-down / reset). Two view modes:
-   **survey** (daylight, lit meshes) and **tactical** (dark, emissive neon,
-   height ramp, 200 m grid, bloom) — same data, and the tactical legend says so.
-3. **Pick projects.** The catalog is multi-select: tick several phases and the run
-   merges them, so *cumulative* effects are one run rather than one project at a
-   time.
-4. **Set the scenario.** Rainfall and temperature sliders write to the live scene
-   (ADR-024: local only, never persisted).
-5. **Run simulation.** `POST /api/scenes/{id}/run` applies the selected plans'
+1. **Open the app.** The Cesium viewer boots on the HSK / HT study area with
+   terrain and the real building model already drawn — **396 real building
+   footprints** extracted from Open3Dhk tiles fused with Overture, and the
+   textured 3D Tiles meshes standing on the terrain, in an oblique default view.
+   No Cesium Ion token required.
+2. **Move around.** Left-drag pans, right-drag orbits, the wheel and pinch zoom,
+   arrow keys orbit, and the buttons reframe (orbit / zoom / top-down / reset).
+   The scene is dressed in **tactical** mode by default (dark, height ramp); survey
+   mode exists in `viewModes.ts` but is no longer reachable from a labelled button.
+3. **Set the scenario.** Rainfall intensity + duration, tide state (Low / Mean /
+   High) and surface temperature write to the live scene (ADR-024: local only,
+   never persisted), with HKO-named presets beside each.
+4. **Run simulation.** `POST /api/scenes/{id}/run` applies the selected plans'
    interventions to the land-class grid, re-runs the project's own SCS-CN
    generation/retention arithmetic at the chosen rainfall, re-solves the level-pool
    fill, re-renders **both** overlays, and returns the baseline-vs-scenario ledger,
-   a plain-language explanation, and any sanity warnings. 0.7 s warm; the terrain
+   a plain-language explanation, and any sanity warnings. The terrain
    conditioning and the sky-view/shade rasters are cached, since neither moves with
    a slider. A run at 450 mm reproduces the committed overlay exactly
    (180,566.3 m³ unstored, 16.89 ha wet, 6,725 wet cells — pinned by `test_run`).
-6. **Read the result.** The stats panel shows seven rows, the ledger shows the
+   Measured end to end in a browser: **~11 s**, cold and warm alike.
+5. **Read the result.** The stats panel shows its rows, the ledger shows the
    signed delta, and `sanityChecks` warns (never raises) when storage exceeds
    runoff, wet area exceeds the site, impervious share passes 100 %, cumulative
    coverage passes a cap, or CN leaves 30–100.
-7. **Ask the chat.** The run's own numbers are handed to the model as a FACTS
+6. **Ask the chat.** The run's own numbers are handed to the model as a FACTS
    block; the answer returns as a card (title / sentence / cause / todo / stats /
    confidence / caveats / followups) rendered field by field, with every number
    checked against the run by code before it is shown. Three steps stream as they
    happen. With no key configured the same card is assembled by code and labelled
    `source: "template"`.
-8. **Generate a plan (optional).** A sentence becomes a draft FeatureCollection via
-   `ai_plan`, badged "LLM ready" / "no LLM key" / "LLM status unknown", and the NL
-   geometry ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `reset`)
-   apply scoped by a ring. This path is driven from the plan panel, not
-   from the chat. Ops are idempotent — a second application cannot compound.
+7. **Generate a plan (optional).** A sentence becomes a draft FeatureCollection via
+   `ai_plan`, badged "LLM ready" / "no LLM key" / "LLM status unknown", and the
+   massing ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `reset`)
+   apply scoped by a ring. This path is driven from the plan panel, not from the
+   chat. Ops are idempotent — a second application cannot compound. **`place` is
+   not among them**: it was removed from the parser, the tool schema and
+   `_massing_feature` on 14 Oct, so no instruction can add a building.
 
 Empty states are named rather than blank: a scene with no terrain, or a plan with
 no interventions, renders a `SceneNotice` instead of an empty surface.
@@ -55,13 +99,19 @@ no interventions, renders a `SceneNotice` instead of an empty surface.
 
 **Scene and model**
 
-- `GET /api/scenes/{id}` boots terrain + OSM imagery + overlays, token-free.
+- `GET /api/scenes/{id}` boots terrain + explicit OpenStreetMap imagery + overlays,
+  token-free (`baseLayer: false`, so no Cesium Ion token is ever required).
 - **396 real building footprints** (`buildings_hsk.json`, `buildings_meta.json`),
   extruded and terrain-grounded from Open3Dhk tiles fused with Overture, plus the
-  textured 3D Tiles meshes (`buildings3DUrl`). **This is surveyed geometry, not
-  procedural massing** — the old 2,639-square `citymodel_hsk.json` placeholder is
-  deleted, and the `buildingsMeta.status` says
-  `DERIVED_FROM_OPEN3DHK_AND_OVERTURE`.
+  textured 3D Tiles meshes (`buildings3DUrl`). **This is measured geometry, not
+  procedural massing** — the old 2,639-square `citymodel_hsk.json` placeholder and
+  its generator are deleted, and `buildingsMeta.status` says
+  `DERIVED_FROM_OPEN3DHK_AND_OVERTURE`. Heights are a 90th-percentile
+  surface-minus-terrain, **not surveyed storeys**.
+- Both overlays drape onto the tiles with the building footprints masked out of the
+  *render* only, so water is not painted onto roofs. `wetgrid_hsk.npy` keeps every
+  solved cell and the ledger still counts them; 3,142 of 6,725 wet cells were being
+  drawn on roofs before the mask. A display transform must not delete a number.
 - Per-run output paths (`data/rasters/run/<runId>/…`), so two concurrent planners
   cannot overwrite each other's overlay.
 
@@ -71,26 +121,28 @@ no interventions, renders a `SceneNotice` instead of an empty surface.
   (`unstoredOverRunoff` plus four siblings) so a model that quotes a derived
   percentage grounds it as a fact — the chat itself does no arithmetic.
 
-**The three axes** (full findings, sources and citations in
-[`docs/research/`](docs/research/README.md) ch01–ch03; ch05 is the roadmap this
-implements)
+**What works beyond the brief.** The brief asks for two outputs — a wet grid and a
+heatmap. Three evaluation axes exist and are tested, of which only drainage and
+heat are in the product surface:
 
 - **Heat — a °C surface-temperature field, anchored to observed LST.** Every
   footprint is swept along the sun vector (real shadow casting), a 16-bin, 300 m
   horizon search gives sky-view factor, and `cell_fad` gives wind shelter. These
   geometry terms express each cell's *deviation from the site mean* around an
-  **observed Landsat LST surface-temperature scene** (the 2022-09-03 capture,
-  resampled 30 m → 5 m), producing a real °C field (`temperature_field.py`) shown
-  as an anomaly map — blue cooler / neutral average / red hotter — so a
-  well-designed site reads near-neutral and only genuine hot spots go red. The
-  temperature slider sets the scenario mean °C; air temperature is an *estimate*
-  (surface − 12 °C), never a measurement.
-- **Wind — one geometry, read per direction.** `cell_fad` spreads each footprint's
-  oriented frontal area over its cells, and the area-weighted mean of that field
-  equals the site-level FAD — the identity that catches a wrong denominator.
-  Least-cost corridors on a `1 + cellFAD` surface via Dijkstra; `fad_ratio()`
-  compares two schemes' geometry. A ratio is a **comparison, not a velocity
-  ratio**.
+  **observed Landsat LST surface-temperature scene** (the 2022-09-03 capture, site
+  mean 41.26 °C, resampled 30 m → 5 m), producing a real °C field
+  (`temperature_field.py`) shown as an anomaly map — blue cooler / neutral average
+  / red hotter — so a well-designed site reads near-neutral and only genuine hot
+  spots go red. The temperature slider sets the scenario mean °C; air temperature
+  is an *estimate* (surface − 12 °C), never a measurement.
+- **Wind — out of scope as a deliverable, kept as a heat term.** `cell_fad` spreads
+  each footprint's oriented frontal area over its cells, and the area-weighted mean
+  of that field equals the site-level FAD — the identity that catches a wrong
+  denominator. Least-cost corridors on a `1 + cellFAD` surface via Dijkstra, and
+  `fad_ratio()` compares two schemes' geometry. A ratio is a **comparison, not a
+  velocity ratio**; the corridors are geometry, and `cell_fad` is 180°-periodic so
+  they cannot separate NE from SW. **Wind is not presented as a product axis** — it
+  feeds the heat field's shelter term and that is all.
 - **Drainage — routed, with the arithmetic enforced.** `evaluate(scenario)` returns
   **three separate deltas** with their own units plus a trade-off list, never one
   score; a routed D8 fill-and-spill cascade whose `mass_balance()` **raises** on a
@@ -113,48 +165,55 @@ implements)
 
 ### Test suites
 
-Counts measured by running every suite on **2026-10-13 (late evening)**. Lint and
-typecheck are clean. **Thirteen of the sixteen backend suites are green; three
-carry stale pins.** All three are pinned to state the real-data switches replaced
-— the procedural massing envelope, the pre-DTM elevation grid, and the 0–1 heat
-index — and none of them touches the run loop, the contract, the temperature
-field or the overlay masking, which are green.
+Counts measured by running every suite on **2026-10-14**. Lint and typecheck are
+clean. **All sixteen backend suites are green.** The last three red suites were
+pinned to state the real-data switches replaced, and were closed on 14 Oct: the
+`place` checks were rewritten to pin that the planner no longer offers it, and the
+hydrology and ledger pins were recounted against the 43.5 ha window rather than
+copied from the code's output.
 
 | Suite | Result | Command |
 |---|---|---|
+| backend `test_design_metrics` | 91/91 | `python tests/test_design_metrics.py` |
+| backend `test_scenario` | 65/65 | `python tests/test_scenario.py` |
+| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
+| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
+| backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
+| backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling |
+| backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
+| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
-| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
-| backend `test_ai_plan` | **32/41** | 9 checks exercise the `place` op, removed from the planner at stage 1 |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding, no key |
-| backend `test_overlay_masking` | 3/3 | `python tests/test_overlay_masking.py` |
-| backend `test_design_metrics` | 91/91 | `python tests/test_design_metrics.py` |
-| backend `test_ledger` | **39/42** | 3 pins stale: 2 artefact md5s, the sea-level ground range |
-| backend `test_hydrology` | **28/32** | 4 pins stale: depression count and cells, HAND cells, headline |
-| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
-| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
-| backend `test_scenario` | 65/65 | `python tests/test_scenario.py` |
+| backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
 | frontend unit (`vitest`) | 36/36 | `npm test` |
-| frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` — needs live servers |
-| frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` — needs live servers |
+| frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
+| frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 
-**515 backend assertions ran: 499 green and 16 red.** The 16 sit in three suites
-— 9 `place` checks in `test_ai_plan`, 4 hydrology pins and 3 ledger pins — and
-each is pinned to the pre-real-data world, not to the run loop. A pinned count of
-900 buildings was never a statement about the world, only about the placeholder
-that used to be there.
+`test_overlay_masking` is pytest-style with no `__main__`, so run it with
+`python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.
+`test_temperature_field` is the opposite case — it has no pytest-collectable
+functions, so `pytest tests/` reports "no tests ran" for it and the standalone
+script is the only way to run it. Two suites, two runners; run both, or one of
+them silently reports nothing.
+
+On Windows set `PYTHONUTF8=1`, or three suites crash on a cp950 decode error
+before running a check.
 
 The two `verify-*` suites are **not** part of `npm test`: they need the dev server
 on `:5173` and the backend on `:8001`, and folding them in would let a missing
-server read as a pass. Their counts date from 12 Oct; the rest were run on 13 Oct.
+server read as a pass. Both were rewritten on 14 Oct (the previous versions were
+bound to one machine's Playwright path and gated on the deleted procedural
+model's entity count) and both now exit `2` rather than `0` when a server or
+Playwright is missing.
 
-The chat's model call is the one thing no suite exercises — gap 9.
+The chat's model call is the one thing no suite exercises — open work item 6.
 
-`scipy` is required by `test_ventilation` and `test_contract`. Two timing
+`scipy>=1.16.1` is required by `test_ventilation` and `test_contract` (the earlier `<1.14` ceiling had no Python 3.14 wheel). Two timing
 assertions use host-measured ratios rather than absolute wall-clock bounds, so they
 hold under parallel load.
 
@@ -180,323 +239,122 @@ Each of these is a design position, not an unfinished feature.
 
 ---
 
-## Gaps
-
-Fifteen items, ordered by what hurts a user first. Each states the issue and
-what closes it. Four (8, 11, 12, 15) are now marked *resolved* and kept in place
-so the numbering stays stable.
-
-### 1. No validated parameter card, and nothing estimates a user intervention's own numbers
-
-**The issue.** The brief puts a validated parameter object between "read scenario"
-and "calculate", and nothing of it exists. The numbers are scattered across the
-ledger and the stats dict: there is no single object carrying total site area,
-pond/wetland retained or removed, bare ground, explicit storage, soil group, or a
-source + date + confidence per assumption.
-
-The second half is what such an object is *for*. A user-written intervention is a
-hypothesis, and its numbers are not written down anywhere to be read — a basin's
-usable depth, the permeability of proposed paving, the area actually reworked — so
-something has to **estimate** them. Nothing does. `ai_plan` emits `params` for the
-operations (`multiplier`, `heightM`, `degrees`, `dx_m`/`dy_m`, `targetLon`/
-`targetLat`, `widthScale`/`depthScale`, `count`) and never a storage depth, a
-permeability or an area, so every intervention falls back to the fixed value in
-`INTERVENTION_EFFECTS`. The sink is wired and empty: `apply_interventions` reads
-`params.storageDepthM`, validates it against 0.05–10 m, and emits the per-cell
-storage override the run scores, while `run_service` renders the wet grid and the
-heat map from that same grid. So an estimated number moves the stats and both
-overlays at once. Today the instruction applies with none of it, no review step,
-and none of the runs that follow carry the "Preliminary, user-defined scenario"
-label the brief asks for.
-
-**What to do.** Add `parameter_card.py` plus an endpoint, cached on (plan ids +
-intervention hash) so a rainfall-only change reuses the land-cover half. The card
-is the container, and it holds two kinds of field: the **plan-level** figures (site
-area, soil group, pond and wetland retained or removed, bare ground, explicit
-storage) and the **per-intervention estimates** (location, footprint, land
-replaced, surface type, usable depth, overflow, vegetation), each carrying a
-source, a date and a confidence.
-
-Have `ai_plan` produce those estimates as the intervention's `params`, and return
-`questions[]` for the ones it cannot ground, so the card confirms and edits rather
-than asking from nothing. **The model supplies an assumption, never a result** —
-it states a depth, and the code multiplies it by the area it computed and keeps
-the arithmetic, which is the same boundary Decision 14 draws. Then label the run
-that follows.
-
-### 2. The project catalog is a placeholder
-
-**The issue.** Four projects, two phases each, and each phase is an English
-sentence piped through `ai_plan` — so placement is re-derived on every run and
-non-deterministic, with no fixed footprint, land-cover conversion or stated
-assumptions. A demo needs reproducible runs, and this makes every run different.
-
-**What to do.** Add `backend/data/projects.json`: fixed footprint rings, the
-land-cover conversion each implies, the assumed environmental changes, and a
-source / date / confidence per field. (`ProjectCatalog.tsx` already flags this in
-the panel rather than hiding it.)
-
-### 3. The base model is real footprints, not procedural blocks — done
-
-**The issue, resolved.** The 2,639 square placeholder envelopes are deleted. In
-their place, **396 real building footprints** (`buildings_hsk.json`) are extracted
-from Open3Dhk tiles fused with Overture, with heights from the 90th percentile of
-tile surface minus tile terrain, and the textured 3D Tiles meshes render at
-`buildings3DUrl`. `buildings_meta.json` carries the provenance
-(`DERIVED_FROM_OPEN3DHK_AND_OVERTURE`, footprint source, height rule, generated
-date). The heat/shade/SVF/wind analyses all read `buildings_hsk.json`, so every
-number is computed from measured geometry, not invented blocks.
-
-**Remaining (stage 2/3, not blocking stage 1).** Height is still a model (p90
-surface-minus-terrain), not a surveyed storey count — an honest limit, stated in
-`buildings_meta.heightSource`. A build-year/phase join (old CSDI `BDBIAR`) is now
-*possible* against real footprints but not yet done.
-
-### 4. An intervention is an axis-aligned slab, not a shaped object
-
-**The issue.** Two placeholders compound. **The footprint:** `extent_ring` and
-`_fraction_ring` both emit five-point axis-aligned rings, and `_clip_to_scope`
-states the assumption in its own docstring — so a reservoir is a bounding box
-extruded 14 m, not a basin. **The massing:** `STYLE_FOR_KIND` gives each kind a
-single `extrusionHeight` (reservoir 14 m, green space 6 m), so every proposal of a
-kind is the same slab — no rim, no depth profile, no concept object, where the
-brief asks for a "visual overlay or concept object" per suggestion.
-
-**What to do.** `_components` already computes the true cell mask; **contour it** so
-an intervention takes the shape of the ground it sits on. Then give each kind a
-massing profile — rim, depth profile, concept object — rather than one flat
-extrusion.
-
-### 5. AI suggestions are not generated, and Pin/Unpin does not exist
-
-**The issue.** The suggestion chips are hardcoded strings (`ChatPanel.tsx:57`) and
-a grep for `pin` returns zero hits anywhere.
-
-**What to do.** Add `suggest_interventions(run_result, grounding)` over the existing
-`reservoir_sites` / `green_sites` / `paving_sites` pools, returning 2–3 draft cards
-(name, type, footprint, why, required area, storage or cooling mechanism, evidence
-status). Add `pinned: bool` to `InterventionRow`, and drop unpinned + untoggled
-features on the next run.
-
-### 6. No one owns the natural-language → sandbox loop
-
-**The issue.** The loop the brief asks for — a planner types *"add this"*, *"turn
-this"*, *"remove this"* and the sandbox reflects it — has no owner end to end, and
-two of the three verbs have nothing behind them.
-
-`app/agent/chat_service.py` answers but exposes no tools ("no skills, no tools the
-model can call" is deliberate), and `POST /chat` / `POST /chat/stream` return a
-card and nothing else. NL → geometry *does* exist (`parse_massing_intent` →
-`massingOps` → `applyMassingOps`) but is reachable only via `POST
-/scenes/{id}/ai-plan`, so the chat panel and the geometry engine are unconnected.
-
-Then the vocabulary itself. It is seven ops — `scale_all`, `set_site`, `rotate`,
-`move`, `resize`, `place`, `reset` — and **not one of them removes anything**, so
-*"remove this"* cannot be expressed at all. And `place` adds a procedural massing
-envelope: the flat extrusion of gap 4, not a shaped object, so *"add this"*
-produces a slab where the brief asks for a concept object. The only glTF in the
-repo is the three hardcoded Khronos samples in `view/onlineProps.ts` — a loader,
-not a generator, and not connected to any instruction.
-
-**What to do.** Close the loop as one path. Expose the existing ops as
-chat-callable, so the op shape the panel's buttons emit is the same shape the model
-emits. Add the missing **`remove`** op — until it exists the vocabulary cannot say
-*"take this away"*, and the brief asks for removal as plainly as for addition. Make
-`place` build an object rather than extrude a slab (the per-kind profile is gap 4's
-half; the point here is that an addition is *shaped*).
-
-**The seam, so nothing waits.** An op already carries a `params` dict and
-`apply_interventions` already consumes it: a storage depth becomes the per-cell
-storage override, and an empty one falls back to the intervention kind's fixed
-value. So this path transports the numbers gap 1 estimates without depending on
-gap 1 — the loop applies whatever it is handed, and an op carrying no estimates
-behaves exactly as it does today. An addition that is generated rather than drawn
-lands labelled `draft_pending_human_review`, like every AI suggestion, so a
-generated object is honest as a proposal and never as existing state.
-
-**One op vocabulary serves all four cases** — existing buildings, project toggles,
-AI suggestions and generated objects — so this is one path, not four, and the op
-shape already exists. The manipulation ops are **target-agnostic**: they act on the
-massing, not on a pillar, so the loop is buildable and testable against today's
-model and does not wait on real footprints. That is what makes it the cheapest
-large win on this list.
-
-### 7. No water-pour animation
-
-**The issue.** The wet grid is a static PNG swap.
-
-**What to do.** Precompute ~6 frames at increasing volume and step them —
-terrain-based accumulation, clearly labelled as not a timing model.
-
-### 8. The heat field is now anchored to observed LST; the index weights are the residual
-
-**The issue, mostly resolved.** The heat overlay is no longer a hand-authored
-0–1 relative index. `temperature_field.py` anchors it to a real **Landsat 8/9
-LST surface-temperature scene** over the site (the 2022-09-03 scene, the only
-100 %-finite, ~1 %-cloud capture), resampled 30 m → 5 m, and expresses each
-cell's *deviation from the site mean* through the geometry terms — land class,
-sky-view, shade, and **wind shelter** (`cell_fad`, the frontal-area density for
-the prevailing NE wind). The result is a **°C surface-temperature field**, shown
-as an anomaly map (blue cooler / neutral average / red hotter), so a
-well-designed site reads near-neutral and only genuine hot spots go red.
-
-**What remains, stated honestly.** The `HEAT_INDEX` land-class *weights* are
-still hand-authored (only `green 0.64` is measured from the LST calibration) —
-but they now express the *relative* geometry delta, not the absolute field, so
-the unproven part is a small perturbation on an observed base. Air temperature
-is an *estimate* (surface minus a documented 12 °C offset), never a measurement,
-and there is still no wind-speed or surface-energy-balance term — wind shelter
-is geometry (FAD), not flow.
-
-### 9. The chat's model call is covered only by hand, and threads are not persisted
-
-**The issue.** `tests/test_agent.py` covers the pure half of `app/agent/` — number
-grounding and fact assembly — with no key and no network, but the provider client
-has no automated test: the LLM call itself is verified by hand against a live key.
-Threads are not stored either — run state is sent by the client per request
-(ADR-024), so a reload loses the thread.
-
-**What to do.** Add an automated test for the provider client (the real coverage
-hole). Thread persistence is a deliberate design choice rather than an oversight —
-either keep declaring it, or store the thread.
-
-### 10. The free tier is slow and throttled, and the fallback is slower
-
-**The issue.** Measured 40–55 s per answer. Google's pool returned `429 …
-limit_source=upstream_provider_shared_pool` for `gemma-4-31b-it:free`, so every
-live call fell through to `nemotron-3-ultra-550b-a55b:free`. Three mitigations are
-in place — `MAX_TOKENS=2000` (900 starved reasoning models: 382 thinking tokens,
-then `finish_reason=length` and a truncated card), one unstreamed retry when a
-stream yields nothing, and `LLM_FALLBACK_MODELS` — but a throttled primary still
-costs a wasted round trip before the rescue runs.
-
-**What to do.** A paid model id — a one-line `.env` change — removes all three
-problems.
-
-### 11. The outlet water-level condition is now a screening factor, not a hidden limit
-
-**The issue, mostly resolved.** `fill_and_spill` now takes a `tailwater_m`
-boundary condition: outlet cells (`receiver == -1`) pond up to the tailwater
-surface before spilling off-grid, so the cascade can answer "what if this rain
-hits at high tide". A Low/Mean/High tide toggle (HKO Quarry Bay, 0 / 1.4 /
-2.2 mCD) threads through the run, the stats, the sidecar and the frontend. The
-mechanism is verified: on a synthetic low-lying site, a 1.5 m tailwater holds
-back the full runoff volume that would otherwise discharge.
-
-**The honest finding.** The HSK / San Tin site is **landward** — the grid minimum
-is 3.41 m, above the 2.2 m high-tide tailwater — so tidal backwater has ~zero
-effect here (flood area is unchanged across low/mean/high). The feature is wired
-and tested but effectively inert in this demo, and that is stated, not hidden.
-
-**What remains.** True *outfall capacity* under storm surge needs pipe and
-outfall data the project does not have; that stays declared out of scope. The
-headline `bufferDeficitM3` stays on the level-pool path and deliberately did not
-move.
-
-### 12. The terrain is the real 5 m DTM; only the re-condition note remains
-
-**The issue, resolved.** The terrain is **not** ~90 m SRTM. `dem_hsk.npy` /
-`elevation_5m` are the real 5 m Open3Dhk / LandsD DTM (`terrain_source =
-open3dhk-tiles`, 117×148, 3.4–17.3 m), built by `scripts/tiles_to_rasters.py`
-from the `model/terrain(TB)/*.b3dm` tiles on disk. The earlier "~90 m SRTM"
-wording here was stale.
-
-**What remains, stated honestly.** It is the *surface* of the LandsD terrain-tile
-mesh, not a surveyed bare-earth DTM release. And a run re-solves the water level
-on the conditioned surface but does **not** re-condition it, so a DEM change
-needs `make_wetgrid.py` re-run (`make_wetgrid.py` writes the Priority-Flood
-conditioning and the D8 receiver once, ~9 s, offline).
-
-### 13. Storage is JSON files, not PostGIS
-
-**The issue.** The documented target store is not started; the seam is `app/db.py`
-and `scene_service.py` only.
-
-**What to do.** Implement the PostGIS store behind the existing seam. File mode
-already satisfies the same API contract, so this is a swap, not a rewrite.
-
-### 14. Coverage stops short of two view modules, and two known limits stand
-
-**The issue.** Unit coverage does not reach `view/onlineProps.ts` (the online 3D
-assets loader) or `view/interventionLayer.ts`; the 36 unit tests cover the DEM
-sampler, camera geometry, plan-scoping geometry, store reducers and the API error
-normaliser instead. Separately, and honestly so: Cesium's credit logo link has no
-accessible name (third-party markup `.cesium-credit-wrapper`, excluded rather than
-stripped, because removing it would break Cesium's attribution terms); and
-two-finger scroll does not pan in Cesium 3D (a cursor-anchored ground pan measured
-39 m for a 2 km request) and is disabled — left-drag pans instead.
-
-**What to do.** Add unit tests for the two view modules. Give the credit link an
-accessible name if it can be done without breaking the attribution terms. Keep the
-pan workaround documented.
-
-### 15. The temperature slider now sets the scenario mean, and says so
-
-**The issue, resolved.** The slider is no longer a silent display-stretch. It now
-sets the **scenario mean surface temperature (°C)** — the temperature analogue of
-the rainfall slider's intensity — and re-anchors the whole heatmap so its mean
-matches, with presets naming the **HKO heat warnings** (*Hot night* ≥28 °C air,
-*Very Hot Weather Warning* ≥33 °C, *Extreme heat* ≥35 °C) the way the rainfall
-buttons name the rainstorm signals. The spatial pattern (shade, green, wind
-shelter) still decides which cells are hotter or cooler than average, so a
-well-designed site reads near-neutral rather than "all red". The slider is
-labelled: it is surface (skin) temperature anchored to observed Landsat LST, air
-is estimated as ~12 °C lower, and it changes no rainfall or runoff figure —
-temperature still cannot drive SCS-CN without an evapotranspiration term the
-project does not have.
-
-**What remains.** Nothing blocking. The one honest caveat is already stated beside
-the slider: this is surface temperature, not air temperature, and the anomaly
-display is what makes it a *comparison* tool rather than a wall of red.
 
 ---
 
-## Who does what
+## Open work
 
-Three lanes. Each gap below is self-contained, so any lane can start without
-waiting on another.
+Each item is self-contained. Ordered by what blocks Stage 3 first.
 
-| Owner | Gaps | The lane |
-|---|---|---|
-| **Lia** | 4, 5, 6, 7, 14, 15 | The interface and the interaction |
-| **Chenxu** | 3, 8, 12 | The real 3D and geospatial data |
-| **Edwin** | 1, 2, 9, 10, 11, 13 | Model internals, storage and configuration |
+**Blocks Stage 3**
 
-### Lia — the interface and the interaction
+1. **The project catalog is a placeholder.** `ProjectCatalog.tsx` hardcodes four
+   projects whose phases are English sentences piped through `ai_plan` on click.
+   No fixed footprint, no land-cover conversion, no stated assumptions, and
+   placement is re-derived per click — so runs are not reproducible, which a
+   before/after demo requires. Close it with `backend/data/projects.json`:
+   footprint rings, the conversion each implies, source/date/confidence per field.
 
-- **4** — contour the intervention's true cell mask and give each kind a real
-  massing profile, so a reservoir is a basin and not a box.
-- **5** — generated suggestion cards and Pin/Unpin.
-- **6** — the natural-language → sandbox loop: chat-callable ops, the missing
-  `remove` op, and shaped additions.
-- **7** — the water-pour animation.
-- **14** — the two uncovered view modules, the credit-link accessible name, and the
-  documented pan limit.
-- **15** — the temperature slider: the constrained range, the 35 °C threshold marker,
-  and the label saying what the slider does and does not change.
+**Blocks a live link**
 
-### Chenxu — the real 3D and geospatial data
+2. **An intervention is an axis-aligned slab, not a shaped object.** `extent_ring`
+   and `_fraction_ring` emit five-point axis-aligned rings, and `STYLE_FOR_KIND`
+   gives each kind one `extrusionHeight` — so a reservoir is a box, not a basin.
+   `_components` already computes the true cell mask; contour it, then give each
+   kind a massing profile.
+3. **No suggestion engine and no Pin/Unpin.** The chips are hardcoded strings
+   (`ChatPanel.tsx`); a grep for `pin` returns zero hits. Add
+   `suggest_interventions(run_result, grounding)` over the existing
+   `reservoir_sites` / `green_sites` / `paving_sites` pools, and a `pinned: bool`
+   on `InterventionRow`.
+4. **The NL loop has no owner end to end.** NL → geometry exists but is reachable
+   only from the plan panel, and the vocabulary is massing-only with no `remove`,
+   so "remove this" cannot be expressed. Expose the ops as chat-callable, add
+   `remove`, and make an addition *shaped* rather than extruded.
+5. **No parameter card.** The brief puts a validated parameter object between
+   "read scenario" and "calculate"; nothing of it exists. The numbers are
+   scattered across the ledger and the stats dict, with no per-assumption source,
+   date or confidence. Nothing estimates a user intervention's *own* numbers
+   (usable depth, permeability, area reworked), so every intervention falls back
+   to a fixed value in `INTERVENTION_EFFECTS`. The sink is wired and empty:
+   `apply_interventions` already reads `params.storageDepthM`, validates
+   0.05–10 m, and emits the per-cell override the run scores. Add
+   `parameter_card.py` plus an endpoint, cached on (plan ids + intervention hash);
+   have `ai_plan` estimate the params and return `questions[]` for what it cannot
+   ground. **The model supplies an assumption, never a result.**
 
-- **3** — ingest and clean the real footprints (Overture and/or Open3Dhk's LandsD 3D
-  Digital Map), reproject to lon/lat, publish the **GeoJSON contract** with a
-  storeys-conditioned height, and replace the procedural massing generator so it
-  extrudes actual building shapes from those footprints instead of tiling squares.
-- **8** — the real Landsat LST scene over the site, which is the heat anchor, plus a
-  provenance pass on `HEAT_INDEX`.
-- **12** — the terrain is in place (real 5 m Open3Dhk / LandsD DTM); only the
-  residual caveat — it is the tile-mesh *surface*, not a surveyed bare-earth DTM —
-  needs a line in the pitch wording.
+**Configuration and environment**
 
-### Edwin — model internals, storage and configuration
+6. **The provider client has no automated test.** `test_agent.py` covers number
+   grounding and fact assembly with no key and no network; the LLM call itself is
+   verified only by hand.
+7. **A rate-limited provider costs a round trip.** The free tier is throttled and
+   slow. A 429 is now caught and reported, but only after the primary fails. A
+   paid model id — one `.env` line — removes it.
+8. **Storage is JSON files, not PostGIS.** The seam is `app/db.py` and
+   `scene_service.py` only, so this is a swap rather than a rewrite.
+9. **Two view modules have no unit coverage** — `view/onlineProps.ts` and
+   `view/interventionLayer.ts`. Separately: Cesium's credit logo link has no
+   accessible name (third-party markup, excluded rather than stripped, because
+   removing it would break Cesium's attribution terms).
 
-- **1** — the parameter card, and the estimate of a user intervention's own
-  numbers: the assumptions the run is scored on, with their provenance.
-- **2** — `projects.json`: fixed footprints and stated assumptions, so runs are
-  reproducible.
-- **9** — the provider-client test.
-- **10** — the paid model id.
-- **11** — the outlet water-level condition.
-- **13** — the PostGIS store behind the existing seam.
+**Not started, deliberately**
+
+10. **No water-pour animation.** The wet grid is a static PNG swap.
+11. **No `remove`/undo anywhere.** A planner can add but not take away.
+
+### Resolved — kept so the record is not lost
+
+These were open items on 13 Oct and are closed. They are kept in one short block
+rather than deleted, because each was a decision someone will otherwise re-litigate.
+
+**The `place` op is dormant, not deleted.** It is gone from the parser, the tool
+schema and `_massing_feature`, so no instruction can reach it; a model that emits
+one is refused. `scenario.apply_massing` still *scores* a `place` op handed to it
+directly through `POST /scenario/evaluate`, and `placement_footprints` still
+exists. That is a deliberate half-state: the front door is closed, the capability
+waits for Stage 4 to decide whether the massing vocabulary survives the NL
+rewrite at all.
+
+**The seeded and published artefacts are purged.** The derived-intervention seed,
+its plan, and the loose residue around them were authored against the retired
+786 ha extent and fell outside the current grid, scoring exactly zero — so the
+store now holds only the seeded scene and the baseline plan.
+
+**The terrain is the real 5 m DTM.** `dem_hsk.npy` is the Open3Dhk / LandsD tile
+surface (117 × 148, 3.4–17.3 m). It is the tile-mesh *surface*, not a surveyed
+bare-earth DTM release, and a run re-solves the water level on the conditioned
+surface without re-conditioning it — so a DEM change needs `make_wetgrid.py`
+re-run.
+
+**The base model is real footprints, not procedural blocks.** See "What works".
+
+**The heat weights are the residual, not the field.** `HEAT_INDEX`'s land-class
+weights stay hand-authored apart from `green 0.64`, which is calibrated from the
+LST scene. They perturb an observed base; they do not constitute it.
+
+**The temperature slider sets the scenario mean and says so.** The slider is no
+longer a silent display-stretch: it sets the mean surface temperature in °C,
+re-anchors the whole field so its mean matches, and carries HKO-named presets
+(*Hot night* ≥ 28 °C air, *Very Hot Weather Warning* ≥ 33 °C, *Extreme heat*
+≥ 35 °C) the way the rainfall buttons name the rainstorm signals. The spatial
+pattern still decides which cells are hotter or cooler, so a well-designed site
+reads near-neutral rather than "all red". It changes no rainfall or runoff figure
+— temperature cannot drive SCS-CN without an evapotranspiration term the project
+does not have.
+
+**The outlet water-level condition is a screening factor, not a hidden limit.**
+`fill_and_spill` takes a `tailwater_m` boundary condition, and a Low / Mean / High
+tide toggle (HKO Quarry Bay, 0 / 1.4 / 2.2 mCD) threads through the run, the stats,
+the sidecar and the frontend. **The honest finding: this site is landward** — the
+grid minimum is 3.41 m, above the 2.2 m high-tide surface — so tidal backwater has
+~zero effect here and flood area is unchanged across the three states. The feature
+is wired and tested and effectively inert in this window; say so rather than
+implying a tidal story.
+
+**The heat field is anchored to observed LST.** The base is the Landsat scene of
+2022-09-03, resampled 30 m → 5 m, so the absolute level is measured and the
+geometry terms only move a cell away from the site mean.
 
 ---
 
@@ -508,12 +366,13 @@ false.
 
 - **Generative 3D belongs on proposals, not on the existing district.** An
   AI-generated mesh is fiction, so it must not be presented as the current state of
-  HSK — the existing buildings have to come from measured data (gap 3).
-  Interventions are already labelled `draft_pending_human_review`, so a generated
-  glTF is honest there and dishonest as "what is there now".
+  HSK/HT — the existing buildings come from measured data. Interventions are
+  labelled `draft_pending_human_review`, so a generated glTF is honest there and
+  dishonest as "what is there now".
 - **The 3D city model is measured geometry, not generated massing.** The 396
   footprints are extracted from Open3Dhk tiles fused with Overture and keep their
   provenance disclosure; no generated mesh is ever presented as what is there now.
+  Heights are a 90th-percentile surface-minus-terrain, never "surveyed storeys".
 - **Rasters are generated artefacts.** Depths come from `wetgrid_hsk.npy`, not the
   PNG.
 - **The frontend has no unit test for the renderer's own correctness** beyond the
@@ -571,7 +430,7 @@ false.
   measuring the wrong thing.
 - **The chat explains a run; it never computes one.** `build_facts` reads the run
   result the planner is looking at and hands it over verbatim. Recomputing a
-  simulation inside a Q&A would turn a fast reply into a 0.7 s run *and* let the
+  simulation inside a Q&A would turn a fast reply into a full simulation run *and* let the
   answer drift from the numbers on screen. No new arithmetic in `app/agent/`.
 - **Grounding is code, never the model.** A card's numbers are checked against the
   facts by `grounding.check_card`, and a card that fails is either revised once or

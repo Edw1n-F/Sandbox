@@ -60,10 +60,12 @@ something:
 - **Three published CEDD programmes**, from the official Development Blueprint:
   First Phase ~19.6 ha, Second Phase Stage 2 ~200 ha, and all six Second Phase
   contracts ~253.5 ha. Which produced the most useful finding we have: **the
-  published Second Phase does not fit the land available.** Within our 786 ha
-  study area it is larger than the non-paved land remaining, and bare ground runs
-  out after 127 ha. That falls straight out of using CEDD's number instead of an
-  invented one.
+  published Second Phase does not fit the land available.** Measured on the
+  original ≈786 ha extent, it was larger than the non-paved land remaining, and
+  bare ground ran out after 127 ha. That falls straight out of using CEDD's number
+  instead of an invented one. On the current 43.5 ha window the programmes still
+  do not fit the available land (measured shortfalls 15.4, 193.7 and 247.2 ha),
+  but the 127 ha bare-ground figure above belongs to the old extent.
 - **Sea-level scenarios against the official projections** — HKO's SSP2-4.5
   37–82 cm and SSP5-8.5 57–108 cm ranges, cited and retrieved, with the honest
   result that none of them changes the deficit at this site and the reason why.
