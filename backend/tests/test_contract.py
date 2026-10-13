@@ -298,7 +298,7 @@ def _scene_with_model() -> str:
     scene_id = client.post(
         "/api/scenes", json={"name": "Stage 3-6 probe", "center": CENTER}
     ).json()["sceneId"]
-    scene_service.attach_overlay(scene_id, "city_model_path", "rasters/citymodel_hsk.json")
+    scene_service.attach_overlay(scene_id, "buildings_path", "rasters/buildings_hsk.json")
     return scene_id
 
 
@@ -554,7 +554,7 @@ def test_ventilation_keeps_its_preexisting_keys() -> None:
             f"unexpected key change: {sorted(set(body) ^ (_VENTILATION_PREEXISTING | {'corridors', 'fadRatio'}))}")
         # The pre-existing payload is still the untouched screening output.
         assert body["buildingCount"] == json.loads(
-            (BACKEND_DIR / "data" / "rasters" / "citymodel_meta.json").read_text(encoding="utf-8"))["features"]
+            (BACKEND_DIR / "data" / "rasters" / "buildings_meta.json").read_text(encoding="utf-8"))["features"]
         assert len(body["frontalAreaDensity"]["byDirection"]) == 16
         assert body["publishedReference"] is not None
         assert "corridors" in body and "fadRatio" in body

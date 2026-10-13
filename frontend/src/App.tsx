@@ -14,6 +14,7 @@
  */
 import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import Fab from '@mui/material/Fab'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
@@ -21,7 +22,6 @@ import Typography from '@mui/material/Typography'
 import AppErrorBoundary from './components/AppErrorBoundary'
 import ChatPanel from './components/ChatPanel'
 import LoadingScreen from './components/LoadingScreen'
-import LayerPanel from './components/LayerPanel'
 import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
@@ -32,6 +32,36 @@ import { useSceneStore } from './state/sceneStore'
 import SandboxViewer, { setPanelInsetLeft } from './view/SandboxViewer'
 
 const CHAT_WIDTH = 340
+
+function LayerToggles() {
+  const layers = useSceneStore((s) => s.layers)
+  const toggleLayer = useSceneStore((s) => s.toggleLayer)
+  const terrain = useSceneStore((s) => s.terrain)
+  const hasWet = Boolean(terrain?.wetGridUrl)
+  const hasHeat = Boolean(terrain?.heatmapUrl)
+  return (
+    <Stack direction="row" spacing={0.75}>
+      <Button
+        size="small"
+        variant={layers.wetGrid ? 'contained' : 'outlined'}
+        disabled={!hasWet}
+        onClick={() => toggleLayer('wetGrid')}
+        sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1 }}
+      >
+        Wet
+      </Button>
+      <Button
+        size="small"
+        variant={layers.heatmap ? 'contained' : 'outlined'}
+        disabled={!hasHeat}
+        onClick={() => toggleLayer('heatmap')}
+        sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1 }}
+      >
+        Heat
+      </Button>
+    </Stack>
+  )
+}
 
 export default function App() {
   const sceneId = import.meta.env.VITE_SCENE_ID ?? ''
@@ -82,8 +112,8 @@ export default function App() {
           display: 'flex', flexDirection: 'column', gap: 1.25, width: 300,
           pointerEvents: 'none',
         }}>
+          <LayerToggles />
           <SlidersPanel />
-          <LayerPanel />
           <Box sx={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', pointerEvents: 'auto' }}>
             <ProjectCatalog />
           </Box>

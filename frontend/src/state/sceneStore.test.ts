@@ -43,7 +43,6 @@ const reset = () => {
       wetGrid: false,
       heatmap: false,
       interventions: false,
-      cityModel: false,
       props: true,
       realBuildings: true,
       waterbody: true,
@@ -62,7 +61,6 @@ describe('layer toggles', () => {
     const after = useSceneStore.getState().layers
     expect(after.wetGrid).toBe(!before.wetGrid)
     expect(after.imagery).toBe(before.imagery)
-    expect(after.cityModel).toBe(before.cityModel)
   })
 
   it('replaces the object so subscribers see the change', () => {

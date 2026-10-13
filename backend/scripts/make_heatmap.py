@@ -81,7 +81,7 @@ def heat_index(land: np.ndarray) -> np.ndarray:
 
 def _load_city_model() -> list[dict] | None:
     """The procedural massing features, or None when they have not been built."""
-    path = settings.rasters_dir / "citymodel_hsk.json"
+    path = settings.rasters_dir / "buildings_hsk.json"
     if not path.exists():
         return None
     try:

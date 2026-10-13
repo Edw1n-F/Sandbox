@@ -35,7 +35,6 @@ from app.services.ai_plan import (
     MASSING_TOOL,
     OpenAICompatProvider,
     PlanGenerationError,
-    _cell_axes,
     _fraction_ring,
     _post_json,
     build_prompt,
@@ -558,7 +557,7 @@ def test_placement_avoids_the_blocks_that_already_exist() -> None:
     """
     from app.config import settings
 
-    path = settings.rasters_dir / "citymodel_hsk.json"
+    path = settings.rasters_dir / "buildings_hsk.json"
     if not path.exists():
         print("      (skipped: run make_citymodel.py first)")
         return

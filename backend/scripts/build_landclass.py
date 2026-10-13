@@ -5,7 +5,7 @@ Layers, lowest to highest priority:
   2. Sentinel-2 L2A NDVI / NDWI (Planetary Computer, median of the clearest scenes):
        NDVI >= 0.35 -> green;  NDWI >= 0.2 and NDVI < 0.1 -> water
   3. Tall non-building blobs from the tiles (tree_mask.npz) -> green
-  4. Real building footprints (citymodel_hsk.json) -> paved
+  4. Real building footprints (buildings_hsk.json) -> paved
 Writes data/landclass_hsk.npy (+ landcover_hsk.json provenance). Grid is 117 x 148, row 0 = north.
 """
 from __future__ import annotations
@@ -110,7 +110,7 @@ def main():
     cls[hit] = G
 
     # real buildings -> paved (rasterised in the grid's own lon/lat frame)
-    fc = json.load(open(DATA / "rasters" / "citymodel_hsk.json"))
+    fc = json.load(open(DATA / "rasters" / "buildings_hsk.json"))
     t = rasterio.transform.from_bounds(west, south, east, north, COLS, ROWS)
     b = rf.rasterize([(f["geometry"], 1) for f in fc["features"]], out_shape=(ROWS, COLS), transform=t,
                      fill=0, all_touched=True).astype(bool)
@@ -124,7 +124,7 @@ def main():
                  "fusion": {"base": "ESA WorldCover 10 m v200 (2021)",
                             "sentinel2": {"scenes": used, "ndviGreen": NDVI_GREEN, "ndwiWater": NDWI_WATER},
                             "trees": "tall non-building blobs from Open3Dhk tiles",
-                            "buildings": "citymodel_hsk.json footprints -> paved"},
+                            "buildings": "buildings_hsk.json footprints -> paved"},
                  "classCounts": {"before": before, "after": after}})
     (DATA / "landcover_hsk.json").write_text(json.dumps(meta, indent=2))
 

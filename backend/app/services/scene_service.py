@@ -100,9 +100,9 @@ def _scene_to_read(doc: dict[str, Any]) -> SceneRead:
     # `cityModelUrl` that is null on the scene but set on the terrain
     # endpoint is the kind of half-truth that breaks a different consumer
     # later. Same existence check, same meta helper.
-    read.city_model_url = _resolve_overlay_url(doc, "city_model_path")
-    read.city_model_meta = _city_model_meta()
-    read.city_model_3d_url = _resolve_model_3d_url(doc, "city_model_3d_path")
+    read.buildings_url = _resolve_overlay_url(doc, "buildings_path")
+    read.buildings_meta = _buildings_meta()
+    read.buildings_3d_url = _resolve_model_3d_url(doc, "buildings_3d_path")
     return read
 
 
@@ -393,16 +393,16 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_source=doc.get("terrain_source"),
         wet_grid_url=_resolve_overlay_url(doc, "wet_grid_path"),
         heatmap_url=_resolve_overlay_url(doc, "heatmap_path"),
-        city_model_url=_resolve_overlay_url(doc, "city_model_path"),
-        city_model_meta=_city_model_meta(),
-        city_model_3d_url=_resolve_model_3d_url(doc, "city_model_3d_path"),
+        buildings_url=_resolve_overlay_url(doc, "buildings_path"),
+        buildings_meta=_buildings_meta(),
+        buildings_3d_url=_resolve_model_3d_url(doc, "buildings_3d_path"),
         terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
         waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
         infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
     )
 
 
-def city_model_path(scene_id: str) -> Path | None:
+def buildings_path(scene_id: str) -> Path | None:
     """Absolute path to a scene's massing model, or None if it has no file.
 
     Distinct from the URL helper on purpose. The viewer wants a URL; a service
@@ -412,14 +412,14 @@ def city_model_path(scene_id: str) -> Path | None:
     doc = db.read_doc(db.scene_path(scene_id))
     if doc is None:
         return None
-    rel = doc.get("city_model_path")
+    rel = doc.get("buildings_path")
     if not rel:
         return None
     absolute = settings.data_dir / rel
     return absolute if absolute.exists() else None
 
 
-def _city_model_meta() -> dict[str, Any] | None:
+def _buildings_meta() -> dict[str, Any] | None:
     """Provenance for the 3D massing model, or None when it has not been built.
 
     The status string is deliberately blunt. These are massing envelopes derived
@@ -427,7 +427,7 @@ def _city_model_meta() -> dict[str, Any] | None:
     buildings -- and the viewer shows this rather than presenting a skyline as
     if it were measured.
     """
-    path = settings.rasters_dir / "citymodel_meta.json"
+    path = settings.rasters_dir / "buildings_meta.json"
     if not path.exists():
         return None
     try:

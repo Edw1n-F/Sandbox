@@ -59,18 +59,13 @@ export interface TerrainMeta {
   terrainSource?: string | null
   wetGridUrl?: string | null
   heatmapUrl?: string | null
-  /**
-   * 3D massing envelopes, plus their provenance. `status` is deliberately blunt
-   * -- these are procedural massing derived from land cover, not surveyed
-   * buildings -- and the panel shows it rather than letting a skyline imply
-   * otherwise.
-   */
-  cityModelUrl?: string | null
-  cityModelMeta?: CityModelMeta | null
+  /** Building footprint GeoJSON (kept for backend analysis; not rendered as pillars). */
+  buildingsUrl?: string | null
+  buildingsMeta?: BuildingsMeta | null
   /** Real 3D Tiles tileset with textured meshes from 6-NW-12D. */
-  cityModel3DUrl?: string | null
+  buildings3DUrl?: string | null
   /** Alias: the API serialises as camelCase; accept both spellings. */
-  cityModel3dUrl?: string | null
+  buildings3dUrl?: string | null
   /** Visual terrain mesh from 6-NW-12D terrain(TB) 3D Tiles. */
   terrain3DUrl?: string | null
   waterbodyUrl?: string | null
@@ -145,11 +140,6 @@ export interface LayerVisibility {  imagery: boolean
    * (ADR-032). Separate switch for that reason, not for presentation.
    */
   interventions: boolean
-  /**
-   * The 3D massing model. On by default, because an intervention floating over
-   * empty grass gives the user nothing to judge it against.
-   */
-  cityModel: boolean
   /** Online glTF assets fetched from the Khronos sample set. */
   props: boolean
   /** Real 3D buildings from 6-NW-12D 3D Tiles (textured meshes). */
@@ -263,8 +253,8 @@ export interface RunResult {
   warning: string
 }
 
-/** Provenance for the 3D massing model, as served alongside the rasters. */
-export interface CityModelMeta {
+/** Provenance for the building footprint GeoJSON. */
+export interface BuildingsMeta {
   status: string
   features: number
   heightM: { min: number; max: number; mean: number }

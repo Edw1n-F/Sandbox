@@ -8,11 +8,9 @@
  *
  * ## What it deliberately does not change
  *
- * **No data, and no claim.** The tactical mode re-renders the *same* provisional
- * massing envelopes produced by the *same* generator. It is a different way of
- * looking at a provisional model, so the panel keeps the `provisional` chip in
- * both modes and the legend says what the ramp means. A prettier renderer is not
- * a better dataset, and this project has already been burned by that confusion.
+ * **No data, and no claim.** Tactical mode re-styles the same real 3D Tiles
+ * buildings and basemap. A prettier renderer is not a better dataset, and this
+ * project has already been burned by that confusion.
  *
  * ## Why the scene, and not just the buildings
  *
@@ -43,11 +41,11 @@ export type { ViewMode }
 export const VIEW_MODES: Record<ViewMode, { label: string; blurb: string }> = {
   survey: {
     label: 'Survey',
-    blurb: 'Daylight basemap, lit envelopes. For reading the plan.',
+    blurb: 'Daylight basemap, real buildings. For reading the plan.',
   },
   tactical: {
     label: 'Tactical',
-    blurb: 'Dark instrument view. Envelopes traced in neon, coloured by height.',
+    blurb: 'Dark instrument view. Real buildings and terrain traced in neon.',
   },
 }
 

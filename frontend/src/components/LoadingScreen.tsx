@@ -32,7 +32,7 @@ export default function LoadingScreen() {
 
   const expected: TilesetName[] = []
   if (terrain?.terrain3DUrl) expected.push('terrain')
-  if (terrain?.cityModel3DUrl ?? terrain?.cityModel3dUrl) expected.push('buildings')
+  if (terrain?.buildings3DUrl ?? terrain?.buildings3dUrl) expected.push('buildings')
 
   const settled = (n: TilesetName) => status[n] === 'ready' || status[n] === 'failed'
   const waitingOn = expected.filter((n) => !settled(n))

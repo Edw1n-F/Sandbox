@@ -6,9 +6,9 @@
  * `camera.flyTo({ destination: rectangle })` frames a `Rectangle` by putting the
  * camera directly above its centre, looking straight down. Cesium offers no
  * alternative: a rectangle carries no orientation, so the fit is always nadir. For a
- * flood-exposure raster that is the right answer. For a city model it is the wrong
- * one -- pitch -90 deg over 34 m envelopes on 139 m of relief renders a skyline as
- * 2,639 grey squares, which is exactly how the sandbox read before this file existed:
+ * flood-exposure raster that is the right answer. For a city it is the wrong
+ * one -- pitch -90 deg over real buildings on 139 m of relief renders a skyline as
+ * flat rectangles, which is exactly how the sandbox read before this file existed:
  * a flat map with no visible third dimension in it.
  *
  * So the bbox is framed as a bounding sphere instead, with a chosen heading and a
@@ -35,7 +35,7 @@ import {
   type Viewer,
 } from 'cesium'
 
-/** Metres per degree of latitude. The same figure `cityModel.ts` rotates in. */
+/** Metres per degree of latitude. Used to size the study-area framing sphere. */
 const M_PER_DEG_LAT = 110_574
 
 const DEG = Math.PI / 180

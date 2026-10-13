@@ -50,15 +50,6 @@ The model supplies a *name* or an opaque id. It never supplies a coordinate, so
 the guarantee that made site selection safe survives the addition of spatial
 scope: **the model chooses where to point, the data decides where that is.**
 
-## Placement: new massing, on land the analysis says is built up
-
-``place`` is the other half of the capability. The footprints are generated here,
-by :func:`placement_footprints`, from the same ESA WorldCover ``paved`` mask and
-the same block pitch ``make_citymodel.py`` uses -- and they avoid the cells the
-existing envelopes already occupy, so a new tower lands on unbuilt paved land
-rather than inside an existing block. The model chooses a count, a height and a
-scope; the land cover chooses the coordinates.
-
 ## Two providers, and why
 
 ``ANTHROPIC_API_KEY`` decides which runs. Both produce the same structures.
@@ -440,24 +431,19 @@ def resolve_scope(hint: str | None, site_id: str | None,
     }
 
 
-# --------------------------------------------------------------------------- #
-# Placement: new massing on land the analysis says is built up
-# --------------------------------------------------------------------------- #
-
-# Hong Kong residential floor-to-floor. The same figure make_citymodel.py uses;
-# a storey count in a prompt is converted with it so the model can think in
-# storeys, which is how the planning conversation actually goes.
+# Hong Kong residential floor-to-floor. A storey count in a prompt is converted
+# with it so the model can think in storeys, which is how the planning
+# conversation actually goes.
 STOREY_M = 3.1
-DEFAULT_PLACEMENT_HEIGHT_M = 45.0
-MAX_PLACEMENTS = 12
-
-_OCCUPANCY_CACHE: dict[str, Any] = {}
 
 
 def _point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
-    """Ray casting. The rings here are 5-point rectangles, but a site polygon
-    from ``_components`` is a bounding box too -- so this stays correct if either
-    ever becomes a real outline."""
+    """Ray-casting point-in-polygon, shared with ``scenario._land_class_after``.
+
+    The rings here are 5-point rectangles, but a site polygon from
+    ``_components`` is a bounding box too -- so this stays correct if either ever
+    becomes a real outline.
+    """
     inside = False
     n = len(ring)
     for i in range(n - 1):
@@ -468,184 +454,6 @@ def _point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
             if lon < crossing:
                 inside = not inside
     return inside
-
-
-def _cell_axes(ov: Any) -> tuple[float, float]:
-    """Cell size in degrees, matching make_citymodel.py's convention."""
-    import math
-
-    lon_min, lat_min, _, lat_max = ov.bounds
-    cw = float(ov.grid["cell_width_m"]) / (
-        111_320.0 * math.cos(math.radians((lat_min + lat_max) / 2))
-    )
-    return cw, float(ov.grid["cell_height_m"]) / 110_574.0
-
-
-def _occupied_mask(ov: Any) -> Any:
-    """Cells already carrying a massing envelope, so a new block does not land
-    inside an existing one.
-
-    Read from the committed city model rather than recomputed, so placement and
-    the model on screen cannot disagree about where the existing blocks are.
-    """
-    import numpy as np
-
-    if "mask" in _OCCUPANCY_CACHE:
-        return _OCCUPANCY_CACHE["mask"]
-
-    mask = np.zeros((ov.rows, ov.cols), dtype=bool)
-    path = settings.rasters_dir / "citymodel_hsk.json"
-    if path.exists():
-        try:
-            collection = json.loads(path.read_text(encoding="utf-8"))
-        except ValueError:
-            collection = {}
-        cw, ch = _cell_axes(ov)
-        lon_min, _, _, lat_max = ov.bounds
-        for feature in collection.get("features", []):
-            ring = (feature.get("geometry") or {}).get("coordinates", [[]])[0]
-            if len(ring) < 4:
-                continue
-            west = min(p[0] for p in ring)
-            east = max(p[0] for p in ring)
-            south = min(p[1] for p in ring)
-            north = max(p[1] for p in ring)
-            c0 = max(0, int((west - lon_min) / cw))
-            c1 = min(ov.cols - 1, int((east - lon_min) / cw))
-            r0 = max(0, int((lat_max - north) / ch))
-            r1 = min(ov.rows - 1, int((lat_max - south) / ch))
-            for r in range(r0, r1 + 1):
-                lat = lat_max - (r + 0.5) * ch
-                for c in range(c0, c1 + 1):
-                    lon = lon_min + (c + 0.5) * cw
-                    if _point_in_ring(lon, lat, ring):
-                        mask[r, c] = True
-    _OCCUPANCY_CACHE["mask"] = mask
-    return mask
-
-
-def placement_footprints(scope_ring: list[list[float]], count: int,
-                          grounding: Grounding) -> list[dict[str, Any]]:
-    """Generate `count` new massing footprints inside `scope_ring`.
-
-    The geometry comes from the ESA WorldCover ``paved`` class and the same block
-    pitch ``make_citymodel.py`` uses, so a placed block is indistinguishable in
-    kind from a generated one. Cells already occupied by an existing envelope are
-    excluded, so placement adds to the district instead of stacking on it; if
-    that leaves nothing -- a fully built scope -- the occupied filter is dropped
-    rather than returning an empty proposal, and the caller records that it did.
-
-    Nothing here reads a coordinate from the model. The model said *how many*,
-    *how tall* and roughly *where*; this function decided where that is.
-    """
-    import numpy as np
-
-    ov = grounding.overlay
-    if ov is None or count <= 0:
-        return []
-
-    from make_citymodel import build_blocks
-
-    cw, ch = _cell_axes(ov)
-    lon_min, _, _, lat_max = ov.bounds
-
-    west = min(p[0] for p in scope_ring)
-    east = max(p[0] for p in scope_ring)
-    south = min(p[1] for p in scope_ring)
-    north = max(p[1] for p in scope_ring)
-
-    c0 = max(0, int((west - lon_min) / cw))
-    c1 = min(ov.cols - 1, int((east - lon_min) / cw))
-    r0 = max(0, int((lat_max - north) / ch))
-    r1 = min(ov.rows - 1, int((lat_max - south) / ch))
-    if r1 < r0 or c1 < c0:
-        return []
-
-    paved = ov.class_mask("paved")
-    # A FULL-grid mask, not a slice of one. build_blocks() derives each block's
-    # coordinates from the grid origin it is handed, so passing a slice makes it
-    # place every block at the slice's row/column offset from the study-area
-    # origin -- plausible-looking geometry in the wrong half of the map.
-    free = np.ones_like(paved)
-    free[:r0, :] = False
-    free[r1 + 1:, :] = False
-    free[:, :c0] = False
-    free[:, c1 + 1:] = False
-    in_scope = paved & free
-    if not in_scope.any():
-        return []
-
-    occupied = _occupied_mask(ov)
-    candidates: list[dict[str, Any]] = []
-    for label, mask in (
-        ("unbuilt paved land", in_scope & ~occupied),
-        ("paved land (existing envelopes excluded where possible)", in_scope),
-    ):
-        if not mask.any():
-            continue
-        # Same generator the city model uses, on a scope-masked array, so the
-        # block definition -- pitch, minimum size, built-up threshold -- is
-        # literally the same code and cannot drift from what is on screen.
-        candidates = build_blocks(mask, cw, ch, lon_min, lat_max, seed=7)
-        if candidates:
-            picked = _pick_placements(candidates, count, label, scope_ring)
-            if picked:
-                return picked
-
-    return []
-
-
-def _clip_to_scope(ring: list[list[float]], scope: list[list[float]]) -> list[list[float]] | None:
-    """Intersect a generated footprint with the scope it was generated in.
-
-    A candidate block only has to be *mostly* built up, so one sitting near a
-    scope edge can overhang it by up to a block width -- 30 m of tower standing
-    outside the region the request named. Clipping to the intersection keeps the
-    promise the scope makes.
-
-    Both shapes are axis-aligned rectangles by construction (`_fraction_ring` and
-    `extent_ring` both emit one), so the intersection is a rectangle and this is
-    arithmetic. A genuinely irregular scope would need Sutherland-Hodgman here,
-    and the assumption is stated rather than assumed silently.
-    """
-    w = max(min(p[0] for p in scope), min(p[0] for p in ring))
-    e = min(max(p[0] for p in scope), max(p[0] for p in ring))
-    s = max(min(p[1] for p in scope), min(p[1] for p in ring))
-    n = min(max(p[1] for p in scope), max(p[1] for p in ring))
-    if e - w <= 1e-9 or n - s <= 1e-9:
-        return None
-    r = lambda v: round(v, 7)  # noqa: E731
-    w, e, s, n = r(w), r(e), r(s), r(n)
-    return [[w, s], [e, s], [e, n], [w, n], [w, s]]
-
-
-def _pick_placements(candidates: list[dict[str, Any]], count: int, basis: str,
-                     scope: list[list[float]]) -> list[dict[str, Any]]:
-    """Choose `count` candidate blocks, spread across the scope.
-
-    Evenly spaced through the generator's row-major output rather than the first
-    N: `build_blocks` walks the grid south to north, so taking a prefix would put
-    every new tower in one corner of the region the model asked about.
-    """
-    count = min(int(count), MAX_PLACEMENTS, len(candidates))
-    if count <= 0:
-        return []
-    step = len(candidates) / count
-    out: list[dict[str, Any]] = []
-    for i in range(count):
-        block = candidates[int(i * step)]
-        ring = _clip_to_scope(block["geometry"]["coordinates"][0], scope)
-        if ring is None:
-            continue
-        out.append({
-            "id": f"ai-bldg-{len(out):02d}",
-            "ring": ring,
-            "storeys": block["properties"].get("storeys"),
-            "landClass": "paved (ESA WorldCover)",
-            "basis": basis,
-            "footprintSource": "derived from ESA WorldCover paved class, unbuilt cells",
-        })
-    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -676,8 +484,7 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     that was never offered returns None rather than a plausible-looking default.
     """
     op = str(_pick(edit, "op") or "")
-    if op not in ("scale_all", "set_site", "reset", "rotate", "place", "move",
-                  "resize"):
+    if op not in ("scale_all", "set_site", "reset", "rotate", "move", "resize"):
         return None
 
     scope = resolve_scope(
@@ -799,7 +606,6 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
             if s is not None and not 0.1 <= s <= 10.0:
                 return None
 
-    placements: list[dict[str, Any]] = []
     params["multiplier"] = multiplier
     params["heightM"] = height
     params["deltaM"] = delta
@@ -811,47 +617,17 @@ def _massing_feature(edit: dict[str, Any], grounding: Grounding,
     params["widthScale"] = width_scale
     params["depthScale"] = depth_scale
 
-    if op == "place":
-        # A placed block's height is the instruction's height, defaulting to a
-        # stated 45 m -- and it has to be written *after* the generic assignment
-        # above, or a `place` with no stated height records None and the panel
-        # reports a tower of no height at all.
-        height_m = height if height is not None else DEFAULT_PLACEMENT_HEIGHT_M
-        if not 6.0 <= height_m <= 400.0:
-            return None
-        placements = placement_footprints(scope["ring"], count or 2, grounding)
-        if not placements:
-            # No built-up land in scope. Saying so beats placing a tower in a
-            # field, and beats returning a feature that would render nothing.
-            return None
-        for block in placements:
-            block["heightM"] = round(float(height_m), 1)
-        params["count"] = len(placements)
-        params["requestedCount"] = int(count or 2)
-        params["heightM"] = round(float(height_m), 1)
-        params["basis"] = (
-            f"new massing on {placements[0]['basis']} within {scope['label']}"
-        )
-        params["note"] = (
-            "Adds real, editable footprints on land the analysis classifies as "
-            "built up. Footprints are generated from ESA WorldCover, not surveyed; "
-            "the height is as instructed."
-        )
-
-    if placements:
-        params["placements"] = placements
     # Carried for provenance: the deterministic parser says which readings were
     # defaults, so a demo cannot present a guess as something that was asked for.
     for flag in ("countDefaulted", "heightDefaulted", "angleDefaulted"):
         if edit.get(flag):
             params[flag] = True
-    if op != "place":
-        params["note"] = (
-            "Annotates the existing procedural massing. Adds no building and "
-            "returns no coordinate. 'resize' changes the footprint size; 'move' "
-            "with targetLon/targetLat repositions to a stated coordinate inside "
-            "the study area."
-        )
+    params["note"] = (
+        "Annotates the existing massing. Adds no building and "
+        "returns no coordinate. 'resize' changes the footprint size; 'move' "
+        "with targetLon/targetLat repositions to a stated coordinate inside "
+        "the study area."
+    )
 
     return {
         "geometry": {"type": "Polygon", "coordinates": [scope["ring"]]},
@@ -988,18 +764,6 @@ RESIZE_PERCENT = re.compile(
 ROTATE_VERB = r"\b(rotate|rotating|rotated|turn|twist|reorient|reorienting|re-?align)"
 ANGLE_RE = re.compile(r"(\d{1,3})\s*(?:deg|degree|degrees|\u00b0)")
 
-# A placement noun must be accompanied by a verb that *creates* something.
-# Without the verb requirement, "make the buildings 25% taller" would also read
-# as "place 2 buildings", which is how one sentence produced two operations that
-# contradicted each other. Note that bare "block" is not a noun here: "the
-# largest open blocks" is site-selection language, not a request for towers.
-PLACE_NOUN_RE = re.compile(
-    r"\b(towers?|high-?rises?|highrises?|skyscrapers?|residential|housing|"
-    r"apartments?|flats?|buildings?|podiums?|schools?|hospitals?)\b"
-)
-PLACE_VERB_RE = re.compile(
-    r"\b(add|place|build|put|insert|create|introduce|propose|erect|develop|deploy)\b"
-)
 STOREYS_RE = re.compile(r"(\d{1,2})\s*(?:storey|storeys|story|stories|floors?)\b")
 METRES_RE = re.compile(r"(\d{1,3}(?:\.\d+)?)\s*(?:m\b|metres?\b|meters?\b)")
 COUNT_WORDS = {
@@ -1125,21 +889,6 @@ def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
                 "distanceM": distance,
                 "scope": scope,
             })
-
-    # --- place: new massing -------------------------------------------------- #
-    noun = PLACE_NOUN_RE.search(text)
-    if noun and PLACE_VERB_RE.search(text):
-        count = _count_before(text, noun.start())
-        height, from_storeys = _height_in_metres(text)
-        ops.append({
-            "op": "place",
-            "count": count if count else 2,
-            "countDefaulted": count is None,
-            "heightM": height if height is not None else DEFAULT_PLACEMENT_HEIGHT_M,
-            "heightDefaulted": height is None,
-            "heightFromStoreys": from_storeys,
-            "scope": scope,
-        })
 
     # --- set an absolute height, or a change by a number of metres ----------- #
     # "30 m taller" is a delta and "60 m tall" is an absolute height. Reading the
@@ -1381,14 +1130,13 @@ FIT_TOOL = {
 MASSING_TOOL = {
     "name": "modify_massing",
     "description": (
-        "Place new massing, or modify the height/orientation of the EXISTING 3D "
-        "massing model. Use this whenever the instruction is about buildings: "
-        "height, a height multiplier, density, orientation, or adding new blocks. "
-        "It never returns geometry and never invents buildings -- 'place' adds "
-        "real footprints that the system derives from the land cover, and the "
-        "other operations adjust entities that already exist. Always set 'scope' "
-        "so the edit lands where the instruction says, or 'site_id' when the "
-        "instruction points at one of the listed candidate sites."
+        "Modify the height/orientation of the EXISTING 3D massing model. Use "
+        "this whenever the instruction is about buildings: height, a height "
+        "multiplier, density, or orientation. It never returns geometry and "
+        "never invents buildings -- the operations adjust entities that already "
+        "exist. Always set 'scope' so the edit lands where the instruction says, "
+        "or 'site_id' when the instruction points at one of the listed candidate "
+        "sites."
     ),
     "input_schema": {
         "type": "object",
@@ -1400,12 +1148,12 @@ MASSING_TOOL = {
                     "properties": {
                         "op": {
                             "type": "string",
-                            "enum": ["scale_all", "set_site", "rotate", "place",
+                            "enum": ["scale_all", "set_site", "rotate",
                                      "move", "reset", "resize"],
                             "description": (
                                 "scale_all: multiply heights. set_site: set or "
-                                "shift heights. rotate: turn the blocks. place: "
-                                "add new massing. move: translate the blocks. "
+                                "shift heights. rotate: turn the blocks. "
+                                "move: translate the blocks. "
                                 "reset: restore generated heights and orientations. "
                                 "resize: scale footprint width and/or depth."
                             ),
@@ -1434,8 +1182,7 @@ MASSING_TOOL = {
                         "height_m": {
                             "type": "number", "minimum": 1, "maximum": 400,
                             "description": (
-                                "Absolute height in metres. For set_site and for "
-                                "the height of a placed block."
+                                "Absolute height in metres. For set_site."
                             ),
                         },
                         "delta_m": {
@@ -1448,10 +1195,6 @@ MASSING_TOOL = {
                         "degrees": {
                             "type": "number", "minimum": -180, "maximum": 180,
                             "description": "Clockwise rotation for rotate.",
-                        },
-                        "count": {
-                            "type": "integer", "minimum": 1, "maximum": 12,
-                            "description": "How many new blocks for place.",
                         },
                         "direction": {
                             "type": "string",
@@ -1848,10 +1591,10 @@ def _massing_edits(args: dict) -> list[dict]:
 
     The schema says ``{"edits": [ ... ]}`` and a large model complies. A small
     local one reliably answers with the operation *itself* --
-    ``{"op": "place", "count": 3, "scope": "east"}`` -- dropping the one-element
-    array wrapper. Reading ``args["edits"]`` alone therefore found nothing and the
-    instruction produced zero features: a working model, a correct answer, and a
-    silent discard.
+    ``{"op": "scale_all", "multiplier": 1.2, "scope": "east"}`` -- dropping the
+    one-element array wrapper. Reading ``args["edits"]`` alone therefore found
+    nothing and the instruction produced zero features: a working model, a correct
+    answer, and a silent discard.
     """
     edits = args.get("edits")
     if isinstance(edits, list) and edits:

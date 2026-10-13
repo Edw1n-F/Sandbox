@@ -114,7 +114,7 @@ def main() -> int:
               any("NOT a velocity ratio" in w for w in ref["whatThisIsNot"]), "")
 
     # --- the screening, on the real district --- #
-    model = BACKEND_DIR / "data" / "rasters" / "citymodel_hsk.json"
+    model = BACKEND_DIR / "data" / "rasters" / "buildings_hsk.json"
     features = json.loads(model.read_text())["features"]
     fps = []
     for f in features:

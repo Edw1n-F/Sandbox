@@ -3,8 +3,8 @@
  *
  * One dark "mission-control" design language for every surface: near-black
  * translucent panels, hairline dividers, uppercase monospace micro-labels, and
- * the four signal colours the 3D tactical renderer already uses (TECH_STATES in
- * techMaterial.ts) so the 2D chrome and the 3D scene speak the same palette.
+ * the four signal colours used in the tactical view so the 2D chrome and the 3D
+ * scene speak the same palette.
  *
  * System font stacks, deliberately: a demo must survive a machine with no
  * network, and webfont loading on a full-bleed canvas is a flash of nothing.

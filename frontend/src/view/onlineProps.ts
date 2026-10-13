@@ -17,9 +17,9 @@
  * ## What this layer is for
  *
  * It proves the glTF path end to end -- fetch, parse, place, transform -- and it
- * gives the sandbox movable props. It is *not* a city model: those come from
- * `cityModel.ts`, because a glTF mesh is opaque to per-feature edits and
- * changing geometry is the point here.
+ * gives the sandbox movable props. It is *not* the building layer: that comes
+ * from the real 3D Tiles tileset, because a glTF mesh is opaque to per-feature
+ * edits and changing geometry is the point here.
  */
 import {
   Cartesian3,

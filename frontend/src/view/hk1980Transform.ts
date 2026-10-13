@@ -1,7 +1,7 @@
 /**
  * HK1980 Grid (EPSG:2326) → ECEF transform for self-hosted 3D Tiles.
  *
- * The city_model and terrain(TB) tilesets have no root.transform: their
+ * The buildings and terrain(TB) tilesets have no root.transform: their
  * bounding volumes and vertex coordinates are in HK1980 metre grid (E, N, Z).
  * Cesium treats those as ECEF (≈ 817 km from Earth centre), so every tileset
  * needs a modelMatrix that maps HK1980 local space to ECEF.

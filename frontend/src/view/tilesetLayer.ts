@@ -1,9 +1,9 @@
 /**
  * 3D Tiles layer — real textured building meshes and terrain from 6-NW-12D.
  *
- * The new city_model and terrain(TB) tilesets carry no root.transform (their
- * vertices are in HK1980 metre grid).  Pass a modelMatrix from hk1980Transform
- * so Cesium positions them correctly in ECEF.
+ * The buildings and terrain(TB) tilesets carry no root.transform (their vertices
+ * are in HK1980 metre grid).  Pass a modelMatrix from hk1980Transform so Cesium
+ * positions them correctly in ECEF.
  */
 import { Cesium3DTileset, Matrix4, type Viewer } from 'cesium'
 
@@ -62,9 +62,9 @@ export async function add3DTileset(
       // Keep a parent visible until all its children are ready (no holes while
       // refining) and do not skip levels, so detail steps up one tier at a time.
       skipLevelOfDetail: false,
-      // The 300 MB city model needs room before tiles get evicted and re-fetched,
-      // which reads as flicker when orbiting.
-      cacheBytes: 768 * 1024 * 1024,
+    // The real building tileset needs room before tiles get evicted and
+    // re-fetched, which reads as flicker when orbiting.
+    cacheBytes: 768 * 1024 * 1024,
       maximumCacheOverflowBytes: 512 * 1024 * 1024,
     })
     if (viewer.isDestroyed()) {

@@ -216,11 +216,11 @@ def get_building_fit(
             ),
         )
 
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     if not model or not Path(model).exists():
         raise HTTPException(
             status_code=422,
-            detail="this scene has no city model; run scripts/make_citymodel.py",
+            detail="this scene has no building footprints; run scripts/build_buildings.py",
         )
 
     features = json.loads(Path(model).read_text()).get("features", [])
@@ -459,10 +459,10 @@ def get_ventilation(scene_id: str) -> dict:
 
     scene_service.get_scene(scene_id)
 
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     if not model:
         raise HTTPException(status_code=422,
-                            detail="this scene has no city model; run scripts/make_citymodel.py")
+                            detail="this scene has no building footprints; run scripts/build_buildings.py")
 
     doc = json.loads(model.read_text())
     features = doc.get("features", [])
@@ -607,11 +607,11 @@ def get_design_metrics(scene_id: str, day_of_year: int = 355,
                     "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
         )
 
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     if not model:
         raise HTTPException(
             status_code=422,
-            detail="this scene has no city model; run scripts/make_citymodel.py",
+            detail="this scene has no building footprints; run scripts/build_buildings.py",
         )
 
     features = json.loads(model.read_text()).get("features", [])
@@ -742,10 +742,10 @@ def post_scenario_evaluate(scene_id: str, body: dict) -> dict:
             detail=("no analysis on disk: run scripts/fetch_dem.py, "
                     "scripts/fetch_landcover.py and scripts/make_wetgrid.py"))
 
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     if not model:
         raise HTTPException(status_code=422,
-                            detail="this scene has no city model; run scripts/make_citymodel.py")
+                            detail="this scene has no building footprints; run scripts/build_buildings.py")
     features = json.loads(model.read_text()).get("features", [])
 
     raw_ops = body.get("massingOps") or []
@@ -801,13 +801,13 @@ def _require_grids():
     return grids
 
 
-def _require_city_model(scene_id: str) -> list[dict]:
+def _require_buildings(scene_id: str) -> list[dict]:
     """The scene's city-model features, or the standard 422/404 refusal."""
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     if not model:
         raise HTTPException(
             status_code=422,
-            detail="this scene has no city model; run scripts/make_citymodel.py",
+            detail="this scene has no building footprints; run scripts/build_buildings.py",
         )
     features = json.loads(Path(model).read_text()).get("features", [])
     if not features:
@@ -847,7 +847,7 @@ def post_scenario_compare(scene_id: str, body: dict) -> dict:
 
     scene_service.get_scene(scene_id)
     grids = _require_grids()
-    features = _require_city_model(scene_id)
+    features = _require_buildings(scene_id)
 
     raw_scenarios = body.get("scenarios")
     if not isinstance(raw_scenarios, list) or not raw_scenarios:
@@ -973,7 +973,7 @@ def get_heat_field(scene_id: str, day_of_year: int = HEAT_SUMMER_DAY_OF_YEAR,
 
     scene_service.get_scene(scene_id)
     grids = _require_grids()
-    features = _require_city_model(scene_id)
+    features = _require_buildings(scene_id)
 
     try:
         parsed = [int(h) for h in hours.split(",") if h.strip()]
@@ -1020,7 +1020,7 @@ def get_ventilation_corridors(scene_id: str, directions: str | None = None) -> d
 
     scene_service.get_scene(scene_id)
     grids = _require_grids()
-    features = _require_city_model(scene_id)
+    features = _require_buildings(scene_id)
 
     names = [d.strip().upper() for d in (directions or "").split(",") if d.strip()]
     if not names:

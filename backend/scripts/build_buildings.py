@@ -9,7 +9,7 @@ Rules (EPSG:2326 metres):
   * height = 90th percentile of (surface - ground) inside the footprint
   * an Overture footprint is kept only when the tiles agree something stands there (p90 >= 3 m)
   * a tile-only blob is added when it is >= 40 m2 and p90 >= 7 m (below that it is mostly trees/sheds)
-Output: data/rasters/citymodel_hsk.json (+ citymodel_meta.json) in the existing schema, and
+Output: data/rasters/buildings_hsk.json (+ buildings_meta.json) in the existing schema, and
 data/reference/tree_mask.npz (tall non-building blobs, used as green cover).
 """
 from __future__ import annotations
@@ -104,7 +104,7 @@ def main() -> None:
             "storeys": max(1, round(h / 3.2)), "height_source": "OPEN3DHK_TILE_SURFACE_P90",
             "footprint_source": src, "provisional": False}})
     fc = {"type": "FeatureCollection", "features": out}
-    (DATA / "rasters" / "citymodel_hsk.json").write_text(json.dumps(fc))
+    (DATA / "rasters" / "buildings_hsk.json").write_text(json.dumps(fc))
     hs = np.array([f["properties"]["height_m"] for f in out])
     meta = {"status": "DERIVED_FROM_OPEN3DHK_AND_OVERTURE", "features": len(out),
             "heightM": {"min": float(hs.min()), "max": float(hs.max()), "mean": float(hs.mean())},
@@ -115,7 +115,7 @@ def main() -> None:
             "rules": {"keepOvertureIfP90AtLeast": KEEP_OVERTURE_H, "tileOnlyMinM2": MIN_BLOB_M2,
                       "tileOnlyMinHeight": MIN_BLOB_H},
             "generated": date.today().isoformat(), "editable": True}
-    (DATA / "rasters" / "citymodel_meta.json").write_text(json.dumps(meta, indent=2))
+    (DATA / "rasters" / "buildings_meta.json").write_text(json.dumps(meta, indent=2))
     print(meta)
 
 

@@ -56,7 +56,7 @@ def main() -> int:
         print("\n0/1 checks passed")
         return 1
     feats = json.loads(
-        (BACKEND_DIR / "data/rasters/citymodel_hsk.json").read_text())["features"]
+        (BACKEND_DIR / "data/rasters/buildings_hsk.json").read_text())["features"]
 
     taller_west = evaluate(
         grids, feats, ops=[MassingOp("scale_all", multiplier=1.4, scope="west")])

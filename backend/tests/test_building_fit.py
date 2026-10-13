@@ -53,7 +53,7 @@ def main() -> int:
         print("\n0/1 checks passed")
         return 1
 
-    model = BACKEND_DIR / "data" / "rasters" / "citymodel_hsk.json"
+    model = BACKEND_DIR / "data" / "rasters" / "buildings_hsk.json"
     features = json.loads(model.read_text())["features"]
     check("the city model has buildings", len(features) > 2000, f"{len(features)}")
 

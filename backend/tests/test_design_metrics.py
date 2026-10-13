@@ -60,7 +60,7 @@ def main() -> int:
         return 1
 
     features = json.loads(
-        (BACKEND_DIR / "data/rasters/citymodel_hsk.json").read_text())["features"]
+        (BACKEND_DIR / "data/rasters/buildings_hsk.json").read_text())["features"]
     fps = footprints_from_geojson(features)
     check("every envelope converts", len(fps) == len(features),
           f"{len(fps)} of {len(features)}")

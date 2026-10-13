@@ -128,7 +128,7 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
     changes. ``None`` means no city model -- the land-class index alone, said
     plainly in the sidecar.
     """
-    model = scene_service.city_model_path(scene_id)
+    model = scene_service.buildings_path(scene_id)
     mtime = None
     if model and Path(model).exists():
         mtime = Path(model).stat().st_mtime
@@ -282,12 +282,15 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "You are explaining one screening-level land-use simulation run to an "
         "urban planner. Write at most 110 words. Rules: use ONLY the numbers "
         "in the JSON below -- never invent a figure; say 'unstored runoff' "
-        "for unstoredM3; state whether the scenario is better or worse than "
-        "today and by how much; mention the wet area and the mean heat-exposure "
-        "index; if the heatwave display preset is on, say it is a display "
-        "transform, not a different scenario; end by stating this is a "
-        "screening-level estimate, not a flood prediction, and that the heat "
-        "index is relative, not a temperature.\n\n"
+        "for unstoredM3; mention the wet area and the mean heat-exposure "
+        "index; if no interventions are applied, say this is the baseline "
+        "today's land cover and no project is selected; if the scenario "
+        "matches the baseline, state that explicitly rather than calling it "
+        "better or worse; otherwise state whether the scenario is better or "
+        "worse than today and by how much; if the heatwave display preset is "
+        "on, say it is a display transform, not a different scenario; end by "
+        "stating this is a screening-level estimate, not a flood prediction, "
+        "and that the heat index is relative, not a temperature.\n\n"
         + json.dumps(_rounded(facts), indent=1)
     )
 

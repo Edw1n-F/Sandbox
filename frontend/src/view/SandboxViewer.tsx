@@ -20,7 +20,6 @@ import {
   ImageMaterialProperty,
   ConstantProperty,
   Math as CesiumMath,
-  Material,
   Matrix4,
   Rectangle,
   Transforms,
@@ -31,13 +30,6 @@ import 'cesium/Build/Cesium/Widgets/widgets.css'
 
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
-import {
-  addCityModel,
-  type CityModelHandle,
-  type MassingCollection,
-  type MassingOp,
-  type MassingOpResult,
-} from './cityModel'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
@@ -63,45 +55,11 @@ import {
 } from './cameraRig'
 import { applyViewMode, boundaryColour } from './viewModes'
 
-/** The live city-model handle, so the panel can edit geometry without prop drilling. */
-let cityModelHandle: CityModelHandle | null = null
 let propsHandle: OnlinePropHandle | null = null
 let tilesetHandle: TilesetHandle | null = null
 let terrainTilesetHandle: TilesetHandle | null = null
 
-/** Massing ops from the active plan, held until the city model exists. */
-const pendingMassingOps = { current: [] as MassingOp[] }
-
-/**
- * What the last op application actually did.
- *
- * `changed` against `total` is the answer to the question a 3D view cannot
- * answer by itself: a scoped edit that quietly reached every building still
- * looks like a success. Reported in the panel rather than assumed.
- */
-let lastMassingResult: MassingOpResult[] = []
-
-/**
- * Selection notification. Holds a revision counter rather than the selection
- * itself: the panel calls `cityModelStats()` when it re-renders, so there is
- * exactly one source of truth for what is selected.
- */
-const useCityModel = create<{ rev: number }>(() => ({ rev: 0 }))
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
-
-/** Called by the panel's editing controls. Returns the number of buildings changed. */
-export function editCityModelHeights(multiplier: number): number {
-  return cityModelHandle ? cityModelHandle.setAllHeights(multiplier) : 0
-}
-export function setCityModelBuildingHeight(id: string, metres: number): boolean {
-  if (!cityModelHandle || !cityModelHandle.entities.has(id)) return false
-  cityModelHandle.setBuildingHeight(id, metres)
-  return true
-}
-/** Subscribe to selection changes. Returns a revision the panel can ignore. */
-export function useCityModelRevision(): number {
-  return useCityModel((s) => s.rev)
-}
 
 export function usePropsRevision(): number {
   return useProps((s) => s.rev)
@@ -109,39 +67,6 @@ export function usePropsRevision(): number {
 
 export function onlinePropStatus(): { loaded: number; failed: number } {
   return { loaded: propsHandle?.loaded().length ?? 0, failed: propsHandle?.failed().length ?? 0 }
-}
-
-export function cityModelStats(): {
-  count: number
-  mean: number
-  selected: string | null
-  placed: number
-  ops: MassingOpResult[]
-  /** Envelopes standing on a DEM sample, out of `count`. */
-  grounded: number
-} {
-  return {
-    count: cityModelHandle?.entities.size ?? 0,
-    mean: cityModelHandle?.meanHeight() ?? 0,
-    selected: cityModelHandle?.selected() ?? null,
-    placed: cityModelHandle?.placedCount() ?? 0,
-    ops: lastMassingResult,
-    grounded: cityModelHandle?.groundedCount() ?? 0,
-  }
-}
-export function selectCityBuilding(id: string | null): void {
-  cityModelHandle?.select(id)
-}
-
-/**
- * Back to the generated model: heights, orientations and any blocks a plan
- * added. A height-only reset would leave placed blocks standing after the user
- * asked for the district back as it was, which reads as the tool ignoring them.
- */
-export function resetCityModel(): void {
-  if (!cityModelHandle) return
-  lastMassingResult = cityModelHandle.applyMassingOps([{ op: 'reset' }])
-  useCityModel.setState((st) => ({ rev: st.rev + 1 }))
 }
 
 /**
@@ -247,7 +172,6 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const terrainMeta = useSceneStore((s) => s.terrain)
   const interventions = usePlanStore((s) => s.interventions)
   const showInterventions = useSceneStore((s) => s.layers.interventions)
-  const showCityModel = useSceneStore((s) => s.layers.cityModel ?? true)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
   const layers = useSceneStore((s) => s.layers)
@@ -285,10 +209,10 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     if (import.meta.env.DEV) {
       const w = window as unknown as {
         __cesiumViewer?: Viewer
-        __cesium?: { Material: typeof Material; Color: typeof Color }
+        __cesium?: { Color: typeof Color }
       }
       w.__cesiumViewer = viewer
-      w.__cesium = { Material, Color }
+      w.__cesium = { Color }
     }
 
     tuneNavigation(viewer)
@@ -354,11 +278,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         flyTo(viewer, 'oblique', 0)
         viewer.scene.requestRender()
       }
-      // Grounding is *not* done here. This effect and the city-model effect are
-      // both keyed on `terrainMeta` and race each other, so a call from whichever
-      // wins would find either no model yet or no raster yet. `addCityModel`
-      // waits for the DEM itself, which is the only ordering that is actually
-      // guaranteed.
+      // Grounding is *not* done here. The real 3D Tiles buildings carry their
+      // own heights; no procedural massing needs a DEM sample.
     })
 
     // When the 3D terrain tiles are present they are the map floor. Drawing the
@@ -444,17 +365,6 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     return dispose
   }, [viewMode, terrainMeta])
 
-  // ---- the building surface follows the mode -----------------------------
-  //
-  // Separate from the effect above on purpose: it touches 2,639 materials, which
-  // is worth doing only when the city model exists, and the handle arrives after
-  // the scene does. Uniform writes, so this is instant.
-  useEffect(() => {
-    cityModelHandle?.setLook(
-      viewMode === 'tactical' ? { lit: false, grid: 0.6 } : { lit: true, grid: 0 },
-    )
-  }, [viewMode, terrainMeta])
-
   // ---- overlay layers follow the toggles --------------------------------
   useEffect(() => {
     const viewer = viewerRef.current
@@ -485,7 +395,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       }, 2000)
     }
 
-    const drape = Boolean(terrainMeta.terrain3DUrl || terrainMeta.cityModel3DUrl || terrainMeta.cityModel3dUrl)
+    const drape = Boolean(terrainMeta.terrain3DUrl || terrainMeta.buildings3DUrl || terrainMeta.buildings3dUrl)
     if (drape) {
       for (const [key, url, alpha] of wanted) {
         const cur = drapedRef.current[key]
@@ -665,80 +575,6 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
   }, [])
 
-  // ---- 3D city model ------------------------------------------------------
-  //
-  // Loaded once per scene and then edited in place. The handle is module-level
-  // so the panel's height controls can drive it without threading a ref through
-  // three components -- the alternative was a context, which for one mutable
-  // object is ceremony.
-  useEffect(() => {
-    const viewer = viewerRef.current
-    const url = terrainMeta?.cityModelUrl
-    // The placeholder massing pillars are off (the real 3D tiles replace them),
-    // so do not fetch the GeoJSON or build its entities at all.
-    if (!isLive(viewer) || !url || !useSceneStore.getState().layers.cityModel) {
-      cityModelHandle = null
-      return
-    }
-
-    let cancelled = false
-    void (async () => {
-      try {
-        const response = await fetch(url)
-        if (!response.ok) throw new Error(`HTTP ${response.status}`)
-        const collection = (await response.json()) as MassingCollection
-        if (cancelled || !isLive(viewer)) return
-        const handle = await addCityModel(viewer, collection, () => {
-          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        })
-        if (cancelled) {
-          handle?.dispose()
-          return
-        }
-        cityModelHandle = handle
-        // Apply the *current* view mode's look immediately. The setLook effect
-        // above ran while `cityModelHandle` was still null -- the model loads
-        // asynchronously, so on a cold start it always loses that race -- and
-        // nothing else would ever tell the fresh materials which mode the app
-        // is in. Read from the store, not the closure: `viewMode` is not a
-        // dependency here and listing it would rebuild all 2,639 entities on
-        // every mode switch.
-        handle?.setLook(
-          useSceneStore.getState().viewMode === 'tactical'
-            ? { lit: false, grid: 0.6 }
-            : { lit: true, grid: 0 },
-        )
-        // The plan may have been selected before the model finished loading, in
-        // which case its massing ops were parked. Apply them now.
-        if (pendingMassingOps.current.length) {
-          lastMassingResult = handle?.applyMassingOps(pendingMassingOps.current) ?? []
-          useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        }
-        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-        if (!showCityModel) {
-          // Rendered but hidden: keep the handle so the toggle is instant.
-          for (const e of handle?.entities.values() ?? []) e.show = false
-        }
-        viewer.scene.requestRender()
-      } catch (err) {
-        // A missing city model must not take the map down; the terrain and
-        // overlays still matter.
-        console.warn('[sandbox] city model unavailable:', err)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      cityModelHandle?.dispose()
-      cityModelHandle = null
-    }
-    // `showCityModel` is deliberately NOT a dependency. It is read once here to set the
-    // initial visibility of a freshly built model, and a separate effect below keeps it
-    // in sync afterwards. Listing it here would tear down and rebuild all 2,639 entities
-    // every time the layer is toggled.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terrainMeta])
-
   // ---- online 3D assets ---------------------------------------------------
   //
   // Loaded once, from GitHub raw, with no token and no proxy. Failure is
@@ -772,16 +608,10 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     viewer.scene.requestRender()
   }, [showProps])
 
-  useEffect(() => {
-    if (!isLive(viewerRef.current) || !cityModelHandle) return
-    for (const e of cityModelHandle.entities.values()) e.show = showCityModel
-    viewerRef.current.scene.requestRender()
-  }, [showCityModel])
-
   // ---- 3D Tiles real buildings (6-NW-12D textured meshes) ----------------
   useEffect(() => {
     const viewer = viewerRef.current
-    const url = terrainMeta?.cityModel3DUrl ?? terrainMeta?.cityModel3dUrl
+    const url = terrainMeta?.buildings3DUrl ?? terrainMeta?.buildings3dUrl
     if (!isLive(viewer) || !url) {
       tilesetHandle = null
       return
@@ -801,7 +631,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       tilesetHandle = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [terrainMeta?.cityModel3DUrl, terrainMeta?.cityModel3dUrl])
+  }, [terrainMeta?.buildings3DUrl, terrainMeta?.buildings3dUrl])
 
   useEffect(() => {
     if (!tilesetHandle) return
@@ -854,34 +684,11 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
 
-    // A `massing_height` feature carries geometry only so it can be listed and
-    // highlighted. It must NOT be handed to the intervention layer: with
-    // opacity 0 it would still create a clickable entity that shows up in picks
-    // and in the feature count. Split it out and apply it to the city model
-    // instead -- that is the whole point of the feature.
-    const isMassing = (f: { properties?: { interventionType?: string } }) =>
-      f.properties?.interventionType === 'massing_height'
-    const drawn = interventions.features.filter((f) => !isMassing(f))
-    const massingFeatures = interventions.features.filter(isMassing)
-
-    if (showInterventions) {
-      const ops = massingFeatures.map(
-        (f) => f.properties?.params as unknown as MassingOp,
-      )
-      if (cityModelHandle) {
-        lastMassingResult = cityModelHandle.applyMassingOps(ops)
-        // The panel's mean height reads from the handle, so it has to be told the
-        // geometry moved. Skipping this left the number stale while the skyline
-        // silently changed -- the worst combination, because the screen disagreed
-        // with the model.
-        useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-      } else {
-        pendingMassingOps.current = ops
-      }
-    } else if (cityModelHandle) {
-      lastMassingResult = cityModelHandle.applyMassingOps([])
-      useCityModel.setState((st) => ({ rev: st.rev + 1 }))
-    }
+    // `massing_height` features drove the procedural city-model pillar layer,
+    // which has been removed. They are not handed to the real-building viewer.
+    const drawn = interventions.features.filter(
+      (f) => f.properties?.interventionType !== 'massing_height',
+    )
 
     let disposed = false
     let dispose: (() => void) | undefined
