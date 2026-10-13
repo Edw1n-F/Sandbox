@@ -54,9 +54,9 @@ backend/data/rasters/run/
 # The JSON file store is a RUNTIME store, not source. The seeded fixtures that
 # the app and the tests boot from ARE committed:
 #   backend/data/scenes/51e03c37-...json            the seeded scene
-#   backend/data/plans/65915d4c-...json             seed_interventions.py output
 #   backend/data/plans/77593516-...json             the baseline plan
-#   backend/data/interventions/*.json matching the seeded plan's feature ids
+# (The derived-interventions plan and its features were purged on 14 Oct 2026:
+# they were authored against the old 786 ha extent and fell outside the grid.)
 # Everything else under those three directories is residue from running the
 # suites or poking the API by hand. The suites that create records now redirect
 # settings.*_dir at a temp copy (backend/tests/_tmpstore.py), so running them no
@@ -66,15 +66,7 @@ backend/data/scenes/*
 backend/data/plans/*
 backend/data/interventions/*
 !backend/data/scenes/51e03c37-5360-43b0-a094-fbaca38cd70b.json
-!backend/data/plans/65915d4c-ce05-460e-b0f7-d337873f7ef4.json
 !backend/data/plans/77593516-77ab-4e93-9451-cf1b5b4cbf93.json
-!backend/data/interventions/0543358e-6563-4c70-b79e-d7979c5f9ff8.json
-!backend/data/interventions/588adfbd-dd31-477f-8f68-94f83e7cd491.json
-!backend/data/interventions/5a0f8112-7313-4ad7-997b-3d0833ee47e5.json
-!backend/data/interventions/6806d035-09e9-4556-968f-46c939291c90.json
-!backend/data/interventions/a7120220-5625-4ae4-8027-3f1f56ff34ff.json
-!backend/data/interventions/da3c0026-ac6a-48c6-bcdd-e35768010af6.json
-!backend/data/interventions/e368857b-ab98-4e32-91e7-f6af601cc126.json
 
 # Agent memory, not project source
 .workbuddy/

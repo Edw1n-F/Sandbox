@@ -71,6 +71,7 @@ import json
 import math
 import re
 import sys
+import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -1960,8 +1961,26 @@ def generate_plan(
             "the area's own data. Refusing to invent geometry."
         )
 
-    features = provider.propose(instruction, grounding)[:max_features]
     used_provider = getattr(provider, "name", "unknown")
+    provider_error = ""
+    try:
+        features = provider.propose(instruction, grounding)[:max_features]
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        # A rate limit, an outage or a timeout is the provider failing, not the
+        # request being wrong. HTTPError is a URLError; its code says which. An
+        # explicit llm request fails loudly (the same rule as "no key -> 422");
+        # "auto" is allowed the labelled heuristic rescue below.
+        code = getattr(exc, "code", None)
+        provider_error = (
+            "rate limited (HTTP 429)" if code == 429
+            else f"HTTP {code}" if code else f"unreachable ({type(exc).__name__})"
+        )
+        if prefer == "llm":
+            raise PlanGenerationError(
+                f"The language model is {provider_error}. Nothing was generated; "
+                "retry shortly or use provider=auto for the deterministic parser."
+            ) from exc
+        features = []
 
     # A provider that returns nothing has FAILED, and that is not the same thing as
     # the user having asked for nothing.
@@ -1983,8 +2002,10 @@ def generate_plan(
         if rescued:
             features = rescued
             fallback_note = (
-                f" {used_provider} returned no usable answer for this "
-                f"instruction, so the deterministic parser answered instead "
+                f" {used_provider} "
+                + (f"was {provider_error}" if provider_error
+                   else "returned no usable answer for this instruction")
+                + f", so the deterministic parser answered instead "
                 f"({len(rescued)} feature(s)). That is a fallback, not the "
                 f"GenAI path."
             )
@@ -1999,6 +2020,8 @@ def generate_plan(
             "message": (
                 "Nothing could be placed: no provider returned a usable answer "
                 "for this instruction. Nothing was invented."
+                + (f" The language model was {provider_error}." if provider_error
+                   else "")
             ),
         }
 

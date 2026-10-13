@@ -303,24 +303,29 @@ def main() -> int:
 
     # --- regression pins: these are the numbers that must not move --- #
     #
+    # Re-pinned 14 Oct 2026 after the 13 Oct real-data swap (Open3Dhk 5 m DTM,
+    # 43.5 ha window): the artefacts were regenerated, so the old hashes and the
+    # old 2.2-141 m ground range described the retired 786 ha extent. The ground
+    # range 3.41-17.29 m was checked against the loaded elevation grid directly.
+    #
     # wetgrid_hsk.npy is the level-pool depth field the cascade sits BESIDE. If a
     # refactor moved it, every published deficit would move with it silently.
     wet_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.npy").read_bytes()).hexdigest()
     check("the wet-grid depth artefact is byte-identical",
-          wet_md5 == "d7cc052a45af4a3f6aac59773568b2ee", wet_md5)
+          wet_md5 == "516ff65e31e409289de088b53ea97e70", wet_md5)
     accum_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "flow_accum_hsk.npy").read_bytes()).hexdigest()
     check("the flow-accumulation artefact is unchanged",
-          accum_md5 == "4f9c4689bb0f6ef802c8b4dab836deec", accum_md5)
+          accum_md5 == "47b7da66bd7e295cd67dece12bc921e2", accum_md5)
 
     # The _runoff_and_unstored() refactor and the elevation_5m semantics change
     # (it now holds the Priority-Flood FILLED surface, where it previously held
     # the raw one) must not have moved the sea-level report's headline.
     sea = sea_level_report(grids)
     check("the sea-level ground range is still the physical range",
-          2.0 <= sea["groundElevationM"]["min"] <= 2.5
-          and abs(sea["groundElevationM"]["max"] - 141.0) < 1.0,
+          abs(sea["groundElevationM"]["min"] - 3.41) < 0.05
+          and abs(sea["groundElevationM"]["max"] - 17.29) < 0.05,
           str(sea["groundElevationM"]))
     check("and the sea-level headline deficit is unchanged",
           abs(sea["bufferDeficitM3"] - sidecar["unstoredVolumeM3"]) < 1.0,

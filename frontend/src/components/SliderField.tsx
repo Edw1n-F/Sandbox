@@ -33,11 +33,15 @@ export default function SliderField({
   caption,
   onChange,
 }: Props) {
-  const id = `${label.toLowerCase()}-slider`
+  // The label element must actually carry this id, or `aria-labelledby` resolves to
+  // nothing and the slider has no accessible name. It did not, so all three scenario
+  // sliders were unnamed to a screen reader despite looking labelled. The id is
+  // slugged because a raw label can contain spaces and punctuation.
+  const id = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}-label`
   return (
     <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="baseline" sx={{ mb: 0.25 }}>
-        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>{label}</Typography>
+        <Typography id={id} className="hud-label" sx={{ fontSize: 8.5 }}>{label}</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 15, fontWeight: 600, lineHeight: 1, color: 'success.main' }}>
           {value}
           <Box component="span" sx={{ fontSize: 9, color: 'text.secondary', ml: 0.3, fontWeight: 400 }}>{unit}</Box>

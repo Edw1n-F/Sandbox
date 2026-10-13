@@ -25,19 +25,14 @@ rasterio>=1.3
 # imports scipy, so this is a narrow, replaceable dependency rather than a
 # numerical stack.
 #
-# PINNED BELOW 1.14 on purpose. SciPy 1.14 added `scipy.sparse.linalg._propack`,
-# a compiled extension whose macOS wheel is rejected by this host's dyld:
-#   ImportError: dlopen(.../_spropack.cpython-310-darwin.so): section
-#   '__DATA/__thread_bss' has a zero-fill section type, but offset field is not
-#   zero
-# `scipy.sparse.__init__` imports `scipy.sparse.linalg`, which imports the broken
-# extension, so the ENTIRE `scipy.sparse` namespace -- including the csgraph
-# Dijkstra the corridors need -- becomes unimportable on 1.15.3. A
-# `--force-reinstall` of the identical wheel does not fix it (same broken
-# section). 1.13.1 predates `_propack` and imports cleanly. The alternative -- a
-# hand-rolled Dijkstra fallback -- would be a second shortest-path implementation,
-# which is the exact duplication this project forbids, so the pin is the fix.
-scipy>=1.11,<1.14
+# Floor, not ceiling. An earlier version pinned `<1.14` to dodge a macOS dyld
+# failure in 1.15.3's compiled `_propack` extension on Python 3.10. That ceiling
+# is wrong everywhere else: 1.13.1 has no wheel for Python 3.14 (the build from
+# source fails), so it made the corridors uninstallable on the Windows/3.14 host.
+# 1.16.1 is the first release with a cp314 wheel (1.16.0 and earlier have none);
+# 1.18.1 is the version verified here.
+# If the macOS failure ever returns, pin that machine, not everyone.
+scipy>=1.16.1
 
 # Test-only: powers fastapi.testclient in tests/test_contract.py (ADR-036).
 httpx>=0.27

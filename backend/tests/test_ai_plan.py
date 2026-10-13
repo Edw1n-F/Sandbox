@@ -487,127 +487,29 @@ def test_set_site_is_scoped_to_the_site_it_names() -> None:
           str(scope.get("siteId")))
 
 
-def test_placement_footprints_are_generated_on_built_up_land_in_scope() -> None:
-    """`place` is the one op that creates geometry, so it is checked hardest.
+def test_the_front_door_does_not_create_geometry() -> None:
+    """No provider can add a building: ``place`` is not an op the front door speaks.
 
-    The footprints must be inside the scope, on land the analysis calls built up,
-    of the requested height and count, with ids the viewer can key on -- and they
-    must be the system's coordinates, not the model's.
+    ``scenario.apply_massing`` still scores a ``place`` op handed to it directly,
+    but the natural-language path (parser, tool schema, materialiser) no longer
+    offers it. A model that emits one anyway -- with a coordinate or a ring
+    smuggled in -- gets nothing back rather than a building.
     """
-    import numpy as np
-
-    g = load_grounding()
-    if g.overlay is None:
-        print("      (skipped: no overlay)")
-        return
-    out = LLMProvider(api_key="k", transport=massing_transport([
-        {"op": "place", "count": 3, "height_m": 60, "scope": "east"}],
-        rationale="more homes on serviced land",
-    )).propose("add three 60 m residential towers in the east", g)
-    check("one feature produced", len(out) == 1, f"got {len(out)}")
-    if not out:
-        return
-    params = out[0]["params"]
-    placements = params.get("placements") or []
-    check("three blocks placed", len(placements) == 3, f"got {len(placements)}")
-    check("ids are unique and stable",
-          len({b["id"] for b in placements}) == len(placements),
-          str([b["id"] for b in placements]))
-
-    scope = params["scope"]["ring"]
-    s_west, s_east = min(p[0] for p in scope), max(p[0] for p in scope)
-    s_south, s_north = min(p[1] for p in scope), max(p[1] for p in scope)
-    check("every footprint lies inside the scope",
-          all(s_west <= p[0] <= s_east and s_south <= p[1] <= s_north
-              for b in placements for p in b["ring"]),
-          "a footprint fell outside the named region")
-    check("rings are closed", all(b["ring"][0] == b["ring"][-1] for b in placements),
-          "an unclosed ring is not a polygon")
-    check("heights are as instructed",
-          all(b["heightM"] == 60.0 for b in placements),
-          str({b["heightM"] for b in placements}))
-
-    # And on land the analysis actually calls built up.
-    lon_min, _, _, lat_max = g.bounds
-    cw, ch = _cell_axes(g.overlay)
-    paved = g.overlay.class_mask("paved")
-    on_paved = True
-    for block in placements:
-        west = min(p[0] for p in block["ring"])
-        east = max(p[0] for p in block["ring"])
-        south = min(p[1] for p in block["ring"])
-        north = max(p[1] for p in block["ring"])
-        c0, c1 = int((west - lon_min) / cw), int((east - lon_min) / cw)
-        r0, r1 = int((lat_max - north) / ch), int((lat_max - south) / ch)
-        if not paved[max(r0, 0):r1 + 1, max(c0, 0):c1 + 1].any():
-            on_paved = False
-    check("every footprint sits on ESA WorldCover paved cells", on_paved,
-          "a block was placed on land the land cover does not call built up")
-    check("basis states where the footprints came from",
-          "paved" in params["basis"], params["basis"])
-
-
-def test_placement_avoids_the_blocks_that_already_exist() -> None:
-    """A new tower must not land inside an existing envelope.
-
-    Placement reuses `make_citymodel.build_blocks` on a paved mask with the
-    already-occupied cells removed, so the two cannot disagree about what a block
-    is. If nothing unbuilt is available the filter is dropped, and `basis` says so
-    -- so this only asserts the strong form when the basis claims it.
-    """
-    from app.config import settings
-
-    path = settings.rasters_dir / "buildings_hsk.json"
-    if not path.exists():
-        print("      (skipped: run make_citymodel.py first)")
-        return
-    existing = {
-        json.dumps(f["geometry"]["coordinates"][0])
-        for f in json.loads(path.read_text(encoding="utf-8"))["features"]
-    }
-    g = load_grounding()
-    out = HeuristicProvider().propose("add two 70 m towers in the west", g)
-    placed = [f for f in out if f["params"].get("op") == "place"]
-    if not placed:
-        print("      (skipped: no placeable land in the west)")
-        return
-    params = placed[0]["params"]
-    rings = [json.dumps(b["ring"]) for b in params["placements"]]
-    if params["basis"].startswith("new massing on unbuilt paved land"):
-        check("no placed block duplicates an existing envelope",
-              not (set(rings) & existing),
-              f"{len(set(rings) & existing)} of {len(rings)} coincide with a block")
-    else:
-        check("fallback placement declares itself in the basis",
-              "existing envelopes excluded where possible" in params["basis"],
-              params["basis"])
-
-
-def test_a_model_cannot_place_a_building_by_coordinate() -> None:
-    """Hostile-response test for the one op that creates geometry."""
     g = load_grounding()
     out = LLMProvider(api_key="k", transport=massing_transport([
         {"op": "place", "count": 1, "height_m": 200, "scope": "east",
-         # A model that tries to place by coordinate, and one that tries to smuggle
-         # a ring past the scope.
          "coordinates": [[[114.05, 22.49]]],
          "ring": [[[113.0, 22.0]]],
          "geometry": {"type": "Polygon", "coordinates": [[[114.05, 22.49]]]}},
     ])).propose("put a 200 m tower at 114.05, 22.49", g)
-    check("the op is still honoured, on the analysis's terms", len(out) == 1,
-          f"got {len(out)}")
-    if not out:
-        return
-    params = out[0]["params"]
-    lon_min, lat_min, lon_max, lat_max = g.bounds
-    east = [p[0] for p in params["scope"]["ring"]]
-    check("the scope is still the eastern half, not the model's point",
-          max(east) == round(lon_max, 7) and min(east) > 113.99,
-          f"{min(east)}..{max(east)}")
-    check("no footprint is at the model-authored coordinate",
-          all(abs(p[0] - 114.05) > 0.001 for b in params["placements"]
-              for p in b["ring"]),
-          "a placed block used the coordinate the model supplied")
+    check("a model-emitted place op is refused", out == [], f"got {len(out)}")
+    check("the tool schema does not offer place",
+          "place" not in MASSING_TOOL["input_schema"]["properties"]["edits"]
+          ["items"]["properties"]["op"]["enum"], "place is still in the enum")
+    for text in ("add three 60 m residential towers in the eastern part",
+                 "place four 80 m towers in the north-west"):
+        check(f"the parser does not read {text!r} as an edit",
+              parse_massing_intent(text) == [], str(parse_massing_intent(text)))
 
 
 def test_rotate_is_read_scoped_and_bounded() -> None:
@@ -659,8 +561,6 @@ def test_the_deterministic_parser_is_not_the_weak_half() -> None:
         "make the north-east blocks 30 m taller": ("set_site", "north-east"),
         "rotate the eastern blocks 30 degrees": ("rotate", "east"),
         "move the northern blocks 25 m north": ("move", "north"),
-        "add three 60 m residential towers in the eastern part": ("place", "east"),
-        "place four 80 m towers in the north-west": ("place", "north-west"),
         "reset the building heights": ("reset", None),
     }
     for text, (op, scope) in cases.items():
@@ -670,7 +570,9 @@ def test_the_deterministic_parser_is_not_the_weak_half() -> None:
 
     # Things that must still not fire.
     for text in ("add two water reservoirs", "make it nicer",
-                 "permeable paving please"):
+                 "permeable paving please",
+                 "add three 60 m residential towers in the eastern part",
+                 "place four 80 m towers in the north-west"):
         check(f"no false positive: {text!r}", parse_massing_intent(text) == [],
               str(parse_massing_intent(text)))
 
@@ -735,7 +637,7 @@ def test_the_structured_fallback_cannot_answer_the_other_question() -> None:
     provider = OpenAICompatProvider(base_url="http://local.invalid/v1", api_key="k",
                                     model="m")
     provider._transport = _no_tools_then_wrong_shape  # type: ignore[assignment]
-    features = provider.propose("add three 60 m residential towers in the east",
+    features = provider.propose("make the eastern blocks 30 m taller",
                                 load_grounding())
     check("the schema retry did happen", len(seen) == 2, f"{len(seen)} requests")
     check("the retry enforced the massing schema",
@@ -1342,7 +1244,7 @@ def test_the_payload_is_built_for_the_tool_that_was_routed() -> None:
     """
     g = load_grounding()
 
-    _, massing_user = build_prompt("add six 90 m towers in the centre", g)
+    _, massing_user = build_prompt("make the central blocks 30 m taller", g)
     check("a massing call carries no candidate-site catalogue",
           "candidate_sites" not in massing_user, f"{len(massing_user)} chars")
     check("and is small enough not to choke a small model",
@@ -1356,7 +1258,7 @@ def test_the_payload_is_built_for_the_tool_that_was_routed() -> None:
           or "green_space#" in site_user, "")
 
     check("the instruction survives in both payloads",
-          "add six 90 m towers" in massing_user
+          "make the central blocks 30 m taller" in massing_user
           and "add two reservoirs" in site_user, "")
     check("and the payload is compact rather than pretty-printed",
           "\n" not in massing_user, "indent=2 doubled the payload for no gain")
@@ -1384,7 +1286,7 @@ def test_a_silent_model_is_reported_as_a_fallback_not_as_a_bad_instruction() -> 
     original = m.get_provider
     m.get_provider = lambda prefer="auto": _Silent()
     try:
-        result = generate_plan(scene_id, "add six 90 m towers")
+        result = generate_plan(scene_id, "make the district 25% taller")
     except Exception as exc:  # noqa: BLE001
         check("a silent provider is handled without raising", False, str(exc))
         m.get_provider = original
@@ -1417,8 +1319,49 @@ def test_a_silent_model_is_reported_as_a_fallback_not_as_a_bad_instruction() -> 
 
 
 
+def test_a_rate_limited_provider_is_reported_not_raised() -> None:
+    """A 429 from the model is the provider failing; it must not become a 500.
+
+    Found 14 Oct 2026 against the live free-tier model: `HTTPError 429` escaped
+    `generate_plan` uncaught. `auto` now reports it and lets the labelled
+    heuristic answer if it can; an explicit `llm` request fails as a 422-able
+    PlanGenerationError instead of silently turning into a non-AI demo.
+    """
+    import urllib.error
+
+    import app.services.ai_plan as m
+
+    class _Limited:
+        name = "openai-compatible"
+
+        def propose(self, instruction, grounding):
+            raise urllib.error.HTTPError("http://x", 429, "Too Many Requests",
+                                         {}, None)
+
+    original = m.get_provider
+    m.get_provider = lambda prefer="auto": _Limited()
+    try:
+        try:
+            m.generate_plan(_seeded_scene_id(), "add a retention basin", prefer="llm")
+            check("an explicit llm request fails loudly on a 429", False, "no error")
+        except PlanGenerationError as exc:
+            check("an explicit llm request fails loudly on a 429",
+                  "rate limited" in str(exc), str(exc)[:80])
+        result = m.generate_plan(_seeded_scene_id(), "add a retention basin")
+        _drop_plan(result.get("planId"))
+        check("auto does not raise on a 429", True, "")
+        check("and the response names the rate limit",
+              "rate limited" in str(result.get("message")
+                                    or result.get("fallbackNote")),
+              str(result.get("message") or result.get("fallbackNote"))[:80])
+    except Exception as exc:  # noqa: BLE001
+        check("a 429 never escapes generate_plan", False, repr(exc))
+    finally:
+        m.get_provider = original
+
+
 def test_fields_belonging_to_another_operation_cannot_invalidate_this_one() -> None:
-    """The same failure twice: a `place` op carrying `direction` and `distance_m`.
+    """The same failure twice: a non-move op carrying `direction` and `distance_m`.
 
     Found on 9 Oct 2026. A small model fills in the whole schema, so "add three
     60 m residential towers in the eastern part" came back as a `place` op *plus*
@@ -1433,18 +1376,18 @@ def test_fields_belonging_to_another_operation_cannot_invalidate_this_one() -> N
     """
     g = load_grounding()
 
-    noisy = {"op": "place", "count": 3, "height_m": 60, "scope": "east",
+    noisy = {"op": "scale_all", "multiplier": 1.4, "scope": "east",
              "direction": "north", "distance_m": 0,
-             "dx_m": 0, "dy_m": 0, "multiplier": 1, "site_id": None}
-    feature = _massing_feature(noisy, g, "add three 60 m towers in the east",
+             "dx_m": 0, "dy_m": 0, "height_m": 0, "site_id": None}
+    feature = _massing_feature(noisy, g, "make the eastern blocks 40% taller",
                                "test", "")
-    check("a place op survives direction and distance fields",
+    check("a scale_all op survives direction and distance fields",
           feature is not None, "DROPPED")
     if feature:
-        check("with the count and scope the model actually asked for",
-              feature["params"]["count"] == 3
+        check("with the multiplier and scope the model actually asked for",
+              feature["params"]["multiplier"] == 1.4
               and feature["params"]["scope"]["region"] == "east",
-              f"count={feature['params']['count']} "
+              f"multiplier={feature['params']['multiplier']} "
               f"scope={feature['params']['scope']['region']}")
 
     # The move path must still be strict, or the fix has simply moved the bug.

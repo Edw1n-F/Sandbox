@@ -146,14 +146,18 @@ def main() -> int:
     check("the rasters load", grids is not None)
     if grids is not None and grids.receiver is not None:
         real_dep = label_depressions(grids.elevation_5m, grids.raw_elevation_5m)
-        check("the real grid has the reported 37 depressions",
-              real_dep["count"] == 37, f"{real_dep['count']}")
-        check("spanning the reported 32,500 depression cells",
-              real_dep["depressionCells"] == 32500, f"{real_dep['depressionCells']}")
+        # Pinned to the 13 Oct 2026 real-data window (Open3Dhk 5 m DTM, 43.5 ha).
+        # Recounted independently with scipy.ndimage.label, 8-connected: 251
+        # components over 2,033 cells. The earlier 37 / 32,500 described the
+        # original 786 ha Open-Meteo extent.
+        check("the real grid has the measured 251 depressions",
+              real_dep["count"] == 251, f"{real_dep['count']}")
+        check("spanning the measured 2,033 depression cells",
+              real_dep["depressionCells"] == 2033, f"{real_dep['depressionCells']}")
 
         real_hand = hand(grids.elevation_5m, grids.receiver, grids.accumulation)
-        check("HAND marks the reported 4,607 drainage cells",
-              real_hand["drainageCells"] == 4607, f"{real_hand['drainageCells']}")
+        check("HAND marks the measured 35 drainage cells",
+              real_hand["drainageCells"] == 35, f"{real_hand['drainageCells']}")
         check("HAND is zero on every drainage cell and non-negative everywhere",
               bool((real_hand["handM"][
                   grids.accumulation >= HAND_DRAINAGE_MIN_ACCUM_CELLS] == 0.0).all())
@@ -189,7 +193,7 @@ def main() -> int:
                   f"{rec['routed']['runoffInM3']} vs "
                   f"{rec['levelPool']['unstoredM3']}")
             check("and it equals the published headline, not a re-derivation",
-                  abs(rec["levelPool"]["unstoredM3"] - 3170180.3) < 0.5,
+                  abs(rec["levelPool"]["unstoredM3"] - 180566.3) < 0.5,
                   f"{rec['levelPool']['unstoredM3']}")
             check("the reconciliation is computed, not restated: a different rainfall changes it",
                   routed_ledger(grids, grids.land_class, rainfall_mm=550.0)
