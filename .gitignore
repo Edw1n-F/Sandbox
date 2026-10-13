@@ -73,3 +73,7 @@ backend/data/interventions/*
 
 # Session screenshots and transient scratch from agent tools.
 .tmp/
+
+# Written by frontend/scripts/verify-3d.mjs on every run; not source.
+frontend/verify-before-run.png
+frontend/verify-after-run.png

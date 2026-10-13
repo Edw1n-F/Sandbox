@@ -130,6 +130,7 @@ export async function streamChat(
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let sawDone = false
 
   // SSE frames are separated by a blank line; a chunk boundary can fall
   // anywhere, so the tail is kept until the next chunk completes it.
@@ -145,13 +146,28 @@ export async function streamChat(
       for (const line of frame.split('\n')) {
         if (!line.startsWith('data:')) continue
         try {
-          onEvent(JSON.parse(line.slice(5).trim()) as StreamEvent)
+          const event = JSON.parse(line.slice(5).trim()) as StreamEvent
+          if (event.event === 'done') sawDone = true
+          onEvent(event)
         } catch {
           // A malformed frame is skipped rather than killing the stream.
         }
       }
       split = buffer.indexOf('\n\n')
     }
+  }
+
+  // The server ends every stream with exactly one `done`. A body that closes
+  // without it was cut short (a proxy timeout, a dropped connection, a crashed
+  // worker), and without this the panel would keep its steps ticking as if the
+  // answer were still coming. An abort never reaches here: it throws from `read`.
+  if (!sawDone) {
+    onEvent({
+      event: 'error',
+      message: 'The connection closed before the answer finished. Ask again to retry.',
+      recoverable: true,
+    })
+    onEvent({ event: 'done', status: 'failed', ms: 0 })
   }
 }
 
