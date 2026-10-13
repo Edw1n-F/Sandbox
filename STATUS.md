@@ -191,9 +191,10 @@ copied from the code's output.
 | backend `test_agent` | 11/11 | `python tests/test_agent.py` — grounding, no key |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
-| frontend unit (`vitest`) | 36/36 | `npm test` |
+| frontend unit (`vitest`) | 53/53 | `npm test` — includes `streamChat` against real streams and the provenance receipt |
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
+| frontend chat panel (`verify-chat.mjs`) | 14/14 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.
