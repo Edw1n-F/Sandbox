@@ -181,7 +181,7 @@ copied from the code's output.
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
 | backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
+| backend `test_run` | 32/32 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |

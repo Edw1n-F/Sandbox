@@ -803,6 +803,13 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "wetGridUrl": f"{wet_url}?v={run_id}",
             "heatmapUrl": f"{heat_url}?v={run_id}",
         },
+        # What this run stood on, read from the grids rather than typed here, so a
+        # card's provenance receipt names the data the numbers actually came from.
+        "sources": {
+            "terrain": grids.terrain_source,
+            "landCover": grids.landcover_source,
+            "lst": lst_meta.get("source"),
+        },
         "stats": stats,
         "sanityChecks": checks,
         "worsens": stats["delta"]["unstoredM3"] > 1.0,

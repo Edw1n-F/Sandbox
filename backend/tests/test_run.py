@@ -94,6 +94,15 @@ def main() -> int:
           "flood extent" in base["warning"].lower()
           or "not engineering-grade" in base["warning"].lower())
 
+    # The provenance receipt on a chat card reads these, so they must be the real
+    # sources the run used, never a placeholder the UI would then repeat.
+    check("a run names the data it stood on",
+          base["sources"]["terrain"] == "open3dhk-tiles"
+          and base["sources"]["landCover"] == "esa-worldcover",
+          str(base.get("sources")))
+    check("and the heat anchor, which is optional, is named or explicitly None",
+          "lst" in base["sources"])
+
     offline = SIDECAR["results"]
     check("the baseline unstored volume is the offline artefact's",
           abs(base["stats"]["baseline"]["unstoredM3"]
