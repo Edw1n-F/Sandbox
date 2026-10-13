@@ -311,7 +311,7 @@ npx tsc --noEmit                               # must be clean
 npm run lint && npm test                       # eslint --max-warnings 0, vitest
 ```
 
-Sixteen backend suites. Most are standalone scripts that print `N/N passed` and exit
+The backend suites (`backend/tests/`) are mostly standalone scripts that print `N/N passed` and exit
 non-zero on any failure, so a red suite fails a CI run; `test_overlay_masking` is
 pytest-style with no `__main__`, which is why `pytest tests/` is the recommended form.
 **The counts are in
@@ -691,7 +691,7 @@ cd ../frontend && npx tsc --noEmit && npm run lint && npm test
 node scripts/verify-3d.mjs && node scripts/verify-ux.mjs
 ```
 
-Sixteen backend suites. Most are standalone scripts that print `N/N passed` and exit
+The backend suites (`backend/tests/`) are mostly standalone scripts that print `N/N passed` and exit
 non-zero on any failure; `test_overlay_masking` is pytest-style with no `__main__`,
 which is why `pytest tests/` above is the recommended form. **The per-suite counts and
 what each one covers live in [`STATUS.md`](STATUS.md)**, which is the only place they

@@ -51,6 +51,7 @@ python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
 python -m uvicorn app.main:app --reload --port 8001   # :8001 -- vite.config.ts proxies here
+python -m app.export_openapi                 # regenerate contracts/openapi.json after any route/schema change
 
 # Every suite is a standalone script, not a pytest run. On Windows set PYTHONUTF8=1,
 # or three suites die on a cp950 decode error before running a check. For the counts
@@ -124,6 +125,22 @@ Frontend: `src/view/` is **rendering only** -- it reads state and never fetches.
 `src/components/` triggers state changes and holds no rendering logic. Data flows
 API -> Zustand -> View.
 
+**New feature, new files; append, never reorder, in shared ones.** Several people
+edit this repo at once, and the collisions come from a few files everyone touches.
+Add `routers/foo.py`, `services/foo.py`, `schemas/foo.py`, `tests/test_foo.py`
+rather than growing an existing module, and in the shared files below add at the end:
+
+| Shared file | Rule |
+|---|---|
+| `app/main.py` | One `include_router` line per router, appended |
+| `app/config.py`, `backend/.env.example` | Append new settings; do not reorder or rename |
+| `frontend/src/state/sceneStore.ts` | Append new state; do not reshape existing fields |
+| `contracts/openapi.json` | Generated. Never hand-edit; regenerate |
+| `requirements.txt`, `package-lock.json` | Never resolve by hand: take `main`'s, then re-run the install |
+| `STATUS.md` test table | Update in the same commit that adds a check |
+
+Do not run a formatter over a file you did not otherwise change.
+
 ## API contract
 
 ```
@@ -140,6 +157,19 @@ GET    /api/plans/{planId}/interventions    # GeoJSON FeatureCollection
 
 There is **no** `POST /api/scenes/{sceneId}/plans` -- plans are created with
 `PUT /api/plans/{planId}`. An earlier version of this file claimed otherwise.
+
+The list above is the core. **The full contract is generated, not written:**
+`contracts/openapi.json` is dumped from the Pydantic schemas by
+`backend/app/export_openapi.py`, and `tests/test_openapi_contract.py` fails if the
+committed copy differs from the running app. After changing any route or schema:
+
+```bash
+cd backend && python -m app.export_openapi    # then commit contracts/openapi.json
+```
+
+Never edit that file by hand, and on a merge conflict take either side and
+regenerate. The frontend's `src/api/types.ts` is still hand-written; the contract
+is what you diff it against.
 
 Errors: 422 for validation, 404 with `{"detail": ...}`. **Both** a FastAPI
 `detail` array and `{"error": {"code", "message"}}` are emitted, because the spec

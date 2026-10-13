@@ -506,7 +506,7 @@ If you are changing something, these are the places that must move together:
 
 ## Testing strategy
 
-Sixteen standalone suites. The ones below are the strategy — each guards a class
+Standalone suites, one per concern. The ones below are the strategy — each guards a class
 of mistake the others cannot see. **Their measured counts are in
 [`../STATUS.md`](../STATUS.md) and are deliberately not repeated here**: a count
 written down twice is a count that disagrees with itself, which is exactly how the

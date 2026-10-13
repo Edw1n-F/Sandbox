@@ -166,7 +166,7 @@ heat are in the product surface:
 ### Test suites
 
 Counts measured by running every suite on **2026-10-14**. Lint and typecheck are
-clean. **All sixteen backend suites are green.** The last three red suites were
+clean. **Every backend suite is green.** The last three red suites were
 pinned to state the real-data switches replaced, and were closed on 14 Oct: the
 `place` checks were rewritten to pin that the planner no longer offers it, and the
 hydrology and ledger pins were recounted against the 43.5 ha window rather than
@@ -189,6 +189,7 @@ copied from the code's output.
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding, no key |
+| backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
 | frontend unit (`vitest`) | 36/36 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
