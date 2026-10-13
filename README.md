@@ -56,7 +56,7 @@ New Territories — 113.982–114.005 °E, 22.425–22.455 °N, roughly 786 ha.
 | **AI 3D alteration, scoped** — height / density / orientation, by region or site | Removed (stage 1) | superseded by real Open3Dhk buildings |
 | **3D city model** — real Open3Dhk buildings + terrain, rendered as 3D Tiles | Working | 396 real footprints (`buildings_hsk.json`), heights from tile surface − terrain |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
-| **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 10.3% of DEM cells are depressions |
+| **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 11.7% of DEM cells are depressions |
 | **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |
 | **Wind: least-cost-path corridors** per direction (Dijkstra on a `1 + cellFAD` cost surface) | Working, **geometry not flow** | 8 directions in 0.70 s; corridor cost monotone in FAD |
 | **Wind: per-direction FAD ratio** | Working | `1.0` for identical schemes, `>1` where blockage rises |

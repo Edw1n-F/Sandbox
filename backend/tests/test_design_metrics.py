@@ -302,12 +302,15 @@ def main() -> int:
     dec_morn = shade_fraction(fps, grids, 22.44, 114.01, 355, 9)
     dec_noon = shade_fraction(fps, grids, 22.44, 114.01, 355, 14)
     june_mean = design_report(fps, grids, day_of_year=172)["shade"]["meanShadeFraction"]
-    check("the December 09:00 shade is the pre-extraction value",
-          dec_morn["shadeFraction"] == 0.1625, f"{dec_morn['shadeFraction']}")
-    check("the December 14:00 shade is the pre-extraction value",
-          dec_noon["shadeFraction"] == 0.2215, f"{dec_noon['shadeFraction']}")
-    check("the June daily mean shade is the pre-extraction value",
-          june_mean == 0.1151, f"{june_mean}")
+    # Pinned to the surveyed footprints (Open3Dhk + Overture): the procedural
+    # massing gave 0.1625 / 0.2215 / 0.1151. The check is that the shade
+    # computation is stable, so the pin follows the geometry it is computed on.
+    check("the December 09:00 shade is pinned",
+          dec_morn["shadeFraction"] == 0.1623, f"{dec_morn['shadeFraction']}")
+    check("the December 14:00 shade is pinned",
+          dec_noon["shadeFraction"] == 0.1681, f"{dec_noon['shadeFraction']}")
+    check("the June daily mean shade is pinned",
+          june_mean == 0.1212, f"{june_mean}")
     empty_shade = shade_fraction([], grids, 22.44, 114.01, 355, 14)
     check("an empty footprint returns the un-capped 401-step sweep",
           empty_shade["shadowSteps"] == 401 and empty_shade["shadowCapped"] is False,
@@ -484,10 +487,14 @@ def main() -> int:
     # it is pinned to green's weight (0.40), and `tank` is a hard, sealed surface
     # that holds no water at grade, so it is pinned to paved's (1.00). Both are
     # deliberate, so this pin moving is the test working, not a regression.
-    check("the hand-authored land-class index is pinned",
-          _HI == {"paved": 1.0, "bare": 0.85, "green": 0.40,
+    # green (and floodable, the same vegetated value) is MEASURED at 0.64 from
+    # data/reference/heat_class_calibration.json: on three clear Landsat scenes
+    # pure green runs 1.1-2.8 C below pure paved while the site spans 3.8-9.8 C.
+    # The pin was 0.40 while the table was entirely hand-authored.
+    check("the land-class index is pinned, with green measured not assumed",
+          _HI == {"paved": 1.0, "bare": 0.85, "green": 0.64,
                   "wetland": 0.20, "water": 0.05,
-                  "floodable": 0.40, "tank": 1.0}, str(_HI))
+                  "floodable": 0.64, "tank": 1.0}, str(_HI))
 
     # 2. Determinism / no runtime network on the *heat path*: neither the heat
     #    service nor the heat route may import a network library, and nothing in

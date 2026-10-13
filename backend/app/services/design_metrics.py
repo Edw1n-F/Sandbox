@@ -200,21 +200,64 @@ def _metres_per_degree_lon(lat: float) -> float:
     return 111_320.0 * math.cos(math.radians(lat))
 
 
+def outer_ring(geometry: dict[str, Any] | None) -> list[Any] | None:
+    """The outer ring of a Polygon, or of a MultiPolygon's **largest** part.
+
+    The real Open3Dhk-derived model contains one MultiPolygon (`bldg-0104`), and
+    taking ``coordinates[0]`` blindly turns it into a list of rings, which every
+    consumer then reads as a ring of points -- the shape error surfaces as a
+    ``TypeError`` deep in whoever consumes it, or as a silently dropped building.
+    A MultiPolygon is one building with a hole or two touching parts, so its
+    largest part is the honest single-ring stand-in.
+
+    ``type`` is a hint, not the authority: a feature carrying only
+    ``coordinates`` is still read, by inferring the nesting depth, because
+    skipping a well-formed ring over a missing type label would be the
+    intolerance this loader exists to avoid. Returns ``None`` only when no ring
+    can be found at all.
+    """
+    if not geometry:
+        return None
+    coords = geometry.get("coordinates")
+    if not coords:
+        return None
+    kind = geometry.get("type")
+    if kind == "MultiPolygon":
+        parts = [p[0] for p in coords if p]
+        return max(parts, key=len) if parts else None
+    if kind == "Polygon":
+        return coords[0]
+    # No usable type label: infer from the nesting. A ring's first element is a
+    # coordinate pair, so `x` is a number; a MultiPolygon's first element is
+    # another list of rings.
+    first = coords[0]
+    if not first:
+        return None
+    try:
+        innermost = first[0][0]
+    except (TypeError, IndexError):
+        return None
+    if isinstance(innermost, (int, float)):
+        return first
+    parts = [p[0] for p in coords if p]
+    return max(parts, key=len) if parts else None
+
+
 def footprints_from_geojson(features: list[dict[str, Any]]) -> list[Footprint]:
     """Our GeoJSON city model -> metric footprints.
 
     Deliberately tolerant: a ring with float coordinates, a missing height, or a
     degenerate extent produces a skipped envelope rather than an exception,
-    because one bad feature should not cost the caller the other 2,638.
+    because one bad feature should not cost the caller every other building.
 
     Delegates per-ring parsing to :func:`footprint_from_ring` so there is exactly
-    one ring-to-footprint conversion in the project. A second copy — the kind a
-    `place` evaluator would otherwise grow — is precisely the drift the "one
-    definition of one geometry" rule exists to prevent.
+    one ring-to-footprint conversion in the project, and takes the outer ring
+    through :func:`outer_ring` so a Polygon and a MultiPolygon both arrive as a
+    ring rather than as two different nesting depths.
     """
     out: list[Footprint] = []
     for f in features:
-        ring = ((f.get("geometry") or {}).get("coordinates") or [[]])[0]
+        ring = outer_ring(f.get("geometry"))
         height = 0.0
         try:
             height = float((f.get("properties") or {}).get("height_m") or 0.0)

@@ -54,7 +54,7 @@ model stating the objective and the code doing the arithmetic.
 And now the numbers that make the sandbox mean something rather than demo
 something:
 
-- **The buffer deficit, served.** 3,170,180 m³ — today's unstored water, pinned
+- **The buffer deficit, served.** 180,566 m³ — today's unstored water, pinned
   by test to what `make_wetgrid.py` already produced. `GET .../ledger` adds the
   delta a scenario makes to it.
 - **Three published CEDD programmes**, from the official Development Blueprint:

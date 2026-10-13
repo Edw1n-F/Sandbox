@@ -18,6 +18,10 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
     if str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
 
+from app.services.design_metrics import (  # noqa: E402
+    footprints_from_geojson,
+    outer_ring,
+)
 from app.services.massing_fit import (  # noqa: E402
     DEFAULT_OBJECTIVE,
     OBJECTIVES,
@@ -55,7 +59,9 @@ def main() -> int:
 
     model = BACKEND_DIR / "data" / "rasters" / "buildings_hsk.json"
     features = json.loads(model.read_text())["features"]
-    check("the city model has buildings", len(features) > 2000, f"{len(features)}")
+    # 396 surveyed footprints replaced the 2,639-square procedural envelope, so
+    # the floor is what the real extraction produced, not the placeholder count.
+    check("the city model has buildings", len(features) >= 300, f"{len(features)}")
 
     # --- the ledger must agree with the script that generated the overlays --- #
     sidecar = json.loads(
@@ -74,8 +80,18 @@ def main() -> int:
 
     # --- the scorer must not mutate the shared grid --- #
     before = grids.land_class.copy()
-    feature = features[900]
-    ring = feature["geometry"]["coordinates"][0]
+    # The largest footprint, picked through the project's own geometry
+    # conversion rather than a literal index: the procedural model had 2,639
+    # envelopes so `features[900]` always resolved, the real model has 396, and
+    # reading `coordinates[0]` by hand is a Polygon-only assumption that the one
+    # MultiPolygon in the model breaks.
+    converted = [
+        (feature, footprint)
+        for feature, footprint in zip(features, footprints_from_geojson(features))
+        if footprint is not None
+    ]
+    feature, _largest = max(converted, key=lambda pair: pair[1].width_m * pair[1].depth_m)
+    ring = outer_ring(feature["geometry"])
     ctx = context_for(grids, feature["properties"]["id"], ring,
                       feature["properties"])
     score_candidates(grids, ctx, ring)
@@ -92,8 +108,12 @@ def main() -> int:
           ctx.flood_depth_m >= 0.0, f"{ctx.flood_depth_m:.3f} m")
     check("the footprint resolves to whole 5 m cells, not a centroid",
           ctx.footprint_cells > 1, f"{ctx.footprint_cells} cells")
-    check("the coarse DEM is labelled as coarse",
-          any("90 m" in n for n in ctx.notes))
+    check("the DEM is labelled as a neighbourhood value, not a spot height",
+          # The synthetic-DEM wording ("90 m") went with the real 5 m DTM; the
+          # disclosure that matters is the same one, so it is asserted by intent.
+          any("neighbourhood value" in n and "not a spot height" in n
+              for n in ctx.notes),
+          next((n[:60] for n in ctx.notes if "DEM" in n), ""))
     check("every context record states its own screening limits",
           any("Screening only" in n for n in ctx.notes))
 
@@ -112,8 +132,16 @@ def main() -> int:
     check("greening the footprint is not a no-op", green["cellsChanged"] > 0,
           f"{green['cellsChanged']} cells")
 
-    ordered = [c for c in result["candidates"]
-               if c["id"] in ("green_roof", "perimeter_green", "site_to_green")]
+    ordered = sorted(
+        (c for c in result["candidates"]
+         if c["id"] in ("green_roof", "perimeter_green", "site_to_green")),
+        # By the green area each option actually adds, NOT by its position in
+        # the candidate list: the list order is presentation, and reading it as
+        # "smallest intervention first" made this check fail on correct
+        # behaviour -- perimeter_green adds less green than green_roof and costs
+        # more, which is exactly what the claim predicts.
+        key=lambda c: c["deltaGreenAreaM2"],
+    )
     # cost is a penalty, so a *better* option has the *lower* number. The first
     # version of this assertion had the comparison backwards and failed on
     # correct behaviour.
@@ -130,7 +158,9 @@ def main() -> int:
     # nothing to pave and the check passed without testing anything.
     with_green = None
     for f in features:
-        r = f["geometry"]["coordinates"][0]
+        r = outer_ring(f.get("geometry"))
+        if not r:
+            continue
         c2 = context_for(grids, f["properties"]["id"], r, f["properties"])
         sc = score_candidates(grids, c2, r, objective="reduce_heat",
                               constraints={"no_net_green_loss": False})

@@ -119,8 +119,13 @@ def main() -> int:
           all(a["delta"] == 0 for a in wet["axes"].values()),
           "; ".join(f"{k}={a['delta']}" for k, a in wet["axes"].items()))
     check("but its effect on the deficit is reported",
+          # The real 5 m DTM holds far less of the site's water than the
+          # synthetic surface did, so the same +100 mm now moves the deficit by
+          # tens of thousands of m3, not seven figures. The assertion is that a
+          # forcing reports a *substantial* effect, so the floor follows the
+          # real surface rather than the placeholder.
           wet["forcing"] is not None
-          and wet["forcing"]["deltaM3"] > 700_000,
+          and wet["forcing"]["deltaM3"] > 10_000,
           f"{wet['forcing']['deltaM3']:,.0f} m3")
     check("and it says it is a change in the forcing, not the scheme",
           "not in the scheme" in wet["forcing"]["note"], "")
@@ -228,15 +233,24 @@ def main() -> int:
         footprints_from_geojson(feats),
         [MassingOp("resize", depth_scale=0.8, scope="all")],
         grids.bounds)
+    # Scope is resolved by centroid inside the grid, so a footprint that falls
+    # outside the study bounds is deliberately untouched. Three of the real
+    # Open3Dhk-derived footprints sit outside, and the earlier version of these
+    # two checks counted them anyway and failed on correct behaviour.
+    x0b, y0b, x1b, y1b = grids.bounds
+    base_fps = footprints_from_geojson(feats)
+    in_scope = [
+        i for i, f in enumerate(base_fps)
+        if x0b <= f.lon <= x1b and y0b <= f.lat <= y1b
+    ]
     check("a depth-only resize leaves widths alone",
-          all(abs(deepened[i].width_m
-                  - footprints_from_geojson(feats)[i].width_m) < 1e-9
-              for i in range(len(deepened))), "")
+          all(abs(deepened[i].width_m - base_fps[i].width_m) < 1e-9
+              for i in in_scope), "")
     check("and shrinks depths by 20%",
-          all(abs(deepened[i].depth_m
-                  / footprints_from_geojson(feats)[i].depth_m - 0.8) < 0.01
-              for i in range(len(deepened))
-              if footprints_from_geojson(feats)[i].depth_m > 0), "")
+          all(abs(deepened[i].depth_m / base_fps[i].depth_m - 0.8) < 0.01
+              for i in in_scope
+              if base_fps[i].depth_m > 0),
+          f"{len(in_scope)} footprints in scope")
 
     # --- 8c. move to a direct target coordinate --------------------------- #
     # "Move the eastern blocks to the centre" -> the footprints' centroids
@@ -248,9 +262,8 @@ def main() -> int:
         [MassingOp("move", target_lon=centre_lon, target_lat=centre_lat,
                    scope="east")],
         grids.bounds)
-    east_before_idx = [i for i, f in enumerate(footprints_from_geojson(feats))
-                       if f.lon > centre_lon]
-    east_before = [footprints_from_geojson(feats)[i] for i in east_before_idx]
+    east_before_idx = [i for i in in_scope if base_fps[i].lon > centre_lon]
+    east_before = [base_fps[i] for i in east_before_idx]
     check("a coordinate move repositions the eastern blocks to the centre",
           all(abs(moved[i].lon - centre_lon) < 1e-6
               and abs(moved[i].lat - centre_lat) < 1e-6
@@ -278,14 +291,17 @@ def main() -> int:
     check("apply_massing does not mutate its input",
           [f.height_m for f in fps] == before, "")
 
-    # --- 10. the duplication with the frontend is real, and pinned --- #
+    # --- 10. the frontend no longer carries a second op implementation --- #
+    #
+    # `frontend/src/view/cityModel.ts` was deleted with the procedural massing
+    # when the real footprints landed, so there is no second implementation to
+    # compare against. That is the stronger position: assert its *absence*, so a
+    # re-introduced copy of the op vocabulary fires here instead of drifting
+    # quietly. (The old branch failed whenever the file was missing, which made
+    # deleting the file look like a regression.)
     ts = REPO_DIR / "frontend/src/view/cityModel.ts"
-    if ts.exists():
+    if ts.exists():  # pragma: no cover - only if a second copy returns
         text = ts.read_text()
-        # Only two real declarations: the branch dispatch `op.op === 'scale_all'`
-        # and the MassingOp union at the interface. An earlier `op\.\w+ === '...'`
-        # matched `typeof op.heightM === 'number'` and reported a frontend
-        # operation called "number".
         declared = set(re.findall(r"op\.op === '(\w+)'", text))
         union = re.search(r"op:\s*((?:'\w+'\s*\|\s*)+'\w+')", text)
         if union:
@@ -294,12 +310,14 @@ def main() -> int:
         check("this module supports every op the frontend applies",
               declared <= ours | {"place"},
               f"frontend {sorted(declared)}")
-        shared = declared & (ours - {"place"})
-        check("and the shared ops appear in both implementations",
-              len(shared) >= 3, f"{sorted(shared)}")
     else:
-        check("the frontend massing file is present to compare against", False,
-              "cityModel.ts not found")
+        offenders = [
+            p.relative_to(REPO_DIR).as_posix()
+            for p in (REPO_DIR / "frontend/src").rglob("*.ts*")
+            if "op.op ===" in p.read_text(encoding="utf-8", errors="ignore")
+        ]
+        check("no second massing-op implementation has returned to the frontend",
+              not offenders, ", ".join(offenders) or "cityModel.ts is gone")
 
     # --- Stage 3: compare() under stated weights --- #
     #

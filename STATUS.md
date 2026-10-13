@@ -31,7 +31,7 @@ Nothing here is a target. The architecture rationale is in
    a plain-language explanation, and any sanity warnings. 0.7 s warm; the terrain
    conditioning and the sky-view/shade rasters are cached, since neither moves with
    a slider. A run at 450 mm reproduces the committed overlay exactly
-   (3,170,180.3 m³, 208.05 ha — pinned by `test_run`).
+   (180,566.3 m³ unstored, 16.89 ha wet, 6,725 wet cells — pinned by `test_run`).
 6. **Read the result.** The stats panel shows seven rows, the ledger shows the
    signed delta, and `sanityChecks` warns (never raises) when storage exceeds
    runoff, wet area exceeds the site, impervious share passes 100 %, cumulative
@@ -113,40 +113,40 @@ implements)
 
 ### Test suites
 
-Counts measured by running every suite on **2026-10-13 (evening)**. Lint and
-typecheck are clean. **Six of the sixteen backend suites are not green**: three
-carry stale pins, three stop before finishing. Every one of the six is pinned to
-state that the real-data switches replaced — the procedural massing envelope, the
-~90 m synthetic DEM, and the 0–1 heat index — and none of them touches the run
-loop, the contract, the temperature field or the overlay masking, which are green.
+Counts measured by running every suite on **2026-10-13 (late evening)**. Lint and
+typecheck are clean. **Thirteen of the sixteen backend suites are green; three
+carry stale pins.** All three are pinned to state the real-data switches replaced
+— the procedural massing envelope, the pre-DTM elevation grid, and the 0–1 heat
+index — and none of them touches the run loop, the contract, the temperature
+field or the overlay masking, which are green.
 
 | Suite | Result | Command |
 |---|---|---|
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_run` | 30/30 | `python tests/test_run.py` — the live run loop |
-| backend `test_ai_plan` | 41/41 | `python tests/test_ai_plan.py` |
+| backend `test_ai_plan` | **32/41** | 9 checks exercise the `place` op, removed from the planner at stage 1 |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
 | backend `test_constants` | 18/18 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 10/10 | `python tests/test_agent.py` — grounding, no key |
 | backend `test_overlay_masking` | 3/3 | `python tests/test_overlay_masking.py` |
-| backend `test_design_metrics` | **86/91** | 5 pins stale: 395/396 envelopes convert, 3 shade values, `green 0.40` |
+| backend `test_design_metrics` | 91/91 | `python tests/test_design_metrics.py` |
 | backend `test_ledger` | **39/42** | 3 pins stale: 2 artefact md5s, the sea-level ground range |
 | backend `test_hydrology` | **28/32** | 4 pins stale: depression count and cells, HAND cells, headline |
-| backend `test_ventilation` | **20/45, then `TypeError`** | `test_ventilation.py:124` divides a list |
-| backend `test_building_fit` | **4 checks, then `IndexError`** | reads `features[900]`; the model holds 396 |
-| backend `test_scenario` | **does not run** | imports `placement_footprints`, absent from `ai_plan` |
+| backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
+| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
+| backend `test_scenario` | 65/65 | `python tests/test_scenario.py` |
 | frontend unit (`vitest`) | 36/36 | `npm test` |
 | frontend rendering (`verify-3d.mjs`) | 38/38 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 20/20 | `npm run verify:ux` — needs live servers |
 
-**385 backend assertions ran: 373 green, 12 red, and 131 never ran at all.**
-Report the three crashing suites as crashing rather than as failures — a suite
-that dies on line 124 hides the 25 checks behind it, and a pinned count of 900
-buildings was never a statement about the world, only about the placeholder that
-used to be there.
+**515 backend assertions ran: 499 green and 16 red.** The 16 sit in three suites
+— 9 `place` checks in `test_ai_plan`, 4 hydrology pins and 3 ledger pins — and
+each is pinned to the pre-real-data world, not to the run loop. A pinned count of
+900 buildings was never a statement about the world, only about the placeholder
+that used to be there.
 
 The two `verify-*` suites are **not** part of `npm test`: they need the dev server
 on `:5173` and the backend on `:8001`, and folding them in would let a missing
@@ -418,7 +418,7 @@ already satisfies the same API contract, so this is a swap, not a rewrite.
 ### 14. Coverage stops short of two view modules, and two known limits stand
 
 **The issue.** Unit coverage does not reach `view/onlineProps.ts` (the online 3D
-assets loader) or `view/interventionLayer.ts`; the 56 unit tests cover the DEM
+assets loader) or `view/interventionLayer.ts`; the 36 unit tests cover the DEM
 sampler, camera geometry, plan-scoping geometry, store reducers and the API error
 normaliser instead. Separately, and honestly so: Cesium's credit logo link has no
 accessible name (third-party markup `.cesium-credit-wrapper`, excluded rather than
@@ -511,8 +511,9 @@ false.
   HSK — the existing buildings have to come from measured data (gap 3).
   Interventions are already labelled `draft_pending_human_review`, so a generated
   glTF is honest there and dishonest as "what is there now".
-- **The city model is provisional massing, not surveyed buildings.** Keep the
-  `provisional` chip and the terrain-grounding disclosure.
+- **The 3D city model is measured geometry, not generated massing.** The 396
+  footprints are extracted from Open3Dhk tiles fused with Overture and keep their
+  provenance disclosure; no generated mesh is ever presented as what is there now.
 - **Rasters are generated artefacts.** Depths come from `wetgrid_hsk.npy`, not the
   PNG.
 - **The frontend has no unit test for the renderer's own correctness** beyond the

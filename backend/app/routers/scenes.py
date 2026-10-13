@@ -27,7 +27,12 @@ from app.schemas.scene import (
 )
 from app.config import settings
 from app.services import scene_service
-from app.services.design_metrics import HEAT_SUMMER_DAY_OF_YEAR, SITE_LAT_DEG, SITE_LON_DEG
+from app.services.design_metrics import (
+    HEAT_SUMMER_DAY_OF_YEAR,
+    SITE_LAT_DEG,
+    SITE_LON_DEG,
+    outer_ring,
+)
 from app.services.massing_fit import height_options
 from app.services.sandbox_model import (
     DEFAULT_RAINFALL_MM,
@@ -231,13 +236,22 @@ def get_building_fit(
     if feature is None:
         raise HTTPException(status_code=404, detail="building not found in this scene")
 
-    ring = feature["geometry"]["coordinates"][0]
+    # Both reads go through the project's outer-ring helper: a MultiPolygon's
+    # `coordinates[0]` is a list of rings, not a ring, so reading it by hand
+    # returns a district centroid computed from ring-shaped "points" and a
+    # footprint ring that is not a ring. One feature in the real model is a
+    # MultiPolygon (bldg-0104), which is exactly enough to hit this.
+    ring = outer_ring(feature.get("geometry"))
+    if not ring:
+        raise HTTPException(status_code=422,
+                            detail="building geometry has no usable outer ring")
     district = [
-        (sum(p[0] for p in f["geometry"]["coordinates"][0][:-1]) / max(1, len(ring) - 1),
-         sum(p[1] for p in f["geometry"]["coordinates"][0][:-1]) / max(1, len(ring) - 1),
+        (sum(p[0] for p in r[:-1]) / max(1, len(r) - 1),
+         sum(p[1] for p in r[:-1]) / max(1, len(r) - 1),
          float(f["properties"].get("height_m") or 0.0))
         for f in features
-        for ring in [f["geometry"]["coordinates"][0]]
+        for r in [outer_ring(f.get("geometry"))]
+        if r
     ]
 
     ctx = context_for(grids, building_id, ring, feature.get("properties", {}), district)

@@ -407,7 +407,7 @@ that fails on someone else's machine too.
 
 **What it bought.** Priority-Flood depression filling (Barnes et al. 2014) and
 D8 flow accumulation, both tested against known-answer cases. It is not a
-reimplementation for its own sake: the shipped DEM has **10.3% of its cells in
+reimplementation for its own sake: the shipped DEM has **11.7% of its cells in
 closed depressions**, and without filling them the level-pool solver floods pits
 to arbitrary depth. That was the largest single weakness in the wet grid.
 

@@ -300,6 +300,114 @@ def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
 
 
 # --------------------------------------------------------------------------- #
+# Placement: the one generator of new massing blocks
+# --------------------------------------------------------------------------- #
+
+# Edge length of a placed block. 40 m is the pitch the demo's blocks use, and it
+# is a *stated* assumption, not a derived optimum: nothing in the data says a new
+# building is 40 m square.
+PLACEMENT_PITCH_M = 40.0
+
+# A block is emitted only where this fraction of its cells are placeable (paved,
+# inside the scope, not already under a building). Below it the block would be
+# half in a field or half on an existing tower.
+PLACEMENT_FILL_FRACTION = 0.9
+
+
+def _ring_mask(ov: Any, ring: list[list[float]]) -> Any:
+    """Boolean raster: True at each cell centre inside ``ring`` (even-odd rule).
+
+    Vectorised ray casting over the grid rather than a per-cell Python loop:
+    the scope ring is arbitrary GeoJSON, so a bounding-box test would accept a
+    diagonal or concave region's empty corner.
+    """
+    import numpy as np
+
+    west, south, east, north = ov.bounds
+    cw = (east - west) / ov.cols
+    ch = (north - south) / ov.rows
+    lon = np.repeat((west + (np.arange(ov.cols) + 0.5) * cw)[None, :], ov.rows, 0)
+    lat = np.repeat((north - (np.arange(ov.rows) + 0.5) * ch)[:, None], ov.cols, 1)
+    inside = np.zeros(lon.shape, dtype=bool)
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(ring[i][0]), float(ring[i][1])
+        xj, yj = float(ring[j][0]), float(ring[j][1])
+        straddles = (yi > lat) != (yj > lat)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            cross = (xj - xi) * (lat - yi) / (yj - yi) + xi
+        inside ^= straddles & (lon < cross)
+        j = i
+    return inside
+
+
+def _block_ring(ov: Any, row0: int, col0: int, pitch: int) -> list[list[float]]:
+    """The lon/lat ring of a block of cells, corners in GeoJSON order."""
+    west, _south, _east, north = ov.bounds
+    cw = (_east - west) / ov.cols
+    ch = (north - _south) / ov.rows
+    x0 = west + col0 * cw
+    x1 = west + (col0 + pitch) * cw
+    y1 = north - row0 * ch
+    y0 = north - (row0 + pitch) * ch
+    r = lambda v: round(v, 7)  # noqa: E731
+    return [[r(x0), r(y0)], [r(x1), r(y0)], [r(x1), r(y1)], [r(x0), r(y1)],
+            [r(x0), r(y0)]]
+
+
+def placement_footprints(scope_ring: list[list[float]], count: int,
+                         grounding: Grounding) -> list[dict[str, Any]]:
+    """Up to ``count`` new blocks on the paved class inside ``scope_ring``.
+
+    The **only** generator of new massing: ``scenario.apply_massing`` calls this
+    so a "place" op in a run and the demo's placement are the same function with
+    the same pitch and the same exclusions. A second generator would be exactly
+    the drift this project forbids.
+
+    Exclusions are what make a placement defensible rather than a stamped square:
+    a cell must be paved (new massing goes on already-built ground, so the
+    drainage axis is honest about height not being a flood lever), inside the
+    scope, and **not already under a building** -- the existing district is not
+    available to be built on. ``heightM`` is ``None``: this function places
+    footprints and does not invent a height, so the caller's own height (or its
+    stated default) applies.
+
+    An empty list is a real answer -- a fully built scope has nowhere to place --
+    and the caller reports a placed count of zero rather than inventing a block.
+    """
+    ov = grounding.overlay
+    if ov is None or count <= 0 or not scope_ring:
+        return []
+    pitch = max(1, int(round(PLACEMENT_PITCH_M / float(ov.cell_m))))
+    target = ov.class_mask("paved") & _ring_mask(ov, scope_ring)
+
+    # Existing massing is excluded using the project's one footprint mask.
+    try:
+        from _overlay_common import building_footprint_mask  # noqa: PLC0415
+
+        occupied = building_footprint_mask(ov)
+    except ImportError:  # pragma: no cover - scripts/ off sys.path
+        occupied = None
+    if occupied is not None:
+        target &= ~occupied
+
+    blocks: list[dict[str, Any]] = []
+    for min_r, min_c, max_r, max_c, _size in _components(target, pitch * pitch):
+        for row0 in range(min_r, max_r - pitch + 2, pitch):
+            for col0 in range(min_c, max_c - pitch + 2, pitch):
+                if len(blocks) >= count:
+                    return blocks
+                window = target[row0:row0 + pitch, col0:col0 + pitch]
+                if window.size and window.mean() >= PLACEMENT_FILL_FRACTION:
+                    blocks.append(
+                        {"ring": _block_ring(ov, row0, col0, pitch),
+                         "heightM": None}
+                    )
+    return blocks
+
+
+# --------------------------------------------------------------------------- #
 # Scope: turning "the west" into a polygon the model never got to choose
 # --------------------------------------------------------------------------- #
 

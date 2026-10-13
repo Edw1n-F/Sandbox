@@ -114,23 +114,23 @@ def main() -> int:
               any("NOT a velocity ratio" in w for w in ref["whatThisIsNot"]), "")
 
     # --- the screening, on the real district --- #
+    #
+    # The footprints come from the project's one GeoJSON converter rather than a
+    # hand-rolled ring walk: this block used to read ``coordinates[0]`` itself,
+    # which is a ring for a Polygon and a *list of rings* for a MultiPolygon --
+    # so the one MultiPolygon in the real model (bldg-0104) made the min/max
+    # below compare lists and the suite died on line 124. A second ring parser
+    # is how that happens.
     model = BACKEND_DIR / "data" / "rasters" / "buildings_hsk.json"
     features = json.loads(model.read_text())["features"]
-    fps = []
-    for f in features:
-        ring = f["geometry"]["coordinates"][0]
-        xs = [p[0] for p in ring]
-        ys = [p[1] for p in ring]
-        mid = (min(ys) + max(ys)) / 2
-        fps.append({
-            "widthM": (max(xs) - min(xs)) * 111_320.0 * math.cos(math.radians(mid)),
-            "depthM": (max(ys) - min(ys)) * 110_540.0,
-            "heightM": float(f["properties"].get("height_m") or 0.0),
-        })
+    fps = [
+        {"widthM": fp.width_m, "depthM": fp.depth_m, "heightM": fp.height_m}
+        for fp in footprints_from_geojson(features)
+    ]
     out = ventilation_screening(fps, 7_865_000.0,
                                 prevailing=(ref or {}).get("windRegime", {}).get("prevailing"),
                                 combined_frequency_percent=40.8)
-    check("it runs on all 2,639 envelopes",
+    check(f"it runs on all {len(features)} real footprints",
           out["buildingCount"] == len(features), f"{out['buildingCount']}")
     check("every direction is computed",
           len(out["frontalAreaDensity"]["byDirection"]) == 16,
@@ -148,10 +148,15 @@ def main() -> int:
     check("FAD values are plausible and under 1 here",
           0 < out["frontalAreaDensity"]["max"] < 1.0,
           f"max {out['frontalAreaDensity']['max']}")
-    check("and clearly not the same scale as the published VRs",
-          out["frontalAreaDensity"]["max"] > vr["siteSpatialAverage"]["baseline"]
+    check("and is not on the published VR scale",
+          # FAD for the REAL district is ~0.018 against a published velocity
+          # ratio of 0.28 -- two orders apart, and now on the low side. The
+          # direction flipped when surveyed footprints replaced the procedural
+          # 45 m blocks, so the assertion states the separation, not a sign.
+          out["frontalAreaDensity"]["max"] < vr["siteSpatialAverage"]["baseline"] / 5
           if ref else True,
-          "which is exactly why the two are never interchanged")
+          f"FAD max {out['frontalAreaDensity']['max']} vs published VR "
+          f"{vr['siteSpatialAverage']['baseline'] if ref else '-'}")
 
     # --- Stage 5b: least-cost corridors --- #
     #
@@ -260,9 +265,14 @@ def main() -> int:
               f"NE {ne['firstObstructionMeanM']} m vs "
               f"SW {sw['firstObstructionMeanM']} m")
         check("the first-obstruction heights match directional_exposure",
-              abs(ne["firstObstructionMeanM"] - 30.233) < 0.5
-              and abs(sw["firstObstructionMeanM"] - 44.851) < 0.5,
-              "the corridor must not re-derive a second march")
+              # Pinned to the real-footprint march: the procedural massing gave
+              # 30.233 / 44.851. The point of the pin is that the corridor reads
+              # the canonical march rather than re-deriving a second one, so the
+              # number moving with the geometry is expected; two marches
+              # disagreeing is not.
+              abs(ne["firstObstructionMeanM"] - 15.334) < 0.5
+              and abs(sw["firstObstructionMeanM"] - 8.877) < 0.5,
+              f"NE {ne['firstObstructionMeanM']} m, SW {sw['firstObstructionMeanM']} m")
         check("the limitation says where the new difference ends",
               "entryEdge" in corridors["limitation"]
               and "firstObstructionMeanM" in corridors["limitation"]
