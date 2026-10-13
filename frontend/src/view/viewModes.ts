@@ -29,11 +29,7 @@
  * what was found" is the only contract that survives both.
  */
 import {
-  Cartesian2,
   Color,
-  ConstantProperty,
-  GridMaterialProperty,
-  HeightReference,
   Rectangle,
   type ImageryLayer,
   type Viewer,
@@ -54,9 +50,6 @@ export const VIEW_MODES: Record<ViewMode, { label: string; blurb: string }> = {
     blurb: 'Dark instrument view. Envelopes traced in neon, coloured by height.',
   },
 }
-
-/** Reference grid spacing, in metres. Also what the legend says. */
-export const GRID_SPACING_M = 200
 
 const ACCENT = '#3fe0ff'
 
@@ -83,17 +76,8 @@ export const HEIGHT_RAMP = {
 export interface ViewModeContext {
   /** Base imagery layer, so it can be dimmed rather than replaced. */
   baseLayer: ImageryLayer | null
-  /** The scene bbox, for the reference grid. */
+  /** The scene bbox. */
   rectangle: Rectangle | null
-}
-
-/** Rectangle size in metres, at the rectangle's own mid-latitude. */
-function extentMetres(rectangle: Rectangle): { width: number; height: number } {
-  const midLat = ((rectangle.north + rectangle.south) / 2) * (Math.PI / 180)
-  return {
-    width: Math.abs(rectangle.east - rectangle.west) * 111_320 * Math.cos(midLat),
-    height: Math.abs(rectangle.north - rectangle.south) * 110_574,
-  }
 }
 
 /**
@@ -192,53 +176,6 @@ export function applyViewMode(
     swap(() => u.sigma, (v) => (u.sigma = v), 2.0)
     swap(() => u.stepSize, (v) => (u.stepSize = v), 1.0)
     swap(() => u.glowOnly, (v) => (u.glowOnly = v), false)
-  }
-
-  // ---- the reference grid --------------------------------------------------
-  //
-  // Bounded to the study area on purpose. Cesium's own `GridImageryProvider`
-  // grids the entire globe, which at this zoom is either one coarse cross or a
-  // moire across the horizon. A clamped rectangle gives an even lattice exactly
-  // where the work is.
-  if (context.rectangle) {
-    const { width, height } = extentMetres(context.rectangle)
-    const grid = viewer.entities.add({
-      name: 'Reference grid',
-      rectangle: {
-        coordinates: context.rectangle,
-        material: new GridMaterialProperty({
-          color: Color.fromCssColorString(ACCENT).withAlpha(0.7),
-          // `cellAlpha` is the *line* opacity despite the name — the grid shader has
-          // no separate cell fill, it draws lines and scales them by this. Setting
-          // it to 0, which reads like "cells off", makes the whole grid invisible.
-          //
-          // Kept low on purpose. Cesium draws this grid as geometry-space lines, so
-          // at a grazing angle `fwidth` smears each one into a wide band — the
-          // lattice stays legible head-on and turns into pale sheets across the
-          // district when the camera is low. MapLibre does not have this problem
-          // because its grid is screen-space. A reference grid that smears over the
-          // data it exists to measure is worse than a faint one, so it is tuned to
-          // stay readable where it is square-on and stay out of the way where not.
-          cellAlpha: 0.3,
-          // `lineCount` counts lines, not cells, so 12 x 17 lines across a
-          // 2.37 x 3.32 km bbox is a 200 m lattice -- the number GRID_SPACING_M
-          // names and the legend quotes.
-          lineCount: new Cartesian2(
-            Math.max(2, Math.round(width / GRID_SPACING_M)),
-            Math.max(2, Math.round(height / GRID_SPACING_M)),
-          ),
-          lineThickness: new Cartesian2(1, 1),
-        }),
-        // Clamped, so the lattice drapes over 139 m of relief instead of
-        // slicing through it at one fixed height.
-        heightReference: new ConstantProperty(HeightReference.CLAMP_TO_GROUND),
-        fill: true,
-        outline: false,
-      },
-    })
-    undo.unshift(() => {
-      if (!viewer.isDestroyed()) viewer.entities.remove(grid)
-    })
   }
 
   viewer.scene.requestRender()
