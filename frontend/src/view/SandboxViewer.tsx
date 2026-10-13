@@ -53,6 +53,8 @@ import {
   DEFAULT_PITCH_DEG,
   frameExtent,
   orbitBy,
+  setSandboxInset,
+  setSandboxPivot,
   tuneNavigation,
   zoomBy,
   type Extent,
@@ -209,6 +211,7 @@ let panelInsetLeft = 0
 
 export function setPanelInsetLeft(px: number): void {
   panelInsetLeft = px
+  setSandboxInset(px)
 }
 
 export interface SandboxViewerProps {
@@ -778,11 +781,17 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24 }).then((handle) => {
       if (cancelled || !handle) return
       terrainTilesetHandle = handle
+      // Frame and orbit about the centre of the whole sandbox terrain, not the corner
+      // or whatever the screen centre happens to hit. Re-frame now that it is known so
+      // the default view is calibrated against the real tile extent.
+      setSandboxPivot(handle.tileset.boundingSphere.center)
+      flyTo(viewer, 'oblique', 0)
       viewer.scene.requestRender()
     })
 
     return () => {
       cancelled = true
+      setSandboxPivot(null)
       terrainTilesetHandle?.dispose()
       terrainTilesetHandle = null
     }

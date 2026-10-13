@@ -65,6 +65,24 @@ export const DEFAULT_PITCH_DEG = -33
 export const MIN_PITCH_DEG = -88
 export const MAX_PITCH_DEG = -8
 
+/**
+ * The fixed point the camera frames and orbits: the centre of the whole sandbox terrain
+ * (the terrain tileset's bounding-sphere centre, height included). Without it the orbit
+ * pivots on whatever sits under the screen centre, which after the side-panel shift is
+ * a corner-ish point, so the model swings around instead of turning in place.
+ */
+let sandboxPivot: Cartesian3 | null = null
+let sandboxInsetLeft = 0
+
+export function setSandboxPivot(point: Cartesian3 | null): void {
+  sandboxPivot = point ? Cartesian3.clone(point) : null
+}
+
+/** Pixels of left panel to keep clear when orbiting, same meaning as `FrameOptions.insetLeft`. */
+export function setSandboxInset(px: number): void {
+  sandboxInsetLeft = Math.max(0, px)
+}
+
 export interface Extent {
   west: number
   south: number
@@ -153,6 +171,7 @@ function placeCamera(
   pitch: number,
   range: number,
   duration: number,
+  insetLeft = 0,
 ): void {
   const frame = Transforms.eastNorthUpToFixedFrame(target, Ellipsoid.WGS84)
   const back = new Cartesian3(
@@ -178,6 +197,18 @@ function placeCamera(
     new Cartesian3(),
   )
   const up = Matrix4.multiplyByPointAsVector(frame, Cartesian3.UNIT_Z, new Cartesian3())
+
+  // Keep the pivot centred in the strip of canvas the left panel leaves free. Pure
+  // translation, same as `frameExtent`, so orientation and the pivot distance are untouched.
+  const inset = Math.min(insetLeft, (viewer.scene.canvas?.width ?? 0) * 0.4)
+  if (inset > 0) {
+    const right = Cartesian3.normalize(
+      Cartesian3.cross(direction, up, new Cartesian3()),
+      new Cartesian3(),
+    )
+    Cartesian3.multiplyByScalar(right, -(inset / 2) * metresPerPixel(viewer, range), right)
+    Cartesian3.add(destination, right, destination)
+  }
 
   if (duration <= 0) {
     viewer.camera.setView({ destination, orientation: { direction, up } })
@@ -207,11 +238,13 @@ export function frameExtent(
 
   // The look-at point sits on the ellipsoid at the bbox centre, lifted by half the
   // relief so the camera ends up above the hills rather than inside them.
-  const target = Cartesian3.fromDegrees(
-    (extent.west + extent.east) / 2,
-    (extent.south + extent.north) / 2,
-    (options.reliefM ?? 0) / 2,
-  )
+  const target =
+    sandboxPivot ??
+    Cartesian3.fromDegrees(
+      (extent.west + extent.east) / 2,
+      (extent.south + extent.north) / 2,
+      (options.reliefM ?? 0) / 2,
+    )
   const frame = Transforms.eastNorthUpToFixedFrame(target, Ellipsoid.WGS84)
   const back = new Cartesian3(
     -range * Math.sin(heading) * Math.cos(pitch),
@@ -331,6 +364,10 @@ export function bindOrbitGestures(viewer: Viewer): void {
 /** The point the camera is looking at, as close to the frame centre as we can get. */
 function viewCentre(viewer: Viewer): { point: Cartesian3; range: number } {
   const camera = viewer.camera
+  if (sandboxPivot) {
+    const distance = Cartesian3.distance(camera.positionWC, sandboxPivot)
+    return { point: sandboxPivot, range: Math.max(distance, 1) }
+  }
   const canvas = viewer.scene.canvas
   const middle = new Cartesian2(
     Math.max(1, canvas?.clientWidth ?? 1) / 2,
@@ -381,7 +418,7 @@ export function orbitBy(
     CesiumMath.toRadians(MAX_PITCH_DEG),
   )
   const { point, range } = viewCentre(viewer)
-  placeCamera(viewer, point, heading, pitch, range, duration)
+  placeCamera(viewer, point, heading, pitch, range, duration, sandboxPivot ? sandboxInsetLeft : 0)
 }
 
 /**
@@ -400,5 +437,5 @@ export function zoomBy(viewer: Viewer, factor: number, duration = 0.3): void {
     controller.minimumZoomDistance ?? 40,
     controller.maximumZoomDistance ?? 40_000,
   )
-  placeCamera(viewer, point, camera.heading, camera.pitch, next, duration)
+  placeCamera(viewer, point, camera.heading, camera.pitch, next, duration, sandboxPivot ? sandboxInsetLeft : 0)
 }
