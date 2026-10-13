@@ -20,6 +20,7 @@ import Typography from '@mui/material/Typography'
 
 import AppErrorBoundary from './components/AppErrorBoundary'
 import ChatPanel from './components/ChatPanel'
+import LoadingScreen from './components/LoadingScreen'
 import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
@@ -64,6 +65,8 @@ export default function App() {
             no terrain, no scene id, or a failed load. Without it the failure
             mode is a blank canvas with working chrome, which reads as broken. */}
         <SceneNotice />
+
+        <LoadingScreen />
 
         {chatOpen && <ChatPanel />}
 

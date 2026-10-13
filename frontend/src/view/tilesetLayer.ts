@@ -7,6 +7,8 @@
  */
 import { Cesium3DTileset, Matrix4, type Viewer } from 'cesium'
 
+import { useTileLoadStore, type TilesetName } from '@/state/tileLoadStore'
+
 export interface TilesetHandle {
   tileset: Cesium3DTileset
   dispose: () => void
@@ -21,6 +23,8 @@ export interface TilesetOptions {
    * detail, higher values load less.  The old single-tile default was 1.
    */
   maximumScreenSpaceError?: number
+  /** Reported to the loading screen. */
+  name?: TilesetName
 }
 
 /**
@@ -38,27 +42,42 @@ export async function add3DTileset(
 
   console.log('[3dtiles] loading tileset from', url)
 
-  const { modelMatrix, maximumScreenSpaceError = 16 } = options
+  const { modelMatrix, maximumScreenSpaceError = 16, name } = options
+  const report = name ? useTileLoadStore.getState() : null
+  if (name) report?.set(name, 'loading')
 
   try {
     const tileset = await Cesium3DTileset.fromUrl(url, {
       maximumScreenSpaceError,
-      // Lower the detail while the camera is moving or looking at distant tiles,
-      // so the first view and orbiting do not queue every high-detail tile.
-      dynamicScreenSpaceError: true,
-      dynamicScreenSpaceErrorDensity: 0.0004,
-      dynamicScreenSpaceErrorFactor: 16,
-      // Give the 300 MB textured city model room before tiles get evicted and
-      // re-fetched, which reads as flicker when orbiting.
+      // Steady detail beats fast detail here. Dynamic / foveated SSE and culling
+      // requests while moving all change the level of detail *as the camera moves*,
+      // which reads as the buildings shifting and re-texturing during a zoom. With
+      // them off the tile set only changes when the view settles.
+      dynamicScreenSpaceError: false,
+      foveatedScreenSpaceError: false,
+      cullRequestsWhileMoving: false,
+      // Load a coarse version of the first view straight away, then refine, so the
+      // loading screen can lift on a recognisable scene instead of a full-detail one.
+      progressiveResolutionHeightFraction: 0.5,
+      // Keep a parent visible until all its children are ready (no holes while
+      // refining) and do not skip levels, so detail steps up one tier at a time.
+      skipLevelOfDetail: false,
+      // The 300 MB city model needs room before tiles get evicted and re-fetched,
+      // which reads as flicker when orbiting.
       cacheBytes: 768 * 1024 * 1024,
       maximumCacheOverflowBytes: 512 * 1024 * 1024,
-      // Do not fetch tiles that are only just outside the view.
-      cullRequestsWhileMoving: true,
-      cullRequestsWhileMovingMultiplier: 60,
     })
     if (viewer.isDestroyed()) {
       tileset.destroy()
       return null
+    }
+
+    if (name) {
+      // `initialTilesLoaded` fires once, when everything the first view needs is in.
+      tileset.initialTilesLoaded.addEventListener(() => useTileLoadStore.getState().set(name, 'ready'))
+      tileset.loadProgress.addEventListener((pending: number, processing: number) =>
+        useTileLoadStore.getState().setPending(name, pending + processing),
+      )
     }
 
     if (modelMatrix) {
@@ -87,6 +106,7 @@ export async function add3DTileset(
     return {
       tileset,
       dispose: () => {
+        if (name) useTileLoadStore.getState().reset(name)
         if (!viewer.isDestroyed()) {
           viewer.scene.primitives.remove(tileset)
         } else {
@@ -96,6 +116,7 @@ export async function add3DTileset(
     }
   } catch (err) {
     console.warn('[3dtiles] failed to load tileset:', err)
+    if (name) useTileLoadStore.getState().set(name, 'failed')
     return null
   }
 }

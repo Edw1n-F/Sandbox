@@ -744,7 +744,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
 
     let cancelled = false
-    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24 }).then((handle) => {
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24, name: 'buildings' }).then((handle) => {
       if (cancelled || !handle) return
       tilesetHandle = handle
       handle.tileset.show = showRealBuildings
@@ -778,7 +778,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
 
     let cancelled = false
-    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24 }).then((handle) => {
+    void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24, name: 'terrain' }).then((handle) => {
       if (cancelled || !handle) return
       terrainTilesetHandle = handle
       // Frame and orbit about the centre of the whole sandbox terrain, not the corner
