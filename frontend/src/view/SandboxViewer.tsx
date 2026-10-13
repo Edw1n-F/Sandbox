@@ -627,7 +627,9 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   useEffect(() => {
     const viewer = viewerRef.current
     const url = terrainMeta?.cityModelUrl
-    if (!isLive(viewer) || !url) {
+    // The placeholder massing pillars are off (the real 3D tiles replace them),
+    // so do not fetch the GeoJSON or build its entities at all.
+    if (!isLive(viewer) || !url || !useSceneStore.getState().layers.cityModel) {
       cityModelHandle = null
       return
     }
