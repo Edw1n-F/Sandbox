@@ -40,9 +40,11 @@ export default function SlidersPanel() {
         <SliderField
           label="Temperature"
           unit="°C"
-          min={10}
-          max={45}
-          value={Number(scene?.envParams.temperature ?? 25)}
+          min={24}
+          max={42}
+          value={Number(scene?.envParams.temperature ?? 30)}
+          marks={[{ value: 35, label: '35°' }]}
+          caption="Stretches the heat colour scale above 35 °C. Does not change rainfall or runoff."
           onChange={(temperature) => setEnvParams({ temperature })}
         />
 

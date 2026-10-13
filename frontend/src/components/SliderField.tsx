@@ -17,6 +17,8 @@ interface Props {
   max: number
   unit: string
   step?: number
+  marks?: Array<{ value: number; label?: string }>
+  caption?: string
   onChange: (value: number) => void
 }
 
@@ -27,6 +29,8 @@ export default function SliderField({
   max,
   unit,
   step = 1,
+  marks,
+  caption,
   onChange,
 }: Props) {
   const id = `${label.toLowerCase()}-slider`
@@ -45,9 +49,15 @@ export default function SliderField({
         min={min}
         max={max}
         step={step}
+        marks={marks}
         value={value}
         onChange={(_event, next) => onChange(Array.isArray(next) ? next[0] : next)}
       />
+      {caption && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5, lineHeight: 1.25 }}>
+          {caption}
+        </Typography>
+      )}
     </Box>
   )
 }
