@@ -43,8 +43,11 @@ const reset = () => {
       wetGrid: false,
       heatmap: false,
       interventions: false,
-      cityModel: true,
+      cityModel: false,
       props: true,
+      realBuildings: true,
+      waterbody: true,
+      infrastructure: true,
     },
     viewMode: 'survey',
   })

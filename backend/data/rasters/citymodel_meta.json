@@ -1,16 +1,16 @@
 {
   "status": "PROVISIONAL_MASSING_NOT_SURVEYED",
-  "features": 2639,
+  "features": 197,
   "heightM": {
     "min": 10.9,
-    "max": 131.1,
+    "max": 130.3,
     "mean": 35.3
   },
   "byClass": {
-    "new_town_block": 1018,
-    "village_house": 1140,
-    "landmark_tower": 66,
-    "newer_tower": 415
+    "new_town_block": 77,
+    "village_house": 85,
+    "landmark_tower": 5,
+    "newer_tower": 30
   },
   "footprintSource": "derived from ESA WorldCover 10 m paved class",
   "heightSource": "ASSUMED_DISTRIBUTION_NOT_SURVEYED",

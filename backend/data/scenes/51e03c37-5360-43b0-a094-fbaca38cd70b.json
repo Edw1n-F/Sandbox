@@ -4,8 +4,8 @@
   "center": {
     "type": "Point",
     "coordinates": [
-      113.9935,
-      22.44
+      113.9958,
+      22.43365
     ]
   },
   "bbox": {
@@ -13,33 +13,33 @@
     "coordinates": [
       [
         [
-          113.982,
-          22.425
+          113.9922,
+          22.431
         ],
         [
-          114.005,
-          22.425
+          113.9994,
+          22.431
         ],
         [
-          114.005,
-          22.455
+          113.9994,
+          22.4363
         ],
         [
-          113.982,
-          22.455
+          113.9922,
+          22.4363
         ],
         [
-          113.982,
-          22.425
+          113.9922,
+          22.431
         ]
       ]
     ]
   },
   "imagery_url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   "default_camera": {
-    "longitude": 113.9935,
-    "latitude": 22.44,
-    "height": 4200.0,
+    "longitude": 113.9958,
+    "latitude": 22.4275,
+    "height": 1100.0,
     "heading": 0.0,
     "pitch": -48.0
   },
@@ -47,26 +47,26 @@
     "temperature": 28.5,
     "precipitation": 450.0
   },
-  "wet_grid_path": "rasters/wetgrid_hsk.png",
-  "heatmap_path": "rasters/heatmap_hsk.png",
+  "wet_grid_path": "rasters\\wetgrid_hsk.png",
+  "heatmap_path": "rasters\\heatmap_hsk.png",
   "created_at": "2026-10-06T11:01:42Z",
-  "updated_at": "2026-10-12T07:41:37Z",
+  "updated_at": "2026-10-13T07:24:57Z",
   "study_area": "hsk-ht-nda",
   "working_grid": {
     "bounds": [
-      113.982,
-      22.425,
-      114.005,
-      22.455
+      113.9922,
+      22.431,
+      113.9994,
+      22.4363
     ],
     "resolution_m": 5,
-    "rows": 664,
-    "cols": 474,
-    "cell_width_m": 4.9950071502695215,
-    "cell_height_m": 5.003143563288857,
-    "width_m": 2367.633389227753,
-    "height_m": 3322.087326023801,
-    "area_m2": 7865484.875024295,
+    "rows": 117,
+    "cols": 148,
+    "cell_width_m": 5.008148082522576,
+    "cell_height_m": 5.016253273601341,
+    "width_m": 741.2059162133412,
+    "height_m": 586.9016330113569,
+    "area_m2": 435014.9626232889,
     "crs_note": "Metres via local equirectangular approximation about the extent centre. For volume reporting, swap HK1980 Grid (EPSG:2326)."
   },
   "terrain_source": "terrain-rgb / open-meteo / srtm-1arcsec",

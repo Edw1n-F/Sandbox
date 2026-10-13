@@ -6,24 +6,42 @@
   "crs": "EPSG:4326",
   "center": {
     "type": "Point",
-    "coordinates": [113.9935, 22.44]
+    "coordinates": [
+      113.9958,
+      22.43365
+    ]
   },
   "bbox": {
     "type": "Polygon",
     "coordinates": [
       [
-        [113.982, 22.425],
-        [114.005, 22.425],
-        [114.005, 22.455],
-        [113.982, 22.455],
-        [113.982, 22.425]
+        [
+          113.9922,
+          22.431
+        ],
+        [
+          113.9994,
+          22.431
+        ],
+        [
+          113.9994,
+          22.4363
+        ],
+        [
+          113.9922,
+          22.4363
+        ],
+        [
+          113.9922,
+          22.431
+        ]
       ]
     ]
   },
   "defaultCamera": {
-    "longitude": 113.9935,
-    "latitude": 22.44,
-    "height": 4200,
+    "longitude": 113.9958,
+    "latitude": 22.4275,
+    "height": 1100,
     "heading": 0,
     "pitch": -48
   },
@@ -55,14 +73,20 @@
         "osmType": "node",
         "osmId": 6606515524,
         "osmClass": "railway/station",
-        "point": [113.9974787, 22.4336604]
+        "point": [
+          113.9974787,
+          22.4336604
+        ]
       },
       {
         "label": "Ha Tsuen (NDA component area)",
         "osmType": "node",
         "osmId": 7684821757,
         "osmClass": "place/suburb",
-        "point": [113.9923811, 22.4474544]
+        "point": [
+          113.9923811,
+          22.4474544
+        ]
       }
     ],
     "grid": {

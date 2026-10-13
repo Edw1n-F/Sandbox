@@ -90,7 +90,7 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   wetGrid: false,
   heatmap: false,
   interventions: true,
-  cityModel: true,
+  cityModel: false,
   props: true,
   realBuildings: true,
   waterbody: true,

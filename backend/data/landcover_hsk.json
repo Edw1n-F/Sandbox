@@ -5,12 +5,10 @@
   "source": {
     "name": "ESA WorldCover 10 m v200 (2021)",
     "urls": [
-      "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N21E111_Map.tif",
-      "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N21E114_Map.tif"
+      "https://esa-worldcover.s3.eu-central-1.amazonaws.com/v200/2021/map/ESA_WorldCover_10m_2021_v200_N21E111_Map.tif"
     ],
     "tiles": [
-      "N21E111",
-      "N21E114"
+      "N21E111"
     ],
     "licence": "CC BY 4.0 (ESA)",
     "access": "public S3, no key"
@@ -34,35 +32,41 @@
       "wetland",
       "green",
       "bare",
-      "paved"
+      "paved",
+      "floodable",
+      "tank"
     ],
     "collapsing11to5": "Deliberate. The wet grid needs to know what sheds water and what holds it, not what the crop is. Scenario comparisons stay valid because every scenario reads the same grid.",
     "croplandApproximation": "ESA cropland (40) and built-up (50) are both mapped to 'paved'. They differ in hydrology; HSK/HT is post-reclamation so cropland there is mostly formed land awaiting development, but this is a compromise and is recorded rather than hidden."
   },
   "grid": {
-    "rows": 664,
-    "cols": 474,
+    "rows": 117,
+    "cols": 148,
     "resolutionM": 5.0,
-    "cellAreaM2": 24.990737872452772,
+    "cellAreaM2": 25.12213921363415,
     "crs": "EPSG:4326 on the wire; local equirectangular for measurement"
   },
   "results": {
     "cellCountByClass": {
-      "water": 1185,
+      "water": 0,
       "wetland": 0,
-      "green": 96408,
-      "bare": 5092,
-      "paved": 212051
+      "green": 1840,
+      "bare": 229,
+      "paved": 15247,
+      "floodable": 0,
+      "tank": 0
     },
     "areaHaByClass": {
-      "water": 2.96,
+      "water": 0.0,
       "wetland": 0.0,
-      "green": 240.93,
-      "bare": 12.73,
-      "paved": 529.93
+      "green": 4.62,
+      "bare": 0.58,
+      "paved": 38.3,
+      "floodable": 0.0,
+      "tank": 0.0
     },
-    "imperviousShare": 0.6737,
-    "perviousShare": 0.3063,
+    "imperviousShare": 0.8805,
+    "perviousShare": 0.1062,
     "unmappedCells": 0,
     "outsideTileCells": 0
   },

@@ -6,10 +6,10 @@
   "conditioning": {
     "method": "Priority-Flood (Barnes et al. 2014)",
     "enabled": true,
-    "cellsRaised": 32500,
-    "cellsTotal": 314736,
-    "raisedFraction": 0.1033,
-    "maxFlowAccumulationCells": 73551.0,
+    "cellsRaised": 7,
+    "cellsTotal": 17316,
+    "raisedFraction": 0.0004,
+    "maxFlowAccumulationCells": 2027.0,
     "note": "Implemented in scripts/hydrology.py. richdem and hydrotools are the standard open-source tools for this; both were installed and neither is usable on this host because richdem needs GDAL headers to build."
   },
   "landCoverSource": "esa-worldcover",
@@ -17,15 +17,15 @@
   "inputs": {
     "rainfall_mm": 450.0,
     "resolution_m": 5.0,
-    "rows": 664,
-    "cols": 474,
+    "rows": 117,
+    "cols": 148,
     "bounds": [
-      113.982,
-      22.425,
-      114.005,
-      22.455
+      113.9922,
+      22.431,
+      113.9994,
+      22.4363
     ],
-    "cell_area_m2": 24.990737872452772
+    "cell_area_m2": 25.122139213634153
   },
   "assumptions": {
     "hydrologicSoilGroup": "D",
@@ -34,12 +34,16 @@
       "bare": 94.0,
       "green": 80.0,
       "wetland": 90.0,
-      "water": 100.0
+      "water": 100.0,
+      "floodable": 80.0,
+      "tank": 98.0
     },
     "curveNumberSource": "USDA NRCS TR-55; awaiting independent verification",
     "storageDepthM": {
       "water": 1.5,
-      "wetland": 0.6
+      "wetland": 0.6,
+      "floodable": 0.3,
+      "tank": 2.0
     },
     "depressionStorageM": 0.02,
     "countedAs": {
@@ -47,19 +51,21 @@
       "bare": "generation",
       "green": "generation",
       "wetland": "retention",
-      "water": "retention"
+      "water": "retention",
+      "floodable": "retention",
+      "tank": "retention"
     },
     "doubleCountingRule": "Land cover sets the generation term; explicit storage sets the retention term. Open water generates nothing so a pond is never counted in both (ADR-015).",
     "verticalDatum": "mPD"
   },
   "results": {
-    "runoffVolumeM3": 3326897.7,
-    "unstoredVolumeM3": 3170180.3,
-    "wetCells": 83250,
-    "wetAreaHa": 208.05,
-    "totalAreaHa": 786.55,
-    "wetAreaFraction": 0.2645,
-    "meanDepthInWetAreaM": 1.5238
+    "runoffVolumeM3": 190137.9,
+    "unstoredVolumeM3": 181437.6,
+    "wetCells": 6501,
+    "wetAreaHa": 16.33,
+    "totalAreaHa": 43.5,
+    "wetAreaFraction": 0.3754,
+    "meanDepthInWetAreaM": 1.1109
   },
   "render": {
     "minVisibleDepthM": 0.005,
@@ -71,29 +77,31 @@
     "wetland",
     "green",
     "bare",
-    "paved"
+    "paved",
+    "floodable",
+    "tank"
   ],
   "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0; see data/landcover_hsk.json",
   "routed": {
     "status": "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
     "warning": "Not a flood prediction. Not engineering-grade. Screening-level D8 fill-and-spill on a Priority-Flood conditioned 5 m surface.",
-    "runoffInM3": 3170180.3,
-    "storedM3": 372621.8,
-    "dischargedM3": 2797558.5,
+    "runoffInM3": 181437.6,
+    "storedM3": 0.4,
+    "dischargedM3": 181437.3,
     "massBalance": {
-      "runoffInM3": 3170180.257322346,
-      "storedM3": 372621.78286803927,
-      "dischargedM3": 2797558.474454277,
-      "residualM3": 2.9336661100387573e-08,
-      "relativeResidual": 9.253941012542431e-15,
+      "runoffInM3": 181437.64839036058,
+      "storedM3": 0.3810058800651115,
+      "dischargedM3": 181437.26738448016,
+      "residualM3": 3.4924596548080444e-10,
+      "relativeResidual": 1.9248814597145053e-15,
       "tol": 1e-06,
       "balanced": true
     },
-    "wetCells": 32256,
-    "maxDepthM": 4.5263,
+    "wetCells": 7,
+    "maxDepthM": 0.0042,
     "depressions": {
-      "count": 37,
-      "maxDepthM": 5.7879
+      "count": 1,
+      "maxDepthM": 0.0042
     }
   }
 }

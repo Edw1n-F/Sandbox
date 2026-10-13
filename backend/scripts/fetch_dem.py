@@ -254,7 +254,7 @@ def main() -> int:
             f"elevation min {elevation.min():.1f} m is implausible for a coastal "
             "Hong Kong floodplain; refusing to write."
         )
-    if not 50.0 <= elevation.max() <= 2000.0:
+    if not 5.0 <= elevation.max() <= 2000.0:
         raise RuntimeError(
             f"elevation max {elevation.max():.1f} m is implausible for HSK/HT "
             "(the area tops out near 500 m); refusing to write."

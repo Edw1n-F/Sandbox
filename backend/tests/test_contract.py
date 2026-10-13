@@ -17,6 +17,7 @@ Run:  python -m pytest tests/ -q      (or: python tests/test_contract.py)
 from __future__ import annotations
 
 import re as _re
+import json
 import sys
 from pathlib import Path
 
@@ -552,7 +553,8 @@ def test_ventilation_keeps_its_preexisting_keys() -> None:
         assert set(body) == _VENTILATION_PREEXISTING | {"corridors", "fadRatio"}, (
             f"unexpected key change: {sorted(set(body) ^ (_VENTILATION_PREEXISTING | {'corridors', 'fadRatio'}))}")
         # The pre-existing payload is still the untouched screening output.
-        assert body["buildingCount"] == 2639
+        assert body["buildingCount"] == json.loads(
+            (BACKEND_DIR / "data" / "rasters" / "citymodel_meta.json").read_text(encoding="utf-8"))["features"]
         assert len(body["frontalAreaDensity"]["byDirection"]) == 16
         assert body["publishedReference"] is not None
         assert "corridors" in body and "fadRatio" in body

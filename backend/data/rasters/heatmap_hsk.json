@@ -1,6 +1,6 @@
 {
   "artefact": "heatmap",
-  "generated": "2026-10-09",
+  "generated": "2026-10-13",
   "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
   "warning": "This is a relative heat-exposure index on a 0-1 scale derived from land class, sky view and shade. It is NOT degrees Celsius and NOT a modelled air-temperature field. Do not present it as either.",
   "anchoring": {
@@ -22,21 +22,21 @@
       "shadow": 0.2
     },
     "components": {
-      "land": 0.8102,
-      "svf": 0.2981,
-      "shadow": 0.0645
+      "land": 0.9343,
+      "svf": 0.1545,
+      "shadow": 0.0822
     },
-    "meanHeatIndex": 0.8028,
+    "meanHeatIndex": 0.9044,
     "maxHeatIndex": 1.0,
     "svf": {
-      "meanSvf": 0.2981,
-      "meanOpenFieldSvf": 0.5052,
+      "meanSvf": 0.1545,
+      "meanOpenFieldSvf": 0.3379,
       "minSvf": 0.0,
-      "maxSvf": 1.0,
+      "maxSvf": 0.8404,
       "azimuthBins": 16,
       "searchRadiusM": 300.0,
       "searchRadiusCells": 60,
-      "buildingCells": 129017,
+      "buildingCells": 9401,
       "method": "Per-cell sky view factor from a horizon search over the massing height raster: SVF = 1 - (1/N) sum_i sin(gamma_i), where gamma_i is the horizon elevation angle in azimuth bin i (16 bins), searched to a 300 m (60-cell) radius. A cell under massing is inside the building and scores 0.",
       "limitation": "Geometry, not radiation. SVF is a sky-exposure fraction -- how much sky a ground point sees -- not a temperature. No sun, no surface energy balance, no air temperature. The horizon is sampled on 16 azimuth rays, so a narrow slot between two buildings can fall between rays and be missed.",
       "status": "RELATIVE_INDEX_NOT_A_TEMPERATURE",
@@ -47,15 +47,15 @@
   },
   "inputs": {
     "resolution_m": 5.0,
-    "rows": 664,
-    "cols": 474,
+    "rows": 117,
+    "cols": 148,
     "bounds": [
-      113.982,
-      22.425,
-      114.005,
-      22.455
+      113.9922,
+      22.431,
+      113.9994,
+      22.4363
     ],
-    "cellAreaM2": 24.990737872452772
+    "cellAreaM2": 25.122139213634153
   },
   "assumptions": {
     "heatIndexByClass": {
@@ -63,38 +63,46 @@
       "bare": 0.85,
       "green": 0.4,
       "wetland": 0.2,
-      "water": 0.05
+      "water": 0.05,
+      "floodable": 0.4,
+      "tank": 1.0
     },
     "heatIndexSource": "Hand-authored screening index; awaiting verification",
     "heatwaveStretch": null,
     "heatwaveNote": "A display transform on the same field, not a scenario. Compare runs at the same stretch setting."
   },
   "results": {
-    "meanIndex": 0.8028,
+    "meanIndex": 0.9044,
     "maxIndex": 1.0,
     "cellCountByClass": {
-      "water": 1185,
+      "water": 0,
       "wetland": 0,
-      "green": 96408,
-      "bare": 5092,
-      "paved": 212051
+      "green": 1840,
+      "bare": 229,
+      "paved": 15247,
+      "floodable": 0,
+      "tank": 0
     },
     "areaHaByClass": {
-      "water": 2.96,
+      "water": 0.0,
       "wetland": 0.0,
-      "green": 240.93,
-      "bare": 12.73,
-      "paved": 529.93
+      "green": 4.62,
+      "bare": 0.58,
+      "paved": 38.3,
+      "floodable": 0.0,
+      "tank": 0.0
     },
-    "imperviousShare": 0.6737
+    "imperviousShare": 0.8805
   },
   "landClasses": [
     "water",
     "wetland",
     "green",
     "bare",
-    "paved"
+    "paved",
+    "floodable",
+    "tank"
   ],
-  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0, tiles ['N21E111', 'N21E114'], resampled to 5 m by nearest neighbour. See data/landcover_hsk.json for the ESA->ours class mapping.",
+  "landClassProvenance": "ESA WorldCover 10 m v200 (2021), CC BY 4.0, tiles ['N21E111'], resampled to 5 m by nearest neighbour. See data/landcover_hsk.json for the ESA->ours class mapping.",
   "landCoverSource": "esa-worldcover"
 }

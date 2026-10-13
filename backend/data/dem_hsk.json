@@ -10,25 +10,25 @@
     "note": "Verified against Everest and open-ocean control points on every run. The AWS elevation-tiles-prod bucket was tested and rejected: it returns HTTP 200 with non-terrarium pixels that decode to nonsense (Everest ~1e6 m)."
   },
   "grid": {
-    "rows": 37,
-    "cols": 28,
-    "resolutionLonM": 84.5,
-    "resolutionLatM": 89.7,
+    "rows": 7,
+    "cols": 9,
+    "resolutionLonM": 82.3,
+    "resolutionLatM": 83.7,
     "resolutionNote": "Measured from the deduplicated grid. The source is a ~90 m global model; requesting a finer lattice duplicates values rather than resolving them.",
     "bounds": [
-      113.982,
-      22.425,
-      114.005,
-      22.455
+      113.9922,
+      22.431,
+      113.9994,
+      22.4363
     ],
     "orientation": "north-up, row 0 = northernmost",
     "verticalDatum": "mPD (Open-Meteo returns orthometric heights)"
   },
   "elevation": {
-    "minM": 2.0,
-    "maxM": 141.0,
-    "meanM": 17.044401168823242,
-    "reliefM": 139.0
+    "minM": 7.0,
+    "maxM": 16.0,
+    "meanM": 11.317460060119629,
+    "reliefM": 9.0
   },
   "caveats": [
     "Sampled, not a survey product: ~90 m postings resampled onto the 5 m analysis grid. The 5 m grid is the analysis convention, not the data resolution, and the ~90 m figure is the measured one.",
