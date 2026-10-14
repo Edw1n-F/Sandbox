@@ -77,3 +77,6 @@ backend/data/interventions/*
 # Written by frontend/scripts/verify-3d.mjs on every run; not source.
 frontend/verify-before-run.png
 frontend/verify-after-run.png
+
+# Original source directory for the MTR station model (duplicate of backend/model/).
+backend/plan_project-model/

@@ -11,18 +11,28 @@
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import {
+  Cartesian2,
   Cartesian3,
   Cartesian4,
+  Cartographic,
   ClippingPlane,
   ClippingPlaneCollection,
   ClassificationType,
+  Cesium3DTileFeature,
   Color,
+  Entity,
   ImageMaterialProperty,
   ConstantProperty,
+  LabelStyle,
   Math as CesiumMath,
   Matrix4,
+  Model,
+  NearFarScalar,
   Rectangle,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
   Transforms,
+  VerticalOrigin,
   Viewer,
   type ImageryLayer,
 } from 'cesium'
@@ -34,7 +44,7 @@ import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions } from './interventionLayer'
-import { demElevationRange } from './demProvider'
+import { demElevationRange, sampleDemHeight, whenDemReady } from './demProvider'
 import {
   createBaseImageryLayer,
   createOverlayLayer,
@@ -58,6 +68,8 @@ import { applyViewMode, boundaryColour } from './viewModes'
 let propsHandle: OnlinePropHandle | null = null
 let tilesetHandle: TilesetHandle | null = null
 let terrainTilesetHandle: TilesetHandle | null = null
+let mtrModel: Model | null = null
+let mtrMarker: Entity | null = null
 
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
@@ -166,6 +178,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
+  const showPlanProject = useSceneStore((s) => s.layers.planProject ?? false)
+  const setPlanProjectLoading = useSceneStore((s) => s.setPlanProjectLoading)
   const layers = useSceneStore((s) => s.layers)
   const viewMode = useSceneStore((s) => s.viewMode)
 
@@ -701,6 +715,154 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       dispose?.()
     }
   }, [showInterventions, interventions])
+
+  // ---- MTR Plan Project GLB model ----------------------------------------
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.planProjectUrl
+    if (!isLive(viewer) || !url || !showPlanProject) {
+      if (mtrModel && !mtrModel.isDestroyed()) {
+        viewer?.scene.primitives.remove(mtrModel)
+        mtrModel = null
+      }
+      return
+    }
+
+    console.info('[planProject] loading GLB:', url)
+    setPlanProjectLoading(true)
+    let cancelled = false
+    const MTR_LON = 113.9932
+    const MTR_LAT = 22.4328
+    const MTR_SCALE = 50
+
+    void whenDemReady().then(async () => {
+      if (cancelled) return
+      const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
+      // Place origin at terrain level first; we'll lift it after loading
+      // once we know the real bounding sphere from the parsed geometry.
+      return Model.fromGltfAsync({
+        url,
+        modelMatrix: Transforms.eastNorthUpToFixedFrame(
+          Cartesian3.fromDegrees(MTR_LON, MTR_LAT, terrainM),
+        ),
+        scale: MTR_SCALE,
+      })
+    }).then((model) => {
+      if (!model || cancelled || !isLive(viewerRef.current)) {
+        model?.destroy()
+        return
+      }
+      const v = viewerRef.current!
+      v.scene.primitives.add(model)
+      mtrModel = model
+
+      // Shift the model up so its bottom sits on the terrain.
+      // boundingSphere.center is the geometric centre of the model in ECEF.
+      // radius is the half-extent. The bottom of the bounding sphere is
+      // centre.height - radius; we want that to equal terrainM.
+      const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
+      const sphere = model.boundingSphere
+      const centerCarto = Cartographic.fromCartesian(sphere.center)
+      const centerH = centerCarto.height           // height of model centre in ECEF
+      const bottomH = centerH - sphere.radius      // height of lowest point of bounding sphere
+      const lift = terrainM - bottomH              // delta needed to land the bottom on terrain
+      console.info(
+        `[planProject] terrain=${terrainM.toFixed(1)} m, ` +
+        `sphere centre=${centerH.toFixed(1)} m, radius=${sphere.radius.toFixed(1)} m, ` +
+        `bottom=${bottomH.toFixed(1)} m, lift=${lift.toFixed(1)} m`
+      )
+
+      // Re-place with the corrected height: origin moves up by `lift`.
+      // terrainM was the initial origin height, so new origin = terrainM + lift.
+      const newOriginH = terrainM + lift
+      model.modelMatrix = Transforms.eastNorthUpToFixedFrame(
+        Cartesian3.fromDegrees(MTR_LON, MTR_LAT, newOriginH),
+      )
+      const labelH = newOriginH + sphere.radius + 5
+      v.scene.requestRender()
+
+      // Label + glowing point so users can locate the station instantly
+      mtrMarker = v.entities.add({
+        position: Cartesian3.fromDegrees(MTR_LON, MTR_LAT, labelH),
+        label: {
+          text: '洪水桥站\nMTR Hung Shui Kiu',
+          font: 'bold 14px sans-serif',
+          style: LabelStyle.FILL_AND_OUTLINE,
+          fillColor: Color.WHITE,
+          outlineColor: Color.fromCssColorString('#0a2e1a'),
+          outlineWidth: 3,
+          verticalOrigin: VerticalOrigin.BOTTOM,
+          pixelOffset: new Cartesian2(0, -10),
+          // Fade in 500–3000 m, invisible outside 8000 m
+          scaleByDistance: new NearFarScalar(500, 1.0, 3000, 0.75),
+          translucencyByDistance: new NearFarScalar(3000, 1.0, 8000, 0.0),
+          showBackground: true,
+          backgroundColor: Color.fromCssColorString('#0d4a2c').withAlpha(0.82),
+          backgroundPadding: new Cartesian2(8, 5),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        point: {
+          pixelSize: 14,
+          color: Color.fromCssColorString('#5cff9d'),
+          outlineColor: Color.fromCssColorString('#0a2e1a'),
+          outlineWidth: 2,
+          // Pulse via scaleByDistance keeps it visible from far
+          scaleByDistance: new NearFarScalar(300, 1.4, 5000, 0.6),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      })
+
+      // Fly to the station so the user doesn't have to hunt for it
+      void v.camera.flyTo({
+        destination: Cartesian3.fromDegrees(MTR_LON, MTR_LAT - 0.004, labelH + 300),
+        orientation: {
+          heading: CesiumMath.toRadians(0),
+          pitch: CesiumMath.toRadians(-25),
+          roll: 0,
+        },
+        duration: 2.0,
+      })
+
+      v.scene.requestRender()
+      setPlanProjectLoading(false)
+      console.info('[planProject] GLB loaded and added to the scene')
+    }).catch((err) => {
+      setPlanProjectLoading(false)
+      console.error('[planProject] GLB failed to load:', err)
+    })
+
+    return () => {
+      cancelled = true
+      setPlanProjectLoading(false)
+      if (mtrModel && !mtrModel.isDestroyed()) {
+        viewerRef.current?.scene.primitives.remove(mtrModel)
+        mtrModel = null
+      }
+      if (mtrMarker) {
+        viewerRef.current?.entities.remove(mtrMarker)
+        mtrMarker = null
+      }
+    }
+  }, [terrainMeta?.planProjectUrl, showPlanProject, setPlanProjectLoading])
+
+  // ---- Building pick-to-hide (active only while Plan Project is on) -------
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer) || !showPlanProject) return
+
+    const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
+    handler.setInputAction((movement: { position: Cartesian2 }) => {
+      const picked = viewer.scene.pick(movement.position)
+      if (picked instanceof Cesium3DTileFeature) {
+        picked.show = false
+        viewer.scene.requestRender()
+      }
+    }, ScreenSpaceEventType.LEFT_CLICK)
+
+    return () => {
+      handler.destroy()
+    }
+  }, [showPlanProject])
 
   return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }

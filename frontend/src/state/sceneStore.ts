@@ -84,6 +84,8 @@ export interface SceneState {
   setLayers: (layers: Partial<LayerVisibility>) => void
   setViewMode: (mode: ViewMode) => void
   clearError: () => void
+  planProjectLoading: boolean
+  setPlanProjectLoading: (v: boolean) => void
 }
 
 export const DEFAULT_LAYERS: LayerVisibility = {
@@ -99,6 +101,7 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   realBuildings: true,
   waterbody: true,
   infrastructure: true,
+  planProject: false,
 }
 
 export const useSceneStore = create<SceneState>((set, get) => ({
@@ -112,6 +115,8 @@ export const useSceneStore = create<SceneState>((set, get) => ({
   runResult: null,
   running: false,
   runError: null,
+  planProjectLoading: false,
+  setPlanProjectLoading: (v) => set({ planProjectLoading: v }),
 
   load: async (sceneId) => {
     set({ loading: true, error: null, sceneId })

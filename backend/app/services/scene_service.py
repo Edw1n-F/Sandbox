@@ -398,6 +398,11 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
         waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
         infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
+        plan_project_url=(
+            settings.public_model_url("mtr_station.glb")
+            if (settings.model_dir / "mtr_station.glb").exists()
+            else None
+        ),
     )
 
 
