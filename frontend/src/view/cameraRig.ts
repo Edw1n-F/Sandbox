@@ -353,12 +353,62 @@ export function bindOrbitGestures(viewer: Viewer): void {
     (event: WheelEvent) => {
       if (event.ctrlKey) return
       event.preventDefault()
-      const tilt = -Math.sign(event.deltaY) * 5
-      const rot = Math.sign(event.deltaX) * 12
-      if (tilt !== 0 || rot !== 0) orbitBy(viewer, rot, tilt, 0)
+      const { tiltDeg, rotateDeg } = wheelToOrbit(event.deltaX, event.deltaY, event.deltaMode)
+      if (tiltDeg !== 0 || rotateDeg !== 0) orbitBy(viewer, rotateDeg, tiltDeg, 0)
     },
     { passive: false },
   )
+}
+
+/** Degrees of camera motion per CSS pixel of wheel delta. Tuned so one full
+ *  mouse-wheel notch (~100 px) is about the old 5 deg, but a trackpad swipe --
+ *  hundreds of tiny events -- adds up to something proportionate to the
+ *  distance the fingers actually travelled. */
+const TILT_DEG_PER_PX = 0.05
+const ROTATE_DEG_PER_PX = 0.12
+/** The most a single event may move the camera. A fast flick can report a delta
+ *  of several hundred px in one event; unbounded, that is a lurch. */
+const MAX_STEP_DEG = 8
+/** A cross-axis delta this small is the fingers drifting, not a decision.
+ *  Without it a purely vertical swipe also spins the view. */
+const AXIS_DEAD_ZONE_PX = 2
+/** `WheelEvent.deltaMode`: 0 pixels, 1 lines, 2 pages. */
+const LINE_PX = 16
+const PAGE_PX = 400
+
+/**
+ * Turn one wheel event into a camera move.
+ *
+ * Exported and pure so the sensitivity can be tested rather than felt: the old
+ * handler used `Math.sign` to give a fixed step per event, which is right for a
+ * mouse (one notch, one event) and badly wrong for a trackpad, which streams
+ * ~60 events a second plus a momentum tail. One gentle swipe became dozens of
+ * 5 deg steps and hit the pitch clamp at once. Scaling by the real delta makes
+ * the motion follow the fingers instead.
+ *
+ * The dominant axis wins: if one axis is more than twice the other, the weaker
+ * one is zeroed. Trackpads never report an exact zero on the axis you did not
+ * mean, so without this a vertical swipe also rotates.
+ */
+export function wheelToOrbit(
+  deltaX: number,
+  deltaY: number,
+  deltaMode = 0,
+): { tiltDeg: number; rotateDeg: number } {
+  const scale = deltaMode === 1 ? LINE_PX : deltaMode === 2 ? PAGE_PX : 1
+  let dx = deltaX * scale
+  let dy = deltaY * scale
+  if (Math.abs(dx) < AXIS_DEAD_ZONE_PX) dx = 0
+  if (Math.abs(dy) < AXIS_DEAD_ZONE_PX) dy = 0
+  if (Math.abs(dx) > 2 * Math.abs(dy)) dy = 0
+  else if (Math.abs(dy) > 2 * Math.abs(dx)) dx = 0
+  const clamp = (v: number) => Math.max(-MAX_STEP_DEG, Math.min(MAX_STEP_DEG, v))
+  return {
+    // Scrolling "down" (positive deltaY) tilts toward the horizon, matching the
+    // sign the previous handler used.
+    tiltDeg: clamp(-dy * TILT_DEG_PER_PX) || 0,
+    rotateDeg: clamp(dx * ROTATE_DEG_PER_PX) || 0,
+  }
 }
 
 /** The point the camera is looking at, as close to the frame centre as we can get. */
