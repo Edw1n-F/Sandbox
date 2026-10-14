@@ -14,10 +14,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+#: Why a card was assembled by code when no model answered. Defined here rather
+#: than in `services/run_card.py` because both that module and this one need it,
+#: and `run_card` already imports from here -- putting it there would be circular.
+NO_MODEL = "no language model is configured"
+
 __all__ = [
     "ANSWER_SCHEMA",
     "AnswerCard",
     "Confidence",
+    "NO_MODEL",
     "GroundingReport",
     "StatItem",
     "template_card",
@@ -131,91 +137,59 @@ def template_card(facts: dict[str, Any], question: str | None = None) -> AnswerC
     """The no-model card: the same fields, assembled by code and labelled.
 
     This is not a degraded path to be hidden. It is the answer a reader gets
-    when no model is configured, and every number in it is one the run actually
-    produced -- which is more than a hallucinated model answer can claim.
+    when no language model answers, and every number in it is one the run
+    actually produced -- which is more than a hallucinated model answer can
+    claim.
+
+    Delegates to `services/run_card.py` so the card a planner sees in the chat is
+    the same card the run's own explanation is derived from. They used to be two
+    implementations of "explain this run without a model", and they disagreed.
     """
-    scenario = facts.get("scenario", {}) or {}
-    delta = facts.get("delta", {}) or {}
-    inputs = facts.get("inputs", {}) or {}
+    if not facts:
+        return _empty_card()
+    # Imported here rather than at module scope: `run_card` imports from this
+    # module, and a top-level import would be circular.
+    from app.services.run_card import run_card
 
-    unstored = float(scenario.get("unstoredM3", 0.0))
-    wet = float(scenario.get("wetAreaHa", 0.0))
-    heat = float(scenario.get("heatBlendedMean", 0.0))
-    d_unstored = float(delta.get("unstoredM3", 0.0))
-    d_heat = float(delta.get("heatBlendedMean", 0.0))
-    d_wet = float(delta.get("wetAreaHa", 0.0))
-    rainfall = inputs.get("rainfallMm")
-    temperature = inputs.get("temperatureC")
-
-    improved = d_unstored < -1.0
-    worsened = d_unstored > 1.0
-    title = (
-        "The interventions reduce the overflow"
-        if improved
-        else "The buffer still overflows"
-        if worsened
-        else "The run is unchanged from the baseline"
-    )
-    sentence = (
-        f"At {rainfall:.0f} mm of rain"
-        if isinstance(rainfall, (int, float))
-        else "For this scenario"
-    )
-    sentence += f", {_m3(unstored)} of runoff is not stored"
-    if abs(d_unstored) > 1.0:
-        sentence += f", {abs(d_unstored) / 1_000_000:.2f} million m³ {'less' if improved else 'more'} than the baseline"
-    sentence += "."
-
-    cause_bits = [
-        f"Wet area {wet:.1f} ha.",
-        f"Blended heat index {heat:.3f}"
-        + (f" ({d_heat:+.3f} vs baseline)." if abs(d_heat) > 1e-6 else "."),
-    ]
-    if isinstance(temperature, (int, float)):
-        cause_bits.append(f"Air temperature {temperature:.0f} °C.")
-    if abs(d_wet) > 1e-6:
-        cause_bits.append(f"Wet area changed by {d_wet:+.1f} ha.")
-
-    todo = (
-        "Run again with a project enabled to compare interventions."
-        if not (improved or worsened)
-        else "Toggle a project and re-run to see whether the change holds."
+    return run_card(
+        {
+            "scenario": facts.get("scenario") or {},
+            "baseline": facts.get("baseline") or {},
+            "delta": facts.get("delta") or {},
+            "tide": facts.get("tide") or {},
+            "temperature": facts.get("temperature"),
+        },
+        rainfall_mm=float((facts.get("inputs") or {}).get("rainfallMm") or 0.0),
+        temperature_c=(facts.get("inputs") or {}).get("temperatureC"),
+        applied=facts.get("applied") or [],
+        skipped=facts.get("skipped") or [],
+        reason=(facts.get("data") or {}).get("reason") or NO_MODEL,
     )
 
+
+def _empty_card() -> AnswerCard:
+    """The card for "nothing has run yet".
+
+    Its note must not blame a missing model: a model may be configured and
+    reachable and this card would look identical, because the real cause is that
+    there is no run to explain.
+    """
     return AnswerCard(
-        kind="run",
-        title=title,
-        eyebrow="Sandbox run",
-        sentence=sentence,
-        l1="What the run shows",
-        cause=" ".join(cause_bits),
-        l2="What to do",
-        todo=todo,
-        stats=[
-            StatItem(l="Unstored runoff", v=_m3(unstored),
-                     ci=None if abs(d_unstored) < 1.0 else f"{d_unstored / 1_000_000:+.2f} million m³ vs baseline"),
-            StatItem(l="Wet area", v=f"{wet:.1f} ha",
-                     ci=None if abs(d_wet) < 1e-6 else f"{d_wet:+.1f} ha vs baseline"),
-            StatItem(l="Heat index", v=f"{heat:.3f}",
-                     ci=None if abs(d_heat) < 1e-6 else f"{d_heat:+.3f} vs baseline"),
-        ],
-        # Medium, not High: a template can only report what the model computed,
-        # and the printout of a scenario is not an explanation of a place.
+        kind="general",
+        title="Nothing to explain yet",
+        eyebrow="Sandbox",
+        sentence=("Run the scenario first: adjust the sliders, pick a project, and press "
+                  "Run. Then I can answer questions about it."),
+        cause=None,
+        todo="Press Run Simulation in the Scenario Inputs panel.",
+        stats=[],
         confidence=Confidence(
-            level="Medium",
-            pct=60,
-            note="Assembled from the run's own numbers; no language model is configured, "
-                 "so this is a printout rather than an interpretation.",
+            level="Low",
+            pct=30,
+            note="No run in scope yet: there is nothing to explain until a scenario has been run.",
         ),
-        caveats=[
-            "No language model configured: this card was assembled by code.",
-            "Figures are the SCS-CN and level-pool results for this scenario only.",
-        ],
-        followups=[
-            "What changes if rainfall doubles?",
-            "Which project helps most?",
-            "Where does the water pond?",
-        ],
+        caveats=[],
+        followups=[],
         source="template",
         grounding=None,
     )

@@ -122,6 +122,25 @@ function ReceiptView({ receipt }: { receipt: Receipt }) {
 }
 
 /** One answer card, rendered by field. */
+/**
+ * Why this card was assembled by code, in the card's own words.
+ *
+ * The backend writes the reason into the template's confidence note and its
+ * first caveat (both from `run_card.py`), so it is read from there rather than
+ * re-derived here. The badge used to hardcode "no language model configured",
+ * which was false whenever a model WAS configured and had merely been
+ * rate-limited -- the normal state of a free tier.
+ */
+function reasonOf(card: AnswerCard): string {
+  const caveat = card.caveats[0] ?? ''
+  if (caveat.startsWith('Assembled by code: ')) {
+    return caveat.slice('Assembled by code: '.length).replace(/\.$/, '')
+  }
+  const note = card.confidence?.note ?? ''
+  const at = note.lastIndexOf('; ')
+  return at >= 0 ? note.slice(at + 2).replace(/\.$/, '') : 'assembled from the run'
+}
+
 function CardView({ card }: { card: AnswerCard }) {
   const ungrounded = card.grounding?.ungrounded ?? []
   return (
@@ -212,7 +231,10 @@ function CardView({ card }: { card: AnswerCard }) {
 
       {card.source === 'template' && (
         <Typography className="hud-mono" sx={{ fontSize: 9, color: 'rgba(255,157,46,0.85)', mt: 0.75 }}>
-          ASSEMBLED BY CODE · NO LANGUAGE MODEL CONFIGURED
+          {/* The badge names the real cause rather than asserting one. A
+              429 and a missing key look identical from the source alone, and
+              only one is worth retrying. */}
+          ASSEMBLED BY CODE · {reasonOf(card).toUpperCase()}
         </Typography>
       )}
     </Box>
@@ -295,22 +317,28 @@ export default function ChatPanel() {
     if (!runResult || running) return
     if (lastRunId.current === runResult.runId) return
     lastRunId.current = runResult.runId
+
+    // When code wrote the explanation the run carries the *card*, so this
+    // renders the same structured card the chat falls back to. The paragraph
+    // stays for the model path, which has no card behind it.
+    const runCard = runResult.explanationCard as AnswerCard | undefined
     setMessages((prev) => [
       ...prev,
-      {
-        id: mkId(),
-        role: 'ai',
-        text: runResult.explanation +
-          (runResult.explanationSource === 'template'
-            // The backend names the cause; the client does not guess. "No model
-            // configured" and "the model was rate-limited" are different
-            // problems and only one of them is worth waiting out.
-            ? `\n\n_Assembled by code from the run's own numbers${
-                runResult.explanationNote ? ` — ${runResult.explanationNote}` : ''
-              }._`
-            : ''),
-        chips: SUGGESTIONS,
-      },
+      runCard
+        ? {
+            id: mkId(),
+            role: 'ai' as const,
+            card: runCard,
+            receipt: buildReceipt(runResult),
+            chips: SUGGESTIONS,
+          }
+        : {
+            id: mkId(),
+            role: 'ai' as const,
+            text: runResult.explanation,
+            receipt: buildReceipt(runResult),
+            chips: SUGGESTIONS,
+          },
     ])
   }, [runResult, running])
 

@@ -14,32 +14,63 @@ month — move every dated section older than the current month into
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
 
-## 2026-10-14 — the run explanation stops blaming a missing model
+## 2026-10-14 — the run's fallback is the same card as the chat's, and a 429 was misreported
 
-### Fixed — a 429 was reported as "no language model is configured"
+### Fixed — the explanation fallback blamed a missing model for a 429
 
-The run's explanation paragraph falls back to a code-assembled template when the
-model is unavailable, and the panel labelled that fallback *"no language model is
-configured"*. That was wrong whenever a model **was** configured but
-rate-limited, which is the normal state of the free tier. A planner reading it
-would go looking for a missing key instead of waiting out a throttle.
+The run's explanation falls back to code-assembled text when no model answers,
+and the panel labelled that fallback *"no language model is configured"*. That was
+false whenever a model **was** configured but rate-limited — the normal state of
+the free tier — and a planner reading it would hunt for a missing key instead of
+waiting out a throttle.
 
-Two causes. `_llm_explanation` swallowed every exception with a bare `pass`, so a
-`ProviderUnavailable` and an `LLMError(429)` were indistinguishable by the time
-the caller saw them. And the client string was hardcoded, so it could not have
-told the difference even if the server had.
+Two causes: `_llm_explanation` swallowed every exception with a bare `pass`, so
+`ProviderUnavailable` and `LLMError(429)` were indistinguishable; and the client
+string was hardcoded, so it could not have told the difference anyway. The
+function now returns `(text | None, source, reason)`, the reason is mapped from
+the exception class, and the run carries it as `explanationNote` for the badge and
+the caveat to report.
 
-The function now returns `(text | None, source, reason)` and maps the failure
-honestly: `no language model is configured` for `ProviderUnavailable`,
-`the language model was unavailable (provider HTTP 429)` for `LLMError`, and the
-exception type for anything else. The run result carries it as
-`explanationNote`, and `ChatPanel` renders the server's reason instead of
-guessing. Verified against the live throttled provider: the note now reads
-`the language model was unavailable (provider HTTP 429)`.
+Same mistake as the `_no_run_card` fix earlier today. A labelled fallback is only
+honest if its label is computed, not written.
 
-This is the same mistake as the `_no_run_card` fix earlier today — a fallback
-naming the wrong cause — which suggests the pattern is worth watching for: a
-labelled fallback is only honest if its label is computed, not written.
+### Changed — the run returns a card, not just a paragraph
+
+The chat's template card and the run's fallback paragraph were two
+implementations of "explain this run without a model", and they disagreed: the
+chat showed three stats, a cause and a todo; the run showed different wording and
+a different framing of the same run. A planner who ran once and then asked a
+question got two descriptions of one run.
+
+`app/services/run_card.py` is now the single implementation. The run response
+carries `explanationCard` (the same shape the chat renders) whenever code wrote
+the explanation, and `ChatPanel` renders that card instead of the paragraph. The
+paragraph stays for the model path, which has no card behind it.
+
+### Fixed — `test_run` had begun asserting on live model prose
+
+Three checks asserted the word "flood" and the rainfall figure appear in
+`explanation`. They were only reliable while the model was unreachable, so the
+path was always the template. Once `LLM_FALLBACK_MODELS` worked, a real model
+wrote the paragraph and one check failed on a perfectly good sentence that simply
+did not use the word.
+
+The suite now pins the provider off, so the tested path is explicit — the run
+loop's arithmetic and the code-assembled card — and asserts the card's properties
+(the screening caveat, the stats) rather than free-form prose. The model path has
+its own coverage in `test_llm_provider.py`, where the provider is scripted rather
+than live. 32 → 34 checks, and deterministic.
+
+### Changed — `LLM_FALLBACK_MODELS` now has three verified ids
+
+The old comment claimed only Google's Gemma family returned prose on the free
+tier. Measured on 14 Oct: `cohere/north-mini-code:free` and
+`nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` also return prose, while
+`thinkingmachines/inkling-small:free` 403s, `poolside/laguna-s-2.1:free` 429s, and
+`openrouter/free` and `dots-studio/dots-3-note-preview:free` return empty content
+(the reasoning-channel failure). `.env.example` records all of it, and the chain
+now has three working fallbacks instead of one. **A live model answers the
+explanation again** — verified, after weeks of 429s.
 
 
 

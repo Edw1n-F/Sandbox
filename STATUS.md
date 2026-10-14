@@ -189,7 +189,7 @@ copied from the code's output.
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
 | backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_run` | 32/32 | `python tests/test_run.py` — the live run loop |
+| backend `test_run` | 34/34 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
@@ -302,8 +302,12 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
    real providers send. What it cannot cover is a real provider's *response*.
    That is still checked by hand, and the free tier has been returning 429s.
 7. **A rate-limited provider costs a round trip.** The free tier is throttled and
-   slow. A 429 is now caught and reported, but only after the primary fails. A
-   paid model id — one `.env` line — removes it.
+   slow. A 429 is caught and reported, and `LLM_FALLBACK_MODELS` now walks three
+   additionally-verified free ids (`google/gemma-4-26b-a4b-it:free`,
+   `cohere/north-mini-code:free`,
+   `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` — each called and
+   confirmed to return prose on 14 Oct). A paid model id — one `.env` line —
+   removes the problem instead of routing around it.
 8. **Storage is JSON files, not PostGIS.** The seam is `app/db.py` and
    `scene_service.py` only, so this is a swap rather than a rewrite.
 9. **Two view modules have no unit coverage** — `view/onlineProps.ts` and

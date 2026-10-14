@@ -286,6 +286,18 @@ export interface RunResult {
    * model wrote the explanation.
    */
   explanationNote?: string | null
+  /**
+   * The same card shape the chat renders, present only when code assembled the
+   * explanation. Null when a model wrote the prose -- a model's paragraph has no
+   * card behind it, and inventing one would mean the panel and the chat could
+   * disagree about the same run.
+   *
+   * Typed as `unknown` here and narrowed in the component: `AnswerCard` is
+   * declared in `chatApi.ts`, which imports nothing from this module, so naming
+   * it here would create an import cycle. The card is opaque data on the wire;
+   * only the component that draws it needs its fields.
+   */
+  explanationCard?: unknown
   status: string
   warning: string
 }

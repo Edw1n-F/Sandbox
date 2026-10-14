@@ -44,6 +44,7 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
         sys.path.insert(0, str(_extra))
 
 from app.config import settings  # noqa: E402
+from app.services import run_card  # noqa: E402
 from app.services import scene_service  # noqa: E402
 from app.services.sandbox_model import (  # noqa: E402
     DEFAULT_TIDE_STATE,
@@ -317,56 +318,6 @@ def _temperature_fields(grids: Grids, land_class: np.ndarray,
 # The explanation
 # --------------------------------------------------------------------------- #
 
-def _template_explanation(stats: dict[str, Any], rainfall_mm: float,
-                          applied: list[dict],
-                          skipped: list[dict]) -> str:
-    """The no-LLM explanation: the same facts, assembled by code.
-
-    Labelled ``explanationSource: "template"`` in the response -- a demo with
-    no key must not read as if a model wrote this (CLAUDE.md's standing rule).
-    """
-    delta = stats["delta"]["unstoredM3"]
-    scen = stats["scenario"]
-    base = stats["baseline"]
-    tide = stats.get("tide") or {}
-    if delta > 1.0:
-        comparison = f"{abs(delta):,.0f} m3 worse than today"
-    elif delta < -1.0:
-        comparison = f"{abs(delta):,.0f} m3 better than today"
-    else:
-        comparison = "essentially unchanged from today"
-    parts = [
-        f"At {rainfall_mm:.0f} mm of rainfall, this scenario leaves "
-        f"{scen['unstoredM3']:,.0f} m3 of runoff with nowhere to go -- "
-        f"{comparison} "
-        f"(baseline {base['unstoredM3']:,.0f} m3).",
-        f"Water ponds over {scen['wetAreaHa']:,.1f} ha of the low ground "
-        f"(today: {base['wetAreaHa']:,.1f} ha).",
-        f"Mean surface temperature {scen['surfaceMeanC']:.1f} C "
-        f"({stats['delta']['surfaceMeanC']:+.1f} C vs today), air estimate "
-        f"{scen['airMeanC']:.1f} C; rendered as deviation from the site mean.",
-    ]
-    if tide.get("active"):
-        parts.append(
-            f"{tide['label']} ({tide['tailwaterM']:.1f} m tailwater) holds "
-            "water at the outfall; the flood extent reflects this screening "
-            "backwater condition."
-        )
-    if applied:
-        kinds = ", ".join(sorted({a["kind"] for a in applied}))
-        parts.append(f"{len(applied)} intervention(s) shaped this run: {kinds}.")
-    if skipped:
-        parts.append(
-            f"{len(skipped)} intervention(s) had no land-cover effect the "
-            "model can score and were reported, not approximated."
-        )
-    parts.append(
-        "Screening-level SCS-CN runoff routed to a flood extent (>= %.2f m "
-        "standing water); not engineering-grade." % FLOOD_DEPTH_M
-    )
-    return " ".join(parts)
-
-
 def _rounded(node: Any) -> Any:
     """Round floats for the prompt so the model quotes readable figures."""
     if isinstance(node, float):
@@ -437,18 +388,16 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
             prompt=prompt, max_tokens=1500)
         if text:
             return text, llm.provider_name(), None
-    except llm.ProviderUnavailable:
+    except llm.ProviderUnavailable as exc:
         # No provider at all. Distinct from a provider that answered and failed.
-        return None, "template", "no language model is configured"
+        return None, "template", run_card.explanation_note(exc)
     except llm.LLMError as exc:
         # A 429 is NOT "no model configured", and the difference is the whole
         # reason a planner would retry rather than go looking for a missing key.
-        # Returned rather than swallowed, because the bare `pass` this replaced
-        # made a throttled model indistinguishable from an absent one.
-        return None, "template", f"the language model was unavailable ({exc.message})"
+        return None, "template", run_card.explanation_note(exc)
     except Exception as exc:  # noqa: BLE001 - the labelled template covers this
-        return None, "template", f"the language model call failed ({type(exc).__name__})"
-    return None, "template", "the language model returned nothing"
+        return None, "template", run_card.explanation_note(exc)
+    return None, "template", run_card.explanation_note(None)
 
 
 # --------------------------------------------------------------------------- #
@@ -791,8 +740,16 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     # and "the model was rate-limited" are different messages for the reader.
     llm_result = _llm_explanation(stats, rainfall_mm, temperature_c, applied, skipped)
     explanation, source, explanation_note = llm_result
+    # When a model wrote it, the sentence stays a sentence. When code wrote it,
+    # the run also carries the card, so the panel renders the same structured
+    # card the chat falls back to instead of a loose paragraph -- one shape for
+    # "this run, without a model", in both places.
+    explanation_card = None
     if explanation is None:
-        explanation = _template_explanation(stats, rainfall_mm, applied, skipped)
+        card = run_card.run_card(stats, rainfall_mm, temperature_c,
+                                 applied, skipped, reason=explanation_note)
+        explanation = run_card.explanation_text(card, stats.get("tide"))
+        explanation_card = card.model_dump()
 
     wet_url = settings.public_url(f"rasters/run/wetgrid_{run_id}.png")
     heat_url = settings.public_url(f"rasters/run/heatmap_{run_id}.png")
@@ -828,6 +785,9 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         # Only present when code wrote the explanation, and it names the actual
         # cause. The client shows this instead of guessing.
         "explanationNote": explanation_note,
+        # The same card shape the chat renders, when code wrote the explanation.
+        # None when a model wrote it -- a model's prose has no card to send.
+        "explanationCard": explanation_card,
         "status": RUN_STATUS,
         "warning": RUN_WARNING + (TIDE_WARNING % tailwater_m if tide_active else ""),
     }

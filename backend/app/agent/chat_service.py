@@ -79,6 +79,10 @@ def build_facts(run_result: dict[str, Any] | None) -> dict[str, Any]:
             "interventionsSkipped": len(run_result.get("interventionsSkipped") or []),
             "terrainSource": sources.get("terrain"),
             "landCoverSource": sources.get("landCover"),
+            # Why the run's own explanation was written by code, when it was.
+            # Carried through so the chat's template card names the same cause
+            # the run did, instead of asserting a missing model.
+            "reason": run_result.get("explanationNote"),
         },
     }
 
