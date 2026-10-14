@@ -14,7 +14,34 @@ month — move every dated section older than the current month into
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
 
-## 2026-10-14 — dead code out, drifted docs fixed, CI unblocked
+## 2026-10-14 — the run explanation stops blaming a missing model
+
+### Fixed — a 429 was reported as "no language model is configured"
+
+The run's explanation paragraph falls back to a code-assembled template when the
+model is unavailable, and the panel labelled that fallback *"no language model is
+configured"*. That was wrong whenever a model **was** configured but
+rate-limited, which is the normal state of the free tier. A planner reading it
+would go looking for a missing key instead of waiting out a throttle.
+
+Two causes. `_llm_explanation` swallowed every exception with a bare `pass`, so a
+`ProviderUnavailable` and an `LLMError(429)` were indistinguishable by the time
+the caller saw them. And the client string was hardcoded, so it could not have
+told the difference even if the server had.
+
+The function now returns `(text | None, source, reason)` and maps the failure
+honestly: `no language model is configured` for `ProviderUnavailable`,
+`the language model was unavailable (provider HTTP 429)` for `LLMError`, and the
+exception type for anything else. The run result carries it as
+`explanationNote`, and `ChatPanel` renders the server's reason instead of
+guessing. Verified against the live throttled provider: the note now reads
+`the language model was unavailable (provider HTTP 429)`.
+
+This is the same mistake as the `_no_run_card` fix earlier today — a fallback
+naming the wrong cause — which suggests the pattern is worth watching for: a
+labelled fallback is only honest if its label is computed, not written.
+
+
 
 ### Fixed — `requirements.txt` was what made CI red
 
@@ -91,6 +118,8 @@ archival policy: this file grows forever by design and several old entries are
 the only record of *why* something was deleted, so it is split by month when
 unwieldy, never truncated. `STATUS.md` gained open items 12–14, including a
 duplicate test name in `test_constants.py` that silently shadows one check.
+
+## 2026-10-14 — dead code out, drifted docs fixed, CI unblocked
 
 
 

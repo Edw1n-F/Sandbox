@@ -274,12 +274,18 @@ export interface RunResult {
   }>
   explanation: string
   /**
-   * `template` means no model was configured and the paragraph was assembled
-   * by code. It is reported rather than hidden, for the same reason the AI
-   * plan badge names the deterministic parser: a demo with no key must not
-   * read as if a model wrote it.
+   * `template` means code assembled the paragraph, not a model. It is reported
+   * rather than hidden, for the same reason the AI plan badge names the
+   * deterministic parser: a demo with no key must not read as if a model wrote it.
    */
   explanationSource: 'anthropic' | 'openai-compatible' | 'template'
+  /**
+   * Why code wrote it, when it did. This exists because "no model is
+   * configured" and "the model was rate-limited" look identical from the
+   * source alone, and only one of them is worth retrying. Null/absent when a
+   * model wrote the explanation.
+   */
+  explanationNote?: string | null
   status: string
   warning: string
 }

@@ -302,7 +302,12 @@ export default function ChatPanel() {
         role: 'ai',
         text: runResult.explanation +
           (runResult.explanationSource === 'template'
-            ? '\n\n_Assembled from the run’s numbers; no language model is configured._'
+            // The backend names the cause; the client does not guess. "No model
+            // configured" and "the model was rate-limited" are different
+            // problems and only one of them is worth waiting out.
+            ? `\n\n_Assembled by code from the run's own numbers${
+                runResult.explanationNote ? ` — ${runResult.explanationNote}` : ''
+              }._`
             : ''),
         chips: SUGGESTIONS,
       },

@@ -436,10 +436,19 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
             system="You write one short planner-facing paragraph in plain prose. No JSON, no markdown.",
             prompt=prompt, max_tokens=1500)
         if text:
-            return text, llm.provider_name()
-    except Exception:  # noqa: BLE001 - the labelled template covers this
-        pass
-    return None
+            return text, llm.provider_name(), None
+    except llm.ProviderUnavailable:
+        # No provider at all. Distinct from a provider that answered and failed.
+        return None, "template", "no language model is configured"
+    except llm.LLMError as exc:
+        # A 429 is NOT "no model configured", and the difference is the whole
+        # reason a planner would retry rather than go looking for a missing key.
+        # Returned rather than swallowed, because the bare `pass` this replaced
+        # made a throttled model indistinguishable from an absent one.
+        return None, "template", f"the language model was unavailable ({exc.message})"
+    except Exception as exc:  # noqa: BLE001 - the labelled template covers this
+        return None, "template", f"the language model call failed ({type(exc).__name__})"
+    return None, "template", "the language model returned nothing"
 
 
 # --------------------------------------------------------------------------- #
@@ -777,12 +786,13 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     _prune_run_dir(run_dir)
 
     # ---- explanation -----------------------------------------------------------
-    llm = _llm_explanation(stats, rainfall_mm, temperature_c, applied, skipped)
-    if llm is not None:
-        explanation, source = llm
-    else:
+    # Returns (text | None, source, reason). `reason` is None when a model wrote
+    # it, and otherwise says WHY the template was used -- "no model configured"
+    # and "the model was rate-limited" are different messages for the reader.
+    llm_result = _llm_explanation(stats, rainfall_mm, temperature_c, applied, skipped)
+    explanation, source, explanation_note = llm_result
+    if explanation is None:
         explanation = _template_explanation(stats, rainfall_mm, applied, skipped)
-        source = "template"
 
     wet_url = settings.public_url(f"rasters/run/wetgrid_{run_id}.png")
     heat_url = settings.public_url(f"rasters/run/heatmap_{run_id}.png")
@@ -815,6 +825,9 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "interventionsSkipped": skipped,
         "explanation": explanation,
         "explanationSource": source,
+        # Only present when code wrote the explanation, and it names the actual
+        # cause. The client shows this instead of guessing.
+        "explanationNote": explanation_note,
         "status": RUN_STATUS,
         "warning": RUN_WARNING + (TIDE_WARNING % tailwater_m if tide_active else ""),
     }
