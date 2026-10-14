@@ -1,5 +1,28 @@
 # 5. Way Forward: A Deterministic numpy/pillow/scipy Build Roadmap with Testable Acceptance Criteria and Honesty Labels
 
+> **⚠️ PARTLY SUPERSEDED — measured on the retired 786 ha extent. Read this first.**
+>
+> This chapter was written before the 14 Oct 2026 real-data swap, when the study
+> area was the original ≈786 ha window (664 × 474 cells). Several figures below
+> describe that extent and the sources it used, and **they no longer match what
+> ships**. The literature, the method and the citations are unchanged and are the
+> reason this chapter is kept.
+>
+> What changed, and where the current figure lives:
+>
+> | This chapter says | What ships now | Home |
+> |---|---|---|
+> | ≈786 ha / 664 × 474 cells | **43.5 ha / 117 × 148 cells** | `docs/DATA_SOURCES.md` §5 |
+> | buffer deficit **3,170,180 m³** | **180,566.3 m³** | `STATUS.md` |
+> | heat = a **relative 0–1 index, not a temperature** | a **°C surface-temperature field anchored to observed Landsat LST** | `docs/DATA_SOURCES.md` §4 |
+> | DEM **~90 m** (SRTM, Open-Meteo) | **5 m Open3Dhk/LandsD tiles** | `docs/DATA_SOURCES.md` §1 |
+> | **2,639 procedural** building envelopes | **396 measured** Open3Dhk + Overture footprints | `docs/DATA_SOURCES.md` §3 |
+> | **10.3%** of cells closed pits (786 ha grid) | **11.7%** (43.5 ha window) | `README.md` |
+>
+> Treat every number above as history. When this chapter and `STATUS.md` disagree,
+> `STATUS.md` is right — it is the sole live statement of what works.
+
+
 ## 5.1 The organising principle
 
 The research in Chapters 1–4 collapses three apparent features into one. Hong Kong's own air-ventilation guidance states that a designer controls only two variables — *"maximize wind speed and minimize solar radiation"* — and both are functions of the same geometry ([Ng & Cheng, 2009, *Building and Environment* 44, 1478–1488](https://www.sciencedirect.com/science/article/pii/S0360132308001455); the policy behind [Technical Circular 1/06](https://www.devb.gov.hk/filemanager/en/content_679/hplb-etwb-tc-01-06.pdf)). The roadmap therefore has a single organising rule: **one geometry, three evaluators; deterministic; seconds-on-a-laptop; every stage ships with an acceptance test and an honesty label.** Building heat, wind and drainage as three separate models would encode the same geometry three times and let them silently disagree. The existing code already honours this: the physics lives once in `_overlay_common` — the shared land-class grid, curve-number table and storage partition — which `sandbox_model.py`, `make_heatmap.py`, `make_wetgrid.py` and `make_citymodel.py` (among others) import rather than re-implement, and the storage ledger is shared rather than re-derived.

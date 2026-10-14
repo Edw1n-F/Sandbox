@@ -315,6 +315,8 @@ registers itself against the seeded scene.
 | Where did the data come from? | [`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) |
 | Why does the physics look like this? | [`docs/research/`](docs/research/README.md) |
 | What did we declare, and how does it pay? | [`docs/RUNG_AND_BUSINESS.md`](docs/RUNG_AND_BUSINESS.md) |
+| Which frontend module owns what? | [`docs/FILE_STRUCTURE.md`](docs/FILE_STRUCTURE.md) |
+| When did that change, and why? | [`CHANGELOG.md`](CHANGELOG.md) |
 | What does the spec say? | `docs/技术文档.docx`, `docs/_技术文档_clean.txt` |
 
 **One home per fact.** `STATUS.md` is the only live statement of what works.

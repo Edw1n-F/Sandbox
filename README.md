@@ -661,18 +661,22 @@ The reasoning and the citations are in
 
 ### The heat overlay, in one paragraph
 
-Land class (hand-authored index) + sky view + cast shadow → a **relative
-heat-exposure index on a 0–1 scale**, rendered at a summer solar day (day 196).
-It is **not degrees Celsius** and **not** a modelled air-temperature field.
-What it does state is the band it is read against, from committed cited data
-(`backend/data/reference/heat_anchor.json`): **index 0.0 ↔ 26.4 °C, index 1.0 ↔
-32.7 °C**, the mean daily min/max over July 2015–2024 at HKO **Lau Fau Shan**.
-That is a stated band for a Hong Kong summer, ~20 km away, not a measurement of
-this site; it is *air* temperature, never skin. Cross-checked against the HKO
-1991–2020 normals and the ERA5 archive at the site centroid, neither of which is
-the anchor. `--heatwave` is a *display* stretch, not a scenario. Detail in
+An observed Landsat LST scene anchors the site mean (41.26 °C, scene
+2022-09-03); land class + sky view + cast shadow + wind shelter then move each
+cell **in °C away from that mean**. The output is a screening surface (skin)
+temperature field, and its sidecar says so:
+`SURFACE_TEMPERATURE_ANCHORED_TO_LST`.
+It is **not** a calibrated air-temperature measurement. Air temperature is an
+*estimate* (surface − 12 °C), never a modelled field.
+It is also read against a cited band from committed data
+(`backend/data/reference/heat_anchor.json`): **26.4 °C ↔ 32.7 °C**, the mean daily
+min/max over July 2015–2024 at HKO **Lau Fau Shan**. That is a stated band for a
+Hong Kong summer, ~20 km away, not a measurement of this site; it is *air*
+temperature, never skin. Cross-checked against the HKO 1991–2020 normals and the
+ERA5 archive at the site centroid, neither of which is the anchor.
+`--heatwave` is a *display* stretch, not a scenario. Detail in
 [`docs/research/ch01_urban_heat.md`](docs/research/ch01_urban_heat.md) and
-[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md).
+[`docs/DATA_SOURCES.md`](docs/DATA_SOURCES.md) §4.
 
 ### Both scripts register themselves
 
@@ -781,7 +785,7 @@ T1/
 │   │   ├── _overlay_common.py    shared grid, land classes, CN, resampling
 │   │   ├── make_wetgrid.py       CN runoff → storage → level-pool fill
 │   │   └── make_heatmap.py       LST-anchored surface temperature → anomaly RGBA
-│   ├── tests/                    sixteen suites (pytest or standalone)
+│   ├── tests/                    standalone suites — counts in STATUS.md
 │   ├── data/                     the file store (see docs/FILE_STRUCTURE.md)
 │   ├── requirements.txt
 │   └── .env.example
@@ -838,9 +842,12 @@ with CN, so this is the single assumption most worth attacking next.
 **The study-area extent is provisional.** A machine-derived operational
 rectangle, not the gazetted NDA boundary.
 
-**The heat overlay is a relative index, not a temperature.** It is anchored to a
-cited air-temperature band (HKO Lau Fau Shan, July [26.4, 32.7] °C), but that is
-a stated band for a Hong Kong summer, not a measurement of this site.
+**The heat overlay is a screening °C field, not a measurement.** It is anchored to
+an observed Landsat LST scene and to a cited HKO air-temperature band (Lau Fau
+Shan, July [26.4, 32.7] °C), but that band is a stated figure for a Hong Kong
+summer, not a measurement of this site. The geometry terms (land class, sky view,
+shade, wind shelter) move cells in °C away from the site mean. Air temperature is
+an *estimate* (surface − 12 °C), not a modelled field.
 `--heatwave` is a display transform, not a scenario.
 
 **The land cover is a single 2021 epoch.** It does not show change since then,

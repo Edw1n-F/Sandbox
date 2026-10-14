@@ -1,5 +1,28 @@
 ## 3. Drainage and Pluvial Flood: From Lumped SCS-CN Runoff to D8 Fill-and-Spill Routing with Priority-Flood Depressions and a Mass-Balance Assertion
 
+> **⚠️ PARTLY SUPERSEDED — measured on the retired 786 ha extent. Read this first.**
+>
+> This chapter was written before the 14 Oct 2026 real-data swap, when the study
+> area was the original ≈786 ha window (664 × 474 cells). Several figures below
+> describe that extent and the sources it used, and **they no longer match what
+> ships**. The literature, the method and the citations are unchanged and are the
+> reason this chapter is kept.
+>
+> What changed, and where the current figure lives:
+>
+> | This chapter says | What ships now | Home |
+> |---|---|---|
+> | ≈786 ha / 664 × 474 cells | **43.5 ha / 117 × 148 cells** | `docs/DATA_SOURCES.md` §5 |
+> | buffer deficit **3,170,180 m³** | **180,566.3 m³** | `STATUS.md` |
+> | heat = a **relative 0–1 index, not a temperature** | a **°C surface-temperature field anchored to observed Landsat LST** | `docs/DATA_SOURCES.md` §4 |
+> | DEM **~90 m** (SRTM, Open-Meteo) | **5 m Open3Dhk/LandsD tiles** | `docs/DATA_SOURCES.md` §1 |
+> | **2,639 procedural** building envelopes | **396 measured** Open3Dhk + Overture footprints | `docs/DATA_SOURCES.md` §3 |
+> | **10.3%** of cells closed pits (786 ha grid) | **11.7%** (43.5 ha window) | `README.md` |
+>
+> Treat every number above as history. When this chapter and `STATUS.md` disagree,
+> `STATUS.md` is right — it is the sole live statement of what works.
+
+
 ## The question this chapter answers
 
 A design-responsive drainage view must answer one question for the engineer who has to build it: *given a design edit, how much rain falls, how much is held, and how much is left with nowhere to go?* This chapter states precisely what the prototype computes today, surveys the published method families and their costs, recommends the one cheap in-stack upgrade that closes the biggest honest gap, and states what the result still cannot claim.

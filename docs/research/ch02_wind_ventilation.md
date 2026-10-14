@@ -1,5 +1,28 @@
 ## 2. Wind and Ventilation: From Axis-Aligned Frontal Area Density to Oriented Directional Frontal Area and Least-Cost-Path Corridors under a Comparative AVA Framing
 
+> **⚠️ PARTLY SUPERSEDED — measured on the retired 786 ha extent. Read this first.**
+>
+> This chapter was written before the 14 Oct 2026 real-data swap, when the study
+> area was the original ≈786 ha window (664 × 474 cells). Several figures below
+> describe that extent and the sources it used, and **they no longer match what
+> ships**. The literature, the method and the citations are unchanged and are the
+> reason this chapter is kept.
+>
+> What changed, and where the current figure lives:
+>
+> | This chapter says | What ships now | Home |
+> |---|---|---|
+> | ≈786 ha / 664 × 474 cells | **43.5 ha / 117 × 148 cells** | `docs/DATA_SOURCES.md` §5 |
+> | buffer deficit **3,170,180 m³** | **180,566.3 m³** | `STATUS.md` |
+> | heat = a **relative 0–1 index, not a temperature** | a **°C surface-temperature field anchored to observed Landsat LST** | `docs/DATA_SOURCES.md` §4 |
+> | DEM **~90 m** (SRTM, Open-Meteo) | **5 m Open3Dhk/LandsD tiles** | `docs/DATA_SOURCES.md` §1 |
+> | **2,639 procedural** building envelopes | **396 measured** Open3Dhk + Overture footprints | `docs/DATA_SOURCES.md` §3 |
+> | **10.3%** of cells closed pits (786 ha grid) | **11.7%** (43.5 ha window) | `README.md` |
+>
+> Treat every number above as history. When this chapter and `STATUS.md` disagree,
+> `STATUS.md` is right — it is the sole live statement of what works.
+
+
 ### 2.1 What the prototype computes today — and what it admits it cannot
 
 The sandbox's current wind layer is a **frontal area density (FAD)** screen. For each of the 16 cardinal wind directions it sums the building face presented perpendicular to the wind and divides by site area: `FAD(dir) = Σ (projected_width × height) / site_area` — a dimensionless *shape* indicator where low values mean wind can penetrate and high values mean the site is sheltered from that direction. It needs only footprints and heights (the 2,639 massing envelopes already on disk) and runs in milliseconds.

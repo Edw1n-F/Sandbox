@@ -5,7 +5,94 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
-## 2026-10-14 — a provider protocol, and a fake to test the chat with
+**This file grows forever by design, so it needs a policy.** It is the only home
+for history, and several old entries are the only record of *why* something was
+deleted (the 786 ha purge, the `3,170,180.3 m³` offline artefact). So: never
+truncate or summarise an entry to save space. When it gets unwieldy, split by
+month — move every dated section older than the current month into
+`docs/changelog/YYYY-MM.md` and leave a one-line index entry here
+(`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
+above is what makes that split safe.
+
+## 2026-10-14 — dead code out, drifted docs fixed, CI unblocked
+
+### Fixed — `requirements.txt` was what made CI red
+
+`pydantic==2.9.2` pins `pydantic-core==2.23.4`, which has **no Python 3.14
+wheel**. On CI the Rust extension was compiled from source and the build failed,
+so the `backend` and `contract` jobs went red while every local run passed — the
+local interpreter already had pydantic 2.13.5 installed, so the pin was never
+exercised. `pydantic==2.13.5` pulls `pydantic-core==2.41.5`, the first release
+with a cp314 manylinux wheel. Verified by building a clean venv: the old pin
+fails to install, the new one installs and all 18 suites pass in it.
+
+### Removed — ~630 lines of dead code
+
+- `backend/scripts/seed_interventions.py` (417 lines) — **README and CLAUDE.md
+  already said this script was gone.** It was purged in the 786 ha → 43.5 ha
+  switch but the file was left behind: an older doc being right and the tree
+  being wrong. The two `test_constants` checks that read its fixtures were also
+  deleted — they printed "skipped: run scripts/seed_interventions.py first" and
+  returned, so they had been passing vacuously and could never pass again
+  (18/18 → 16/16). Both lessons they encoded were real bugs and survive elsewhere:
+  the PNG-saturation trap in `test_wetgrid_data_is_not_clipped_by_its_own_render`,
+  and the stated-area-vs-geometry trap in CLAUDE.md.
+- `frontend/src/api/impactApi.ts` (154 lines) — zero importers. Its UI
+  (`ImpactPanel.tsx`) was deleted as an orphan on 13 Oct; the client module was
+  left behind.
+- ~30 unused exports, functions, constants and schema classes across both sides,
+  and ~19 unused imports. **ESLint cannot catch unused exports** — its
+  `no-unused-vars` config only matches file-local names — so 11 frontend exports
+  had passed every gate. `projected_width_m` was kept: it is a deliberate
+  `# noqa: F401` re-export that `test_ventilation` imports.
+
+### Fixed — nine facts stated in two places that had drifted apart
+
+Found by auditing every doc against the "one home per fact" rule. The damage was
+concentrated in what was written **before** the 14 Oct real-data swap:
+
+- **Heat: °C field or a relative index?** Six files disagreed, and `README.md`
+  contradicted *itself* (line 49 vs 666). The shipped sidecar settles it:
+  `SURFACE_TEMPERATURE_ANCHORED_TO_LST`, so the °C claim is right and the
+  "relative 0–1 index" copies were pre-LST. README's heat paragraph is rewritten.
+- **Buffer deficit: 180,566.3 vs 3,170,180 m³.** Two different extents (43.5 ha
+  vs the retired 786 ha), quoted with no note that they differ.
+- **DEM: 5 m tiles vs ~90 m SRTM**, **396 measured footprints vs 2,639 procedural
+  envelopes**, **10.3% vs 11.7% closed pits**, **Deep Bay vs HSK/HT**, **0.9 s
+  ledger vs ~11 s browser run**, and **rung C claiming a `place` capability that
+  was removed**.
+- `docs/research/ch01–ch05` are pre-swap and are the source of most of it. They
+  are **cited records** — the literature behind every design rule lives nowhere
+  else — so each now carries a dated "PARTLY SUPERSEDED" banner with a table
+  mapping the old figure to the current one. Corrected in place, never merged or
+  deleted.
+- `docs/RUNG_AND_BUSINESS.md` had five stale lines; its business model and rung
+  declaration are unique and were kept.
+
+### Fixed — a claimed feature that is not wired
+
+`STATUS.md` said `GET /buildings/{id}/fit` "exposes the objective to the LLM
+while the ledger does the arithmetic". The endpoint works and is tested, but
+`FIT_TOOL` is only *offered* to the model: the agent's result parser handles
+`CHOOSE_TOOL` and `MASSING_TOOL` only, so a fit call is never read back, and
+`score_candidates` has exactly one caller — the router. Claim corrected, and
+logged as open item 13.
+
+Four more endpoints (`/ledger`, `/sea-level`, `/scenarios`, `/scenario/evaluate`)
+also have no client. They are **not** dead — the rung declaration claims three of
+them as delivered features and the fourth is the retained back door for `place` —
+so they stay, now logged as open item 12.
+
+### Changed — docs
+
+`CLAUDE.md`'s "where things are written down" table gained the two docs it was
+missing (`FILE_STRUCTURE.md`, `CHANGELOG.md`). `CHANGELOG.md` gained a stated
+archival policy: this file grows forever by design and several old entries are
+the only record of *why* something was deleted, so it is split by month when
+unwieldy, never truncated. `STATUS.md` gained open items 12–14, including a
+duplicate test name in `test_constants.py` that silently shadows one check.
+
+
 
 ### Changed — `app/agent/llm.py` is a `Provider` protocol
 

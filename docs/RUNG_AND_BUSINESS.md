@@ -28,7 +28,7 @@ and specifies none. So these are ours, written against the brief's own task list
 |---|---|
 | **A** | Everything in the task list: baseline storage ledger, InVEST runoff, three real published plans, typhoon surge with jacking, HAND, a trained perception encoder, a generative emulator with a reported ensemble, and kappa validation against recorded flooding |
 | **B** | A, but with **ready-made HAND tiles instead of a derived bare-earth DTM**, and a **documented disagreement** against whatever validation data exists |
-| **C** ★ | The interactive sandbox, real terrain and land cover, the storage ledger and wet grid, the heat index, grounded AI interventions, **AI-driven 3D placement and alteration scored against the ledger**, the **buffer deficit as a served headline number**, **sea-level scenarios run against the official HKO projections**, and **three published CEDD programmes encoded as scenarios**. Validation by monotonicity and unit tests. **This is us.** |
+| **C** ★ | The interactive sandbox, real terrain and land cover, the storage ledger and wet grid, the heat index, grounded AI interventions, the **buffer deficit as a served headline number**, **sea-level scenarios run against the official HKO projections**, and **three published CEDD programmes encoded as scenarios**. Validation by monotonicity and unit tests. **This is us.** — *Amended 14 Oct 2026: the first version of this row also claimed "AI-driven 3D placement and alteration scored against the ledger". That capability was **removed**, not delivered: the procedural massing generator was replaced by 396 measured Open3Dhk + Overture footprints, and `place` was taken off the natural-language front door. Massing ops are still scored, but nothing generates one from an instruction. See `STATUS.md`.* |
 | **D** | A static map with two toggles and a number. The minimum that still demonstrates the idea. |
 
 ### What rung C deliberately leaves out, and why
@@ -40,10 +40,10 @@ Each omission is a decision, not an overrun. Saying so is the point.
 | **Typhoon surge + jacking effect** (task 12) | Needs an Hato tide series and an outfall network we do not have. This is the honest reason the brief itself gives for the whole project being at risk: the two things that "can still break it" are LiDAR access and 2017 validation data |
 | **Perception encoder** (task 16) | Requires a trained segmentation model. We use **ESA WorldCover 10 m v200**, an existing pretrained global product, and say so rather than implying we trained anything. This is the rung B/C boundary |
 | **Jacking effect, as a drainage model** (task 12) | The sea-level scenarios implement the *submergence* half of jacking, and report that it is inert at this site. The half that matters — a submerged outfall — needs pipe and outfall capacity we do not have. Claiming it would require inventing that network |
-| **Generative emulator** (task 17) | A surrogate needs training pairs from a slow simulator. Our ledger runs in **0.9 s**, so there is nothing to make faster — the premise of an emulator does not apply at this scale |
+| **Generative emulator** (task 17) | A surrogate needs training pairs from a slow simulator. The ledger arithmetic runs in **0.9 s** (a full browser run is ~11 s end to end, most of it rendering), so there is nothing to make faster — the premise of an emulator does not apply at this scale |
 | **Kappa vs recorded flood zones** (task 15) | No 2017 validation dataset is available. The brief accepts this: *"Validate with the ladder and report the disagreement."* We report the ladder |
 | **InVEST** (task 8) | We implemented SCS-CN directly from USDA TR-55 Table 2-2 rather than installing InVEST. Deviation noted below |
-| **CEDD LiDAR bare-earth DTM** (task 13) | Access is request-gated. We use Open-Meteo's SRTM-derived elevation, and the panel labels it |
+| **CEDD LiDAR bare-earth DTM** (task 13) | Access is request-gated. We use the **5 m Open3Dhk/LandsD terrain tiles**, and the panel labels it. (Superseded in-place: this row previously said "Open-Meteo's SRTM-derived elevation" — that ~90 m global model is the *retired* source, replaced on 14 Oct 2026. See `DATA_SOURCES.md`.) |
 
 ### What rung C has that rung B does not
 
@@ -54,9 +54,11 @@ model stating the objective and the code doing the arithmetic.
 And now the numbers that make the sandbox mean something rather than demo
 something:
 
-- **The buffer deficit, served.** 180,566 m³ — today's unstored water, pinned
-  by test to what `make_wetgrid.py` already produced. `GET .../ledger` adds the
-  delta a scenario makes to it.
+- **The buffer deficit, served.** 180,566.3 m³ — today's unstored water on the
+  current **43.5 ha** window, pinned by test to what `make_wetgrid.py` already
+  produced. `GET .../ledger` adds the delta a scenario makes to it.
+  *(The retired 786 ha extent reported 3,170,180.3 m³ for the same metric; the
+  research chapters still quote it. Different extents, not a correction.)*
 - **Three published CEDD programmes**, from the official Development Blueprint:
   First Phase ~19.6 ha, Second Phase Stage 2 ~200 ha, and all six Second Phase
   contracts ~253.5 ha. Which produced the most useful finding we have: **the
@@ -119,7 +121,10 @@ adopting it.
 
 1. **We are not inventing a metric.** Compensatory flood storage is already
    mandated in other jurisdictions. We are running a standard screening test on
-   Deep Bay, where the brief's own claim is that it has never been run.
+   **Hung Shui Kiu / Ha Tsuen**, where the brief's own claim is that it has never
+   been run. *(The site was switched from Deep Bay to HSK/HT on 6 Oct 2026 — the
+   27-task plan points at Deep Bay, but HSK/HT has the stronger public evidence
+   base and the Open3Dhk tile coverage. See `CLAUDE.md` and `DATA_SOURCES.md`.)*
 2. **We do not displace the statutory process.** Everything we produce is
    labelled preliminary and screening-level, explicitly not engineering grade,
    and the API says so in every response. A tool claiming to replace EPD
@@ -144,15 +149,27 @@ Better to name them than be found out on:
 
 - **The Curve Number table is the largest single lever on every number.** We
   publish the sensitivity band; the number is still an assumption.
-- **Footprints are procedural, not surveyed.** OSM is unreachable from this host,
-  so massing is derived from ESA WorldCover and flagged provisional throughout.
+- **Footprints are measured geometry, not surveyed storeys.** The 396 footprints
+  come from Open3Dhk tiles fused with Overture, and heights are the 90th
+  percentile of tile surface minus tile terrain. Kept provisional and disclosed
+  throughout: never described as surveyed storeys. *(The 2,639-footprint
+  procedural massing model this row used to describe was deleted on 14 Oct 2026.)*
 - **Single-building changes are ~0.006% of the district total.** The tool is for
   choosing what to do to one building; district claims need aggregation across
   many, which the scenario runner does.
-- **Heat is an unverified hand-authored index** — not degrees, not an
-  air-temperature field.
-- **The DEM is ~90 m cells.** Ground elevation is a neighbourhood value, not a
-  spot height.
+- **Heat is a screening surface-temperature field, not a measurement.** It is
+  anchored to an observed Landsat LST scene and a cited HKO air-temperature band,
+  and the geometry terms move cells in °C away from the site mean. Air
+  temperature is an *estimate* (surface − 12 °C), not a modelled field.
+  *(This row previously read "an unverified hand-authored index — not degrees".
+  That described the pre-LST relative 0–1 index, which the LST anchor replaced.
+  See `DATA_SOURCES.md` §4 and the shipped sidecar's
+  `SURFACE_TEMPERATURE_ANCHORED_TO_LST`.)*
+- **The DTM is the 5 m Open3Dhk/LandsD terrain-tile mesh surface** — real 5 m
+  posts, 117 × 148 over the window. It is a mesh surface, not a surveyed
+  bare-earth release, and a run re-solves the water level on it without
+  re-conditioning it. *(This row previously read "The DEM is ~90 m cells", which
+  described the retired Open-Meteo SRTM source.)*
 
 ---
 

@@ -1,5 +1,28 @@
 # 1. Urban Heat: From a Hand-Authored Land-Class Index to a Physically-Grounded Sky-View-Factor and Shadow Screen Anchored to Hong Kong Landsat LST
 
+> **⚠️ PARTLY SUPERSEDED — measured on the retired 786 ha extent. Read this first.**
+>
+> This chapter was written before the 14 Oct 2026 real-data swap, when the study
+> area was the original ≈786 ha window (664 × 474 cells). Several figures below
+> describe that extent and the sources it used, and **they no longer match what
+> ships**. The literature, the method and the citations are unchanged and are the
+> reason this chapter is kept.
+>
+> What changed, and where the current figure lives:
+>
+> | This chapter says | What ships now | Home |
+> |---|---|---|
+> | ≈786 ha / 664 × 474 cells | **43.5 ha / 117 × 148 cells** | `docs/DATA_SOURCES.md` §5 |
+> | buffer deficit **3,170,180 m³** | **180,566.3 m³** | `STATUS.md` |
+> | heat = a **relative 0–1 index, not a temperature** | a **°C surface-temperature field anchored to observed Landsat LST** | `docs/DATA_SOURCES.md` §4 |
+> | DEM **~90 m** (SRTM, Open-Meteo) | **5 m Open3Dhk/LandsD tiles** | `docs/DATA_SOURCES.md` §1 |
+> | **2,639 procedural** building envelopes | **396 measured** Open3Dhk + Overture footprints | `docs/DATA_SOURCES.md` §3 |
+> | **10.3%** of cells closed pits (786 ha grid) | **11.7%** (43.5 ha window) | `README.md` |
+>
+> Treat every number above as history. When this chapter and `STATUS.md` disagree,
+> `STATUS.md` is right — it is the sole live statement of what works.
+
+
 ## 1.1 What the prototype does today, stated precisely
 
 The heat overlay that ships today is a *relative heat-exposure index*, not a temperature. `make_heatmap.py` maps each 5 m land-class cell through a hand-authored lookup table — `paved 1.00, bare 0.85, green 0.40, wetland 0.20, water 0.05` (`HEAT_INDEX` in `_overlay_common.py`) — and paints the result through a cool-to-hot colour ramp to an RGBA PNG. The file's own docstring is unambiguous: the output is "a *relative* screening index on a 0-1 scale — **not** a temperature in degrees, and not a modelled air-temperature field." Its JSON sidecar carries the machine-readable status `RELATIVE_INDEX_NOT_A_TEMPERATURE` and a warning that the figure must not be presented as degrees Celsius.

@@ -156,8 +156,13 @@ heat are in the product surface:
   `weightedFavourability`, never `score`, and `combinedScore` stays `null`.
 - **Design metrics** — height dispersion, site coverage, ground-level void
   fraction, shade fraction, each tied to a published rule quoted in the output;
-  `massing_fit.py` + `GET /buildings/{id}/fit` exposes the objective to the LLM as
-  an enum while the ledger does the arithmetic.
+  `massing_fit.py` + `GET /buildings/{id}/fit` ranks candidate changes by an
+  objective enum while the ledger does the arithmetic. **The endpoint works and is
+  tested; the LLM tool is not wired to it.** `FIT_TOOL`
+  (`assess_building_fit`) is *offered* to the model, but the agent's result parser
+  handles only `CHOOSE_TOOL` and `MASSING_TOOL`, so a fit call is never read back.
+  `score_candidates` has exactly one caller — the router. Nothing in the frontend
+  calls the endpoint either. See open item 12.
 
 ---
 
@@ -188,7 +193,7 @@ copied from the code's output.
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
-| backend `test_constants` | 18/18 | `python tests/test_constants.py` |
+| backend `test_constants` | 16/16 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 28/28 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
@@ -310,6 +315,30 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
 
 10. **No water-pour animation.** The wet grid is a static PNG swap.
 11. **No `remove`/undo anywhere.** A planner can add but not take away.
+
+**Wired to nothing**
+
+12. **Four endpoints serve verified data that no client displays.**
+    `/ledger`, `/sea-level`, `/scenarios`, `/scenario/evaluate`. They are not
+    dead: the rung declaration claims the first three as delivered features
+    (`docs/RUNG_AND_BUSINESS.md`), and `/scenario/evaluate` is the retained back
+    door for the dormant `place` op (Decision 14). They are **tested** — 85 checks
+    across `test_ledger`, `test_sea_level` and `test_published_scenarios` — but
+    only reachable by hand. `/ledger` is nearly redundant with `POST /run`, which
+    carries the same figures from the same arithmetic; the other three have no
+    run-path equivalent. The panel that displayed them (`ImpactPanel.tsx`) was
+    deleted as an orphan on 13 Oct. Either re-surface them in Stage 3, or state in
+    the rung document that they are API-only.
+13. **`FIT_TOOL` is offered to the model but its result is never read.**
+    `assess_building_fit` is in the tool list and `route_tools` forces it for
+    "what should I do" phrasing, but `ai_plan`'s result parser handles only
+    `CHOOSE_TOOL` and `MASSING_TOOL`, so the call is discarded. Wire it to the
+    endpoint or drop the tool from the list.
+14. **A duplicate test name makes one check unreachable.**
+    `test_constants.py` defines `test_no_class_is_counted_as_both_generation_and_retention`
+    twice (≈lines 85 and 402). Python keeps the second, so the first never runs.
+    pyflakes reports it. The suite's count is honest — it counts what the runner
+    collects — but one intended check is silently absent.
 
 ### Resolved — kept so the record is not lost
 
