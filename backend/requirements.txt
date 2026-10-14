@@ -1,7 +1,14 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
-pydantic==2.9.2
-pydantic-settings==2.5.2
+
+# pydantic 2.9.2 pinned pydantic-core 2.23.4, which has no cp314 wheel: on CI the
+# Rust extension was compiled from source and the build failed, so this pin is
+# what made the `backend` and `contract` jobs red while every local run passed
+# (the local interpreter already had 2.13.5 installed). 2.13.5 pulls
+# pydantic-core 2.41.5, the first release with a cp314 manylinux wheel.
+# Do not pin pydantic back below 2.13: the floor is the wheel, not a preference.
+pydantic==2.13.5
+pydantic-settings>=2.11
 python-dotenv==1.0.1
 
 # Raster / overlay generation.
