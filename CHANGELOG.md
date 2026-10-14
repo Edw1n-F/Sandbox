@@ -63,6 +63,8 @@ that only held while the run posted a paragraph — they now assert what they me
 
 
 
+## 2026-10-14 — one card shape for the run, and a 429 stops reading as a missing key
+
 ### Fixed — the explanation fallback blamed a missing model for a 429
 
 The run's explanation falls back to code-assembled text when no model answers,
