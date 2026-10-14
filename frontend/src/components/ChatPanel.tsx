@@ -318,9 +318,10 @@ export default function ChatPanel() {
     if (lastRunId.current === runResult.runId) return
     lastRunId.current = runResult.runId
 
-    // When code wrote the explanation the run carries the *card*, so this
-    // renders the same structured card the chat falls back to. The paragraph
-    // stays for the model path, which has no card behind it.
+    // The run always carries a card -- written by the model when one answered,
+    // by code otherwise -- so a run renders as the same structured card the
+    // chat produces. The paragraph is the fallback for a client that predates
+    // this, or for a response missing the field.
     const runCard = runResult.explanationCard as AnswerCard | undefined
     setMessages((prev) => [
       ...prev,
@@ -398,11 +399,12 @@ export default function ChatPanel() {
           ])
           break
         case 'error':
-          setAnnouncement(`Note: ${event.message}`)
-          setMessages((prev) => [
-            ...prev,
-            { id: mkId(), role: 'ai', text: `Note: ${event.message}` },
-          ])
+          // A provider error is not content. The card that follows already says
+          // what happened and which data it rests on, so printing the raw
+          // failure as a chat message put "Note: provider HTTP 429" in the
+          // thread next to a perfectly good answer. The live region still
+          // announces it, which is where a screen reader should hear it.
+          setAnnouncement(`Note: ${event.message} — the answer may be code-assembled.`)
           break
         default:
           break

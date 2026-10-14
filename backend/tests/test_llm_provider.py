@@ -537,6 +537,110 @@ def test_anthropic_complete_text_uses_the_forced_tool_with_an_open_schema() -> N
     assert sent[0]["payload"]["messages"] == [{"role": "user", "content": "explain"}]
 
 
+def _run_stats() -> dict:
+    """A run's stats block, shaped as `run_scenario` returns it.
+
+    Small on purpose: these tests are about the card path, not the arithmetic,
+    and the numbers only need to be quotable so grounding has something to
+    accept or reject.
+    """
+    common = {"unstoredM3": 9056.82, "wetAreaHa": 0.83, "heatBlendedMean": 0.949,
+              "surfaceMeanC": 28.5, "airMeanC": 16.5, "runoffM3": 17379.41,
+              "floodAreaHa": 0.07}
+    return {
+        "scenario": dict(common),
+        "baseline": dict(common),
+        "delta": {k: 0.0 for k in common},
+        "ratios": {},
+        "temperature": {"observedMeanC": 41.26},
+        "tide": {"active": False},
+    }
+
+
+def _data_quality() -> dict:
+    """A clean run's data-quality block, which caps confidence at Medium."""
+    return {
+        "lstAvailable": True,
+        "sanityChecksFailed": 0,
+        "sanityCheckIds": [],
+        "interventionsSkipped": 0,
+        "terrainSource": "open3dhk-tiles",
+        "landCoverSource": "esa-worldcover",
+    }
+
+
+def test_the_run_explanation_takes_a_model_written_card() -> None:
+    """The run's explanation asks for a *card*, not a paragraph, so the run and
+    the chat produce one shape. A card the model got wrong is repaired by code:
+    `kind` and `eyebrow` are the UI's framing, not the model's to set."""
+    from app.services import run_service
+
+    good = {
+        "kind": "general",  # deliberately wrong: code must override it
+        "eyebrow": "",
+        "title": "The run is unchanged from the baseline",
+        "sentence": "Unstored runoff is 9057 m3.",
+        "cause": "Wet area 0.8 ha.",
+        "todo": "Enable a project and re-run.",
+        "stats": [{"l": "Unstored runoff", "v": "9057 m3"}],
+        "confidence": {"level": "High", "pct": 95, "note": "clear"},
+        "caveats": [],
+    }
+    fake = FakeProvider([json.dumps(good)])
+    with llm.use_provider(fake):
+        card, source, reason = run_service._llm_explanation(
+            _run_stats(), 50.0, 30.0, [], [], _data_quality())
+
+    assert reason is None, reason
+    assert source == "fake", source
+    assert card.source == "model"
+    assert card.kind == "run", "code owns `kind`; the model sent 'general'"
+    assert card.eyebrow == "Sandbox run", "code owns `eyebrow`"
+    # A clean run caps at Medium, so the model's High is lowered.
+    assert card.confidence.level == "Medium", card.confidence
+
+
+def test_the_run_explanation_reports_an_empty_model_reply() -> None:
+    """A reasoning model answers 200 with `content: ""` when its whole budget
+    went to the hidden trace. That must name itself rather than surfacing as an
+    anonymous parse failure."""
+    from app.services import run_service
+
+    fake = FakeProvider([""])
+    with llm.use_provider(fake):
+        card, source, reason = run_service._llm_explanation(
+            _run_stats(), 50.0, 30.0, [], [], _data_quality())
+
+    assert card is None, card
+    assert source == "template", source
+    assert "returned nothing" in reason, reason
+
+
+def test_a_model_written_run_card_still_passes_through_the_number_check() -> None:
+    """The run gets no exemption from grounding: a card quoting a figure the run
+    never produced is reported, not rendered as fact."""
+    from app.services import run_service
+
+    invented = {
+        "title": "The run cuts the overflow by 99,999 m3",
+        "sentence": "Runoff fell to 12,345 m3.",
+        "cause": None,
+        "todo": None,
+        "stats": [],
+        "confidence": {"level": "High", "pct": 90, "note": "clear"},
+        "caveats": [],
+    }
+    fake = FakeProvider([json.dumps(invented)])
+    with llm.use_provider(fake):
+        card, _, _ = run_service._llm_explanation(
+            _run_stats(), 50.0, 30.0, [], [], _data_quality())
+
+    assert card is not None
+    assert card.grounding is not None and not card.grounding.ok, card.grounding
+    assert card.grounding.ungrounded, "the invented figures must be named"
+    assert card.confidence.level == "Low", "an ungrounded card cannot sit at Medium"
+
+
 # --------------------------------------------------------------------------- #
 
 def _run() -> int:

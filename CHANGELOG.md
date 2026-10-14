@@ -14,7 +14,54 @@ month — move every dated section older than the current month into
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
 
-## 2026-10-14 — the run's fallback is the same card as the chat's, and a 429 was misreported
+## 2026-10-14 — the model writes the run card, not a paragraph beside it
+
+### Changed — the run's explanation is the same card the chat produces
+
+The run posted a loose paragraph, and the card only ever appeared when the model
+*failed*. So a planner got the model's content with no structure, or structure
+with code-written content — never both. The run now asks for the **card**: the
+same schema, grounded by the same `check_card`, capped by the same confidence
+ladder, with the stats, caveat and provenance receipt rendered by the same
+component. A model's answer and code's fallback are now the same object, and the
+only difference a reader can see is the badge and the confidence note.
+
+`prompts.RUN_SYSTEM` is a separate system prompt because it answers a different
+question: the chat answers "about this run"; the explanation answers "what did
+this run just do", unasked, every time. It carries two rules the old prose prompt
+lacked — distinguish `runoffM3` (total runoff) from `unstoredM3` (the part with
+nowhere to go), and do not sprinkle the same doubt across four fields. Both were
+prompted by real output: the first produced a card quoting 17,379 m³ beside the
+panel's 9,057 m³ with nothing to explain the gap; the second produced three
+caveats restating one reservation.
+
+Code still owns `kind` and `eyebrow`, because those are the UI's framing rather
+than the model's to set.
+
+### Fixed — a provider error was printed into the chat as a message
+
+A 429 arrived as a chat bubble reading `Note: provider HTTP 429`, next to a
+perfectly good answer, because the error event appended to the thread. A provider
+failure is not content: the card that follows already names its source and the
+data it rests on. It is now announced to the live region — where a screen reader
+should hear it — and not rendered as a message.
+
+### Fixed — the run card's empty-reply path reported the wrong cause
+
+`json.loads("")` raises, so a reasoning model that answered 200 with empty
+`content` (its whole budget spent on the hidden trace) fell into the generic
+handler and lost the reason. The empty case is now named, and the card says the
+model returned nothing rather than blaming something else.
+
+### Changed — test counts
+
+`test_llm_provider` 27 → 30: the run-card path is now covered with a scripted
+provider (a model card is accepted and code repairs its framing; an empty reply
+names itself; a card quoting an invented figure still fails the number check and
+lands at Low). `verify-chat` keeps 17 checks, but two were asserting on a count
+that only held while the run posted a paragraph — they now assert what they meant.
+
+
 
 ### Fixed — the explanation fallback blamed a missing model for a 429
 

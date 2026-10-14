@@ -331,73 +331,88 @@ def _rounded(node: Any) -> Any:
 
 def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
                      temperature_c: float,
-                     applied: list[dict], skipped: list[dict]
-                     ) -> tuple[str, str] | None:
-    """One short planner-facing paragraph from a configured LLM, or None.
+                     applied: list[dict], skipped: list[dict],
+                     data_quality: dict[str, Any] | None = None
+                     ) -> tuple[Any, str, str | None]:
+    """The run's result card, written by a model, or None.
+
+    Returns ``(card | None, source, reason)``. `reason` is None when a model
+    wrote it and otherwise names why code did.
 
     The model gets the numbers and is forbidden from inventing new ones; the
-    arithmetic stays in code, which is the division of labour the whole
-    project is built on. Any failure -- no key, network, malformed reply --
-    returns None and the caller falls back to the template, labelled.
+    arithmetic stays in code, which is the division of labour the whole project
+    is built on. A card whose numbers do not trace back is returned with the
+    grounding report attached rather than discarded, so a reader can see which
+    figure to distrust instead of losing the answer entirely.
+
+    `data_quality` is the run's own report on its inputs (see `build_facts`'s
+    `data` block); it caps the confidence the model may claim.
     """
-    facts = {
-        "rainfallMm": rainfall_mm,
-        "temperatureC": temperature_c,
-        "temperature": stats.get("temperature"),
-        "tide": stats.get("tide"),
-        "baseline": stats["baseline"],
-        "scenario": stats["scenario"],
-        "delta": stats["delta"],
-        "interventionsApplied": [
-            {"kind": a["kind"], "areaM2": a["areaM2"]} for a in applied
-        ],
-        "interventionsSkipped": [
-            {"kind": s["kind"], "why": s["why"]} for s in skipped
-        ],
+    # The model writes the *card*, not a paragraph, so the run and the chat
+    # produce one shape. `complete_json` forces the schema where the provider
+    # supports it, and the reply is grounded and ladder-capped exactly as a chat
+    # answer is -- the run gets no exemption from the number check.
+    from app.agent import confidence, grounding, llm, prompts
+    from app.agent.answer import ANSWER_SCHEMA, AnswerCard, GroundingReport
+
+    # The grounding check reads the same fact shape the chat uses, so the two
+    # paths cannot disagree about what counts as a number this run produced.
+    checkable = {
+        "inputs": {"rainfallMm": rainfall_mm, "temperatureC": temperature_c},
+        "scenario": stats.get("scenario") or {},
+        "baseline": stats.get("baseline") or {},
+        "delta": stats.get("delta") or {},
+        "ratios": stats.get("ratios") or {},
+        "applied": [{"kind": a["kind"], "areaM2": a["areaM2"]} for a in applied],
+        "skipped": [{"kind": s["kind"], "why": s["why"]} for s in skipped],
+        "data": data_quality or {},
     }
-    prompt = (
-        "You are explaining one screening-level land-use simulation run to an "
-        "urban planner. Write at most 110 words. Rules: use ONLY the numbers "
-        "in the JSON below -- never invent a figure; say 'unstored runoff' "
-        "for unstoredM3; mention the flood extent (floodAreaHa, cells with at "
-        "least %.2f m standing water) and the mean surface temperature "
-        "(surfaceMeanC, in degrees Celsius) with its air-temperature estimate "
-        "(airMeanC); if a "
-        "tide state is present and its tailwaterM is above 0, mention that "
-        "tidal backwater was applied as a screening boundary condition and "
-        "name the tide state; if no "
-        "interventions are applied, say this is the baseline today's land "
-        "cover and no project is selected; if the scenario matches the "
-        "baseline, state that explicitly rather than calling it better or "
-        "worse; otherwise state whether the scenario is better or worse than "
-        "today and by how much; end by stating "
-        "this is a screening-level flood extent (>= %.2f m standing water), "
-        "not engineering-grade, and that surface temperature is anchored to an "
-        "observed Landsat scene and rendered as deviation from the site mean, "
-        "not an air-temperature field.\n\n" % (FLOOD_DEPTH_M, FLOOD_DEPTH_M)
-        + json.dumps(_rounded(facts), indent=1)
-    )
-
-    # The chat panel's client: it walks LLM_FALLBACK_MODELS, so one throttled
-    # free-tier model no longer drops the explanation to the template.
-    from app.agent import llm
-
+    reason: str | None = None
     try:
-        text = llm.complete_text(
-            system="You write one short planner-facing paragraph in plain prose. No JSON, no markdown.",
-            prompt=prompt, max_tokens=1500)
-        if text:
-            return text, llm.provider_name(), None
+        turn = llm.complete_json(
+            system=prompts.RUN_SYSTEM,
+            messages=[llm.Message(role="user", text=prompts.user_turn(
+                "Explain the run that has just completed.", checkable))],
+            schema=ANSWER_SCHEMA,
+            max_tokens=1500,
+        )
+        # `complete_json` walks the model chain past empty replies and can still
+        # return one: a reasoning model that spends its whole budget on the hidden
+        # trace answers 200 with `content: ""`. Parsing that raises, which would
+        # land in the generic handler below and lose the real cause, so the empty
+        # case is named here.
+        if not (turn.text or "").strip():
+            reason = run_card.explanation_note(None)
+        else:
+            draft = json.loads(turn.text)
+            if not isinstance(draft, dict):
+                reason = "the model returned a card of the wrong shape"
+            else:
+                card = AnswerCard.model_validate(draft)
+                problems = grounding.check_card(card, checkable)
+                card.grounding = GroundingReport(ok=not problems, ungrounded=problems, revised=False)
+                card.source = "model"
+                # The same ladder the chat uses: the model proposes a level, the
+                # run's own data quality decides how high it may stand.
+                card.confidence = confidence.apply_ladder(
+                    card.confidence, confidence.cap_of(checkable["data"]),
+                    ungrounded=bool(problems))
+                # Code owns the framing fields: the eyebrow is chrome, and `kind`
+                # tells the UI this card describes a run rather than answering a
+                # question. A model that sets them is not wrong, just not in charge.
+                card.kind = "run"
+                card.eyebrow = card.eyebrow or "Sandbox run"
+                return card, llm.provider_name(), None
     except llm.ProviderUnavailable as exc:
         # No provider at all. Distinct from a provider that answered and failed.
-        return None, "template", run_card.explanation_note(exc)
+        reason = run_card.explanation_note(exc)
     except llm.LLMError as exc:
         # A 429 is NOT "no model configured", and the difference is the whole
         # reason a planner would retry rather than go looking for a missing key.
-        return None, "template", run_card.explanation_note(exc)
+        reason = run_card.explanation_note(exc)
     except Exception as exc:  # noqa: BLE001 - the labelled template covers this
-        return None, "template", run_card.explanation_note(exc)
-    return None, "template", run_card.explanation_note(None)
+        reason = run_card.explanation_note(exc)
+    return None, "template", reason
 
 
 # --------------------------------------------------------------------------- #
@@ -735,21 +750,36 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     _prune_run_dir(run_dir)
 
     # ---- explanation -----------------------------------------------------------
-    # Returns (text | None, source, reason). `reason` is None when a model wrote
-    # it, and otherwise says WHY the template was used -- "no model configured"
-    # and "the model was rate-limited" are different messages for the reader.
-    llm_result = _llm_explanation(stats, rainfall_mm, temperature_c, applied, skipped)
-    explanation, source, explanation_note = llm_result
-    # When a model wrote it, the sentence stays a sentence. When code wrote it,
-    # the run also carries the card, so the panel renders the same structured
-    # card the chat falls back to instead of a loose paragraph -- one shape for
-    # "this run, without a model", in both places.
-    explanation_card = None
-    if explanation is None:
-        card = run_card.run_card(stats, rainfall_mm, temperature_c,
-                                 applied, skipped, reason=explanation_note)
-        explanation = run_card.explanation_text(card, stats.get("tide"))
-        explanation_card = card.model_dump()
+    # What this run stood on. Read from the grids rather than typed here, so the
+    # card's provenance and the confidence cap both name the data the numbers
+    # actually came from -- and assembled *before* the explanation, because the
+    # cap reads it.
+    sources = {
+        "terrain": grids.terrain_source,
+        "landCover": grids.landcover_source,
+        "lst": lst_meta.get("source"),
+    }
+    data_quality = {
+        "lstAvailable": bool(sources.get("lst")),
+        "sanityChecksFailed": len(checks),
+        "sanityCheckIds": [c.get("id") for c in checks if isinstance(c, dict)],
+        "interventionsSkipped": len(skipped),
+        "terrainSource": sources.get("terrain"),
+        "landCoverSource": sources.get("landCover"),
+    }
+
+    # Returns (card | None, source, reason). `reason` is None when a model wrote
+    # it, and otherwise says WHY code did -- "no model configured" and "the model
+    # was rate-limited" are different messages for the reader.
+    explanation_card, source, explanation_note = _llm_explanation(
+        stats, rainfall_mm, temperature_c, applied, skipped, data_quality)
+    if explanation_card is None:
+        # Code writes the identical card, labelled with the real cause, so the
+        # panel renders one shape whether or not a model answered.
+        explanation_card = run_card.run_card(stats, rainfall_mm, temperature_c,
+                                             applied, skipped,
+                                             reason=explanation_note)
+    explanation = run_card.explanation_text(explanation_card, stats.get("tide"))
 
     wet_url = settings.public_url(f"rasters/run/wetgrid_{run_id}.png")
     heat_url = settings.public_url(f"rasters/run/heatmap_{run_id}.png")
@@ -770,11 +800,7 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         },
         # What this run stood on, read from the grids rather than typed here, so a
         # card's provenance receipt names the data the numbers actually came from.
-        "sources": {
-            "terrain": grids.terrain_source,
-            "landCover": grids.landcover_source,
-            "lst": lst_meta.get("source"),
-        },
+        "sources": sources,
         "stats": stats,
         "sanityChecks": checks,
         "worsens": stats["delta"]["unstoredM3"] > 1.0,
@@ -782,12 +808,12 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
         "interventionsSkipped": skipped,
         "explanation": explanation,
         "explanationSource": source,
-        # Only present when code wrote the explanation, and it names the actual
-        # cause. The client shows this instead of guessing.
+        # Only present when code wrote the card, and it names the actual cause.
+        # The client shows this instead of guessing.
         "explanationNote": explanation_note,
-        # The same card shape the chat renders, when code wrote the explanation.
-        # None when a model wrote it -- a model's prose has no card to send.
-        "explanationCard": explanation_card,
+        # The run's result card. Written by the model when one answered, by code
+        # otherwise -- the same shape either way, so the panel renders one thing.
+        "explanationCard": explanation_card.model_dump(),
         "status": RUN_STATUS,
         "warning": RUN_WARNING + (TIDE_WARNING % tailwater_m if tide_active else ""),
     }

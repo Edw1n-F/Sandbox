@@ -197,7 +197,7 @@ copied from the code's output.
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 28/28 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
-| backend `test_llm_provider` | 27/27 | `python tests/test_llm_provider.py` — the chat end to end through a scripted `FakeProvider`, no key |
+| backend `test_llm_provider` | 30/30 | `python tests/test_llm_provider.py` — the chat and the run card through a scripted `FakeProvider`, no key |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
 | frontend unit (`vitest`) | 53/53 | `npm test` — includes `streamChat` against real streams and the provenance receipt |

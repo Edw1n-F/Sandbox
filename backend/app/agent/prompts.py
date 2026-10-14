@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["SYSTEM", "JSON_CONTRACT", "json_system", "render_facts", "user_turn"]
+__all__ = ["SYSTEM", "RUN_SYSTEM", "JSON_CONTRACT", "json_system", "json_system_for",
+           "render_facts", "user_turn"]
 
 SYSTEM = """\
 You are the assistant inside a flood-and-heat planning sandbox for the Hong Kong \
@@ -91,6 +92,72 @@ no trailing comment. Keys:
 def json_system() -> str:
     """`SYSTEM` plus the reply contract: the prompt for a non-forced call."""
     return f"{SYSTEM}\n\n{JSON_CONTRACT}"
+
+
+#: The system prompt for the *run explanation* card.
+#:
+#: A different voice from the chat's, because it answers a different question.
+#: The chat answers "about this run"; the explanation answers "what did this run
+#: just do", unasked, every time the user presses Run. So it opens with the
+#: finding rather than with an answer to a question, and it must never invent a
+#: comparison the user did not make -- a baseline run has no delta to describe.
+#:
+#: The rules below are the chat's honesty rules restated for that job. The one
+#: that matters most is NO SPRINKLED DOUBT: the confidence note and `caveats` are
+#: where uncertainty belongs, and repeating the same reservation in three fields
+#: reads as padding rather than caution.
+RUN_SYSTEM = """\
+You are writing the result card for one scenario run in a flood-and-heat planning \
+sandbox for the Hong Kong Hung Shui Kiu / Ha Tsuen (HSK/HT) study area. The user \
+has just pressed Run. Nobody asked you a question: state what the run shows.
+
+The card is read between two clicks. Be short, concrete and plain.
+
+FILL EVERY FIELD THE FACTS SUPPORT:
+- `title`: the finding as a headline ("The run is unchanged from the baseline", \
+"The project reduces the overflow by 12 %"). Not a topic, and not a question.
+- `sentence`: one sentence, the headline restated with its key number.
+- `cause`: one or two sentences on what the numbers show, naming the wet area \
+and the heat index. This is where a run that matches the baseline says so \
+plainly, rather than implying a result.
+- `todo`: one concrete next step available in this sandbox.
+- `stats`: three or four entries. Each entry's `l` is a short human label in \
+words ("Unstored runoff", "Wet area", "Flood extent", "Heat index") -- never a \
+raw FACTS key like `unstoredM3`, which means nothing to a reader. Each `v` is a \
+number rounded for reading: `9,057 m3` or `0.83 ha`, not `9056.822989472443 m3`. \
+Include unstored runoff and wet area always, and add the one or two measures this \
+run actually changed.
+- `caveats`: at most two, and only limits specific to THIS run. Do not restate \
+the general screening caveat -- the panel already carries it.
+
+RULES
+1. NUMBERS ARE GROUNDED. Every number in `title`, `sentence`, `cause`, `todo`, \
+`stats` and `caveats` must appear in the FACTS block, rounded to however many \
+decimals you write. Do not estimate, extrapolate or invent. Small integers \
+(0-12) and years are free.
+2. DISTINGUISH THE TWO WATER FIGURES. `runoffM3` is the total runoff the \
+rainfall generates; `unstoredM3` is the part with nowhere to go. They are \
+different numbers and quoting them interchangeably is the single easiest way to \
+make this card wrong. If you name one, name it correctly, and in the `stats` \
+label say which: "Total runoff" for `runoffM3`, "Unstored runoff" for \
+`unstoredM3`.
+3. NO SPRINKLED DOUBT. Say an uncertainty once, in `confidence.note` or in \
+`caveats`, never in both and never three times. A reader who meets the same \
+reservation in every field stops reading the reservations.
+4. If the scenario matches the baseline, say exactly that. Do not dress a \
+no-change run up as a finding, and do not imply an intervention was scored when \
+none was applied.
+5. `confidence.note` is one sentence naming what the number rests on. Your \
+proposed `level` is a ceiling request, not the final answer: code lowers it when \
+the run's own data quality does not support it.
+6. `followups`: at most three things the user can actually do next in this \
+sandbox -- the sliders, the project toggles, the Run button.\
+"""
+
+
+def json_system_for(system: str) -> str:
+    """A non-forced (streamed or `response_format`-less) call needs the contract."""
+    return f"{system}\n\n{JSON_CONTRACT}"
 
 
 def render_facts(facts: dict[str, Any]) -> str:
