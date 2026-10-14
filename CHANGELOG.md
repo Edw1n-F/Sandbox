@@ -2,6 +2,128 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-14 — rotate, tilt and zoom are three independent axes
+
+### Fixed — tilting past the pitch limit rotated the view
+
+Reported as "past a certain limit, it just starts rotating instead because it
+can't tilt any further". The cause was structural, not a clamp that was slightly
+wrong. `orbitBy` read `camera.heading` and `camera.pitch` back off the camera,
+added the deltas, clamped the pitch, and rebuilt the entire pose through one
+shared placement routine. Heading and pitch were therefore re-derived together on
+every move and could not be independent — and near the pitch limit the heading is
+numerically hopeless, because Cesium's `getHeading` is the angle of
+`cross(direction, up)`, a vector whose length goes to zero as the view approaches
+nadir. At −88 that length is `sin(2°) = 0.035`, so the angle is all rounding.
+
+Each axis is now a delta applied to the live camera, inside a frame centred on the
+orbit pivot:
+
+- **`rotateBy`** rotates about the pivot's local vertical. Heading only — pitch
+  and range cannot move, because the rotation axis is vertical.
+- **`tiltBy`** rotates about the camera's own `right`, which is horizontal by
+  construction. Pitch only — heading cannot move, because the axis is horizontal.
+  `pitchDelta` clamps the delta so the result stops exactly *on* the limit.
+- **`zoomBy`** dollies along the line to the point under the view centre, leaving
+  orientation untouched.
+
+None of the three reads another's value, so none can disturb another. Measured in
+a browser: tilting past −88 pins the pitch at −88.00 with the heading unchanged to
+0.00°; rotating while pinned changes the heading and leaves pitch at 0.00°; and a
+zoom changes neither. `orbitBy` remains as a thin wrapper over the two, so
+`SandboxViewer` and `ViewButtons` are unchanged.
+
+### Fixed — the zoom was relative to the default view, not to what the user was looking at
+
+`zoomBy` re-placed the camera about the fixed scene pivot, so any zoom after a pan
+dragged the view back to the middle of the district: measured, one click after a
+517 m pan moved the point under the view centre by 464 m. It now dollies along the
+line joining the camera to the anchor under the middle of the visible strip, which
+is the fixed point of the projection — so the anchor does not move across the
+canvas at all. Measured: **0.0 px** through a zoom after a pan. The anchor is
+picked with `scene.pickPosition` first, so it lands on the 3D tile surface, then
+`globe.pick`, then the ellipsoid.
+
+### Fixed — a second quick button press did nothing (STATUS item 15)
+
+Logged twice as unexplained, at roughly 1 run in 10–20: the second of two quick
+zoom or tilt presses left the camera at the first step, with a flight still marked
+active that `requestRender()` would not release. The guess was Cesium's `flyTo`
+flight state. The cause was the frame rate. The buttons glided for 0.3 s on
+`requestAnimationFrame`, and in the headless software renderer the browser suites
+run in, rAF fires about once every two seconds — so the "flight" received one tick,
+and a press arriving before the next frame received none. Instrumented: two ticks
+at `now: 20927` and `now: 23193` for a nominal 0.3 s animation.
+
+Every camera move is now applied outright, with no animation to starve. Two
+presses add up because each applies its whole delta to the live camera. The
+keyboard and wheel paths were already instant for the same reason. `verify-nav`
+now asserts the two-press case rather than skipping it — 1437 m → 447 m, against
+791 for a single press — so the check can no longer be waived as flaky.
+
+### Changed — the gesture map now matches what each device is expected to do
+
+The wheel was bound to tilt. That was a workaround, not a decision: a mouse wheel
+and a trackpad two-finger drag are the *same DOM event*, so the gesture that had
+to be chosen for the trackpad ended up applied to the mouse as well. The map is
+now the one each device's user expects:
+
+| gesture | mouse | trackpad | keyboard |
+|---|---|---|---|
+| zoom | scroll wheel | pinch | `+` / `−` |
+| tilt | right-drag ↕ | two-finger ↕ | `↑` / `↓` |
+| rotate | right-drag ↔ | two-finger ↔ | `←` / `→` |
+
+`classifyWheel` splits the shared event on three shape signals. A mouse notch is
+one large `deltaY` (100 px in Chrome, 120 in Firefox), has no horizontal component
+at all, and arrives at least 120 ms after the last one. A trackpad streams many
+small fractional deltas, tens per second, and almost never reports an exact zero
+on the axis the user did not mean. The inter-event gap is the load-bearing signal,
+because a trackpad *can* report `deltaX === 0` on a perfectly vertical swipe, so
+shape alone would misroute it.
+
+Measured in a browser: three wheel notches zoom 1437 → 2792 m with heading and
+pitch unchanged to 0.01°; scrolling back returns to 1437 m; a simulated trackpad
+stream of 24 small deltas tilts the pitch −33° → −42.6° with the range unchanged
+to 3 m.
+
+Right-drag and middle-drag now do tilt *and* rotate — horizontal travel turns the
+view, vertical travel tilts it — each as a separate `tiltBy`/`rotateBy` call, so
+the independence of the three axes is preserved. Cesium's own `tilt3D` would give
+the same two-axis behaviour, but it is entangled with Cesium's pitch clamping and
+derives its heading from a `cross(direction, up)` that is ill-conditioned near
+nadir, which is the bug this whole change exists to remove. Measured: a vertical
+right-drag moves pitch −33° → −71.5° with the heading unchanged; a horizontal one
+turns the heading 335° → 29° with the pitch unchanged.
+
+Touch-screen pinch zoom is kept (`zoomEventTypes` still carries `PINCH`); it
+arrives as touch events, not wheel events, so the two do not compete.
+
+### Tests
+
+`verify-nav` 16 → 29 checks: the pitch limit holding with the heading fixed,
+rotation at the limit holding the pitch fixed, a zoom leaving both alone, two
+quick presses compounding, the anchor holding its screen position after a pan, an
+orthogonal right-drag on each axis, the wheel zooming, and a trackpad-drag stream
+tilting rather than zooming. Three consecutive runs green. `vitest` 71 → 85, the
+new ones pinning `classifyWheel` and `wheelToZoom` — including the case that
+decides the whole split, where a trackpad reports the same 100 px `deltaY` as a
+mouse notch and only the 16 ms gap tells them apart — plus five pinning
+`pitchDelta`, among them the case the clamp alone gets backwards, where the
+top-down framing sits at −90 (past the −88 tilt limit) and a request to tilt
+further down would otherwise move the camera 2° *upwards*.
+
+### Not changed
+
+Left-drag still pans and spins, exactly as before. `ctrl+scroll` still zooms
+(Cesium's binding, left alone because the browser sends it for its own pinch-zoom
+and that convention is worth keeping). The sensitivity constants remain estimates
+and want trying on a real device: the suites run in software rendering with no
+real mouse or trackpad, so they are felt, not measured. `ZOOM_PER_NOTCH` is 1/0.8
+— an eighth of the distance per notch — which is a guess at a comfortable rate.
+
+---
+
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 

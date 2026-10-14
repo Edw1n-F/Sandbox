@@ -43,7 +43,7 @@ and `src/view/` must not be imported from state.
 | File | Owns |
 |---|---|
 | `SandboxViewer.tsx` | the Cesium `Viewer` and every wiring effect; publishes `cameraControl` and the overlay status hooks; draws the flood/heat overlays as entities named *Flood extent* / *Heat map overlay* |
-| `cameraRig.ts` | bbox framing, orbit, zoom, the gesture bindings, and `wheelToOrbit` (the pure maths that turns a wheel event into a camera move) |
+| `cameraRig.ts` | bbox framing, and the three one-axis navigation moves (`rotateBy`, `tiltBy`, `zoomBy`) plus the gesture bindings. `wheelToOrbit`, `classifyWheel` and `wheelToZoom` are the pure maths that turn a wheel event into a camera move — `classifyWheel` is what tells a mouse notch (zoom) from a trackpad stream (tilt/rotate). `pitchDelta` is the pure pitch clamp |
 | `cameraHeading.ts` | the camera heading as a tiny external store, read by the compass. Not Zustand: it changes every frame of a drag and only the compass reads it |
 | `viewModes.ts` | survey/tactical scene dressing; restores everything it changes. Reached from the sandbox chrome, not a labelled button |
 | `demProvider.ts` | terrain-RGB decode, **the ground sampler**, terrain provider |
@@ -97,7 +97,7 @@ trigger a viewer action without the Cesium instance being drilled into the tree.
 | `_verify-common.mjs` | shared plumbing: Playwright resolution, server preflight, the checker, error capture, the tileset-aware `settleViewer` |
 | `verify-3d.mjs` | 17 checks: tileset load, camera framing, pan, the run reaching `POST /run`, both overlays drawn from the run's own id, canvas change, the flood/heat toggles |
 | `verify-ux.mjs` | 21 checks: first paint, loading affordance, failure paths (404 / unreachable / 5xx / malformed payload), phone layout, keyboard reach, slider names, reduced motion, slow network |
-| `verify-nav.mjs` | 16 checks on navigation: the help opens once and stays dismissed, the tilt buttons and the T / Home keys move the real camera, the compass turns with the view and faces north, and typing in the chat does not move it |
+| `verify-nav.mjs` | 29 checks on navigation: the help opens once and stays dismissed, the tilt buttons and the T / Home keys move the real camera, the compass turns with the view and faces north, typing in the chat does not move it, tilting past the pitch limit leaves the heading alone, rotating at the limit leaves the pitch alone, a zoom leaves both alone, two quick zoom presses add up, the anchor holds its screen position through a zoom after a pan, a vertical right-drag tilts without rotating and a horizontal one rotates without tilting, the mouse wheel zooms, and a trackpad-drag stream tilts instead |
 | `verify-chat.mjs` | 17 checks on the chat panel with the stream mocked (so no model is needed): the provenance receipt, the live region, the in-progress shimmer, a general answer carrying no receipt, and a stream cut before `done` |
 
 Both need the dev server on `:5173` **and** the backend on **`:8001`** (that is what

@@ -1,5 +1,5 @@
 /**
- * The trackpad sensitivity bug, pinned.
+ * The trackpad sensitivity bug, pinned -- and the mouse-wheel/trackpad split.
  *
  * The wheel handler used to apply `Math.sign(delta) * 5 deg` on every event. A
  * mouse wheel sends one event per notch, so that was fine. A trackpad streams
@@ -8,13 +8,18 @@
  * a trackpad never reports an exact zero on the axis you did not mean, a purely
  * vertical swipe also rotated the view.
  *
+ * A mouse wheel and a trackpad two-finger drag are the same DOM event, so the two
+ * gestures cannot be distinguished by which event arrives -- only by its shape.
+ * `classifyWheel` reads that shape, and the tests below pin both halves: a notch
+ * still zooms, a stream still tilts and rotates.
+ *
  * These tests exist because sensitivity is the kind of bug that only a person
  * notices -- nothing throws, nothing renders wrong -- so the numbers are pinned
  * where a regression will be caught rather than felt.
  */
 import { describe, expect, it } from 'vitest'
 
-import { wheelToOrbit } from './cameraRig'
+import { classifyWheel, wheelToOrbit, wheelToZoom } from './cameraRig'
 
 /** Total camera motion from a stream of events, as the handler would apply it. */
 function total(events: Array<[number, number]>): { tilt: number; rotate: number } {
@@ -27,6 +32,64 @@ function total(events: Array<[number, number]>): { tilt: number; rotate: number 
   }
   return { tilt, rotate }
 }
+
+describe('classifyWheel', () => {
+  it('reads a mouse-wheel notch as a zoom', () => {
+    // Chrome's notch is 100 px, Firefox's 120, both with deltaX exactly 0, arriving
+    // well over 120 ms after the last one.
+    expect(classifyWheel(0, 100, 0, 400)).toBe('zoom')
+    expect(classifyWheel(0, 120, 0, 900)).toBe('zoom')
+  })
+
+  it('reads a trackpad stream as an orbit, even when it looks like a notch', () => {
+    // The load-bearing case. A trackpad can report deltaX exactly 0 on a perfectly
+    // vertical swipe, so shape alone is not enough -- the ~16 ms gap is what decides.
+    expect(classifyWheel(0, 100, 0, 16)).toBe('orbit')
+    expect(classifyWheel(0, 120, 0, 8)).toBe('orbit')
+  })
+
+  it('reads small fractional deltas as a trackpad whatever the gap', () => {
+    expect(classifyWheel(0, 3, 0, 500)).toBe('orbit')
+    expect(classifyWheel(0.4, 12, 0, 500)).toBe('orbit')
+  })
+
+  it('reads a horizontal component as a trackpad', () => {
+    // A wheel has no horizontal axis; anything with one is a two-finger drag.
+    expect(classifyWheel(40, 100, 0, 500)).toBe('orbit')
+  })
+
+  it('treats an unknown gap as a notch, so one synthetic event still zooms', () => {
+    // A dispatched event can carry a zero timestamp. Reading that as a trackpad would
+    // swallow single programmatic wheel events, which the browser suite relies on.
+    expect(classifyWheel(0, 100, 0, Infinity)).toBe('zoom')
+  })
+
+  it('reads a line-mode notch as a zoom', () => {
+    // Firefox and some mice report deltaMode 1; 3 lines is 48 px, over the threshold.
+    expect(classifyWheel(0, 3, 1, 500)).toBe('zoom')
+  })
+})
+
+describe('wheelToZoom', () => {
+  it('zooms in on scroll-up and out on scroll-down, by the same factor', () => {
+    // Positive deltaY is scroll-down, which zooms out, matching every other map.
+    const outFactor = wheelToZoom(100)
+    const inFactor = wheelToZoom(-100)
+    expect(inFactor).toBeLessThan(1)
+    expect(outFactor).toBeGreaterThan(1)
+    expect(inFactor * outFactor).toBeCloseTo(1, 6)
+  })
+
+  it('is the same step per notch regardless of the browser magnitude', () => {
+    // Chrome says 100, Firefox says 120. The same gesture must zoom the same amount,
+    // which is why the magnitude is ignored and only the sign is read.
+    expect(wheelToZoom(100)).toBe(wheelToZoom(120))
+  })
+
+  it('is a no-op for a zero delta', () => {
+    expect(wheelToZoom(0)).toBe(1)
+  })
+})
 
 describe('wheelToOrbit', () => {
   it('moves in proportion to how far the fingers travelled', () => {
@@ -43,6 +106,8 @@ describe('wheelToOrbit', () => {
   })
 
   it('one mouse-wheel notch is still a clear, usable step', () => {
+    // Still a sizeable single step for the trackpad case that reaches here. It is the
+    // wheel's *zoom* that is now the notch gesture, not its tilt.
     const notch = wheelToOrbit(0, 100)
     expect(Math.abs(notch.tiltDeg)).toBeGreaterThan(3)
     expect(Math.abs(notch.tiltDeg)).toBeLessThanOrEqual(8)

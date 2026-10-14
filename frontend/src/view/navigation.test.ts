@@ -9,6 +9,51 @@ import { describe, expect, it } from 'vitest'
 
 import { hasSeenNavHint, markNavHintSeen, NAV_HELP, NAV_HINT_SEEN_KEY } from '../components/navHelp'
 import { isNorthUp, normaliseHeading, offNorth } from './cameraHeading'
+import { pitchDelta } from './cameraRig'
+
+describe('the pitch clamp', () => {
+  // `tiltBy` asks this for how far it may turn, and applies exactly that. It is a pure
+  // function so the one number that matters can be tested rather than felt: the reported
+  // bug was "past a threshold it starts rotating", which is what happens when a tilt is
+  // allowed past the limit -- it crosses straight down and comes back up with the
+  // heading flipped 180 deg.
+  const MIN = (-88 * Math.PI) / 180
+  const MAX = (-8 * Math.PI) / 180
+  const toDeg = (r: number) => (r * 180) / Math.PI
+
+  it('grants a tilt that stays inside the limits', () => {
+    // -33 is the opening pitch and -60 is comfortably inside. "Tilt up" is positive.
+    expect(toDeg(pitchDelta((-33 * Math.PI) / 180, (10 * Math.PI) / 180))).toBeCloseTo(10, 6)
+    expect(toDeg(pitchDelta((-60 * Math.PI) / 180, (-10 * Math.PI) / 180))).toBeCloseTo(-10, 6)
+  })
+
+  it('stops exactly at the limit and no further', () => {
+    // Starting near the overhead end, a big downward tilt lands ON the limit.
+    const atLimit = pitchDelta((-83 * Math.PI) / 180, (-30 * Math.PI) / 180)
+    expect(toDeg((-83 * Math.PI) / 180 + atLimit)).toBeCloseTo(toDeg(MIN), 6)
+  })
+
+  it('returns zero once already at a limit, so the view does not move at all', () => {
+    // Zero is what makes "tilting past the limit" a no-op rather than a rotation. A
+    // non-zero answer here is the bug.
+    expect(pitchDelta(MIN, (-30 * Math.PI) / 180)).toBe(0)
+    expect(pitchDelta(MAX, (30 * Math.PI) / 180)).toBe(0)
+  })
+
+  it('does not reverse direction for a view sitting outside the tilt range', () => {
+    // `T` frames straight down at -90, which is past the -88 tilt limit. Clamping a
+    // request to tilt further down would put the camera at -88: that is 2 deg UPWARD,
+    // the opposite of what was asked. It must be inert instead.
+    expect(pitchDelta((-90 * Math.PI) / 180, (-10 * Math.PI) / 180)).toBe(0)
+  })
+
+  it('still grants the tilt AWAY from a limit', () => {
+    expect(toDeg(pitchDelta(MIN, (30 * Math.PI) / 180))).toBeCloseTo(30, 6)
+    expect(toDeg(pitchDelta(MAX, (-30 * Math.PI) / 180))).toBeCloseTo(-30, 6)
+    // Out of range the other way too: from straight down, tilting up is still allowed.
+    expect(toDeg(pitchDelta((-90 * Math.PI) / 180, (30 * Math.PI) / 180))).toBeCloseTo(30, 6)
+  })
+})
 
 describe('compass maths', () => {
   it('normalises any angle into [0, 360)', () => {
@@ -50,11 +95,14 @@ describe('the navigation cheat-sheet', () => {
     }
   })
 
-  it('does not promise a plain scroll wheel zooms (it tilts)', () => {
-    // The wheel is bound to tilt; only ctrl+scroll and pinch zoom. Saying
-    // "scroll to zoom" would send every mouse user to the wrong gesture.
-    expect(text).not.toMatch(/(^|\| )Scroll\b/)
-    expect(text).toContain('Ctrl + scroll')
+  it('names a zoom gesture for the mouse wheel, which is what a wheel does', () => {
+    // The wheel was bound to tilt while a trackpad drag and a mouse wheel are the same
+    // DOM event. `classifyWheel` now splits them, so the mouse wheel zooms and the
+    // help must say so -- a cheat-sheet describing the old mapping sends every mouse
+    // user to the wrong gesture.
+    expect(text).toMatch(/Scroll wheel/)
+    expect(text).toMatch(/Right-drag/)
+    expect(text).toContain('Pinch')
   })
 
   it('gives every row both an action and an effect', () => {

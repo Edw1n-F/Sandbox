@@ -527,26 +527,26 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
       switch (event.key) {
         case 'ArrowLeft':
-          orbitBy(viewer, -ORBIT_STEP_DEG, 0, 0)
+          orbitBy(viewer, -ORBIT_STEP_DEG, 0)
           break
         case 'ArrowRight':
-          orbitBy(viewer, ORBIT_STEP_DEG, 0, 0)
+          orbitBy(viewer, ORBIT_STEP_DEG, 0)
           break
         case 'ArrowUp':
           // Arrow up raises the view, which means pitching towards the horizon.
           // Pitch is negative-when-looking-down, so this adds to it.
-          orbitBy(viewer, 0, TILT_STEP_DEG, 0)
+          orbitBy(viewer, 0, TILT_STEP_DEG)
           break
         case 'ArrowDown':
-          orbitBy(viewer, 0, -TILT_STEP_DEG, 0)
+          orbitBy(viewer, 0, -TILT_STEP_DEG)
           break
         case '+':
         case '=':
-          zoomBy(viewer, ZOOM_STEP, 0)
+          zoomBy(viewer, ZOOM_STEP)
           break
         case '-':
         case '_':
-          zoomBy(viewer, 1 / ZOOM_STEP, 0)
+          zoomBy(viewer, 1 / ZOOM_STEP)
           break
         // Home and 0 re-frame, T goes top-down. These are the two jumps that
         // arrows and +/- cannot reach, and they are what a lost user wants most.

@@ -7,9 +7,10 @@
  * worse than no cheat-sheet: it teaches people to do something that silently does
  * nothing, and they conclude the app is broken.
  *
- * The wheel is deliberately described as it behaves TODAY -- tilt, not zoom --
- * because that is what the code does. If the wheel mapping changes, this table is
- * the second place to update, and `navHelp.test.ts` is what will say so.
+ * The wheel is described as it behaves TODAY: a mouse wheel notch zooms, and a trackpad
+ * two-finger drag tilts and rotates -- the same DOM event, told apart by `classifyWheel`.
+ * If that mapping changes, this table is the second place to update, and
+ * `navigation.test.ts` is what will say so.
  */
 
 export interface NavHint {
@@ -29,8 +30,8 @@ export const NAV_HELP: NavGroup[] = [
     title: 'Mouse',
     hints: [
       { action: 'Left-drag', effect: 'Move the view across the district' },
-      { action: 'Right-drag', effect: 'Tilt up and down' },
-      { action: 'Ctrl + scroll', effect: 'Zoom in and out' },
+      { action: 'Scroll wheel', effect: 'Zoom in and out' },
+      { action: 'Right-drag', effect: 'Up and down tilts, left and right rotates' },
     ],
   },
   {
