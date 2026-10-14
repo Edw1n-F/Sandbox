@@ -304,7 +304,9 @@ You should see the HSK/HT area with real relief, and toggling **Wet grid** and
 ```bash
 cd backend
 python scripts/preflight.py                    # environment; exits non-zero if not runnable
-PYTHONUTF8=1 python -m pytest tests/           # or: for f in tests/test_*.py; do python "$f"; done
+for f in tests/test_*.py; do                   # exactly what CI runs
+  if grep -q __main__ "$f"; then PYTHONUTF8=1 python "$f"; else PYTHONUTF8=1 python -m pytest -q "$f"; fi
+done
 
 cd ../frontend
 npx tsc --noEmit                               # must be clean
@@ -312,8 +314,11 @@ npm run lint && npm test                       # eslint --max-warnings 0, vitest
 ```
 
 The backend suites (`backend/tests/`) are mostly standalone scripts that print `N/N passed` and exit
-non-zero on any failure, so a red suite fails a CI run; `test_overlay_masking` is
-pytest-style with no `__main__`, which is why `pytest tests/` is the recommended form.
+non-zero on any failure; `test_overlay_masking` is pytest-style with no `__main__`.
+**`pytest tests/` on its own is not enough:** it collects nothing from the
+standalone scripts, so it skips most of the suites and still reports green. The
+loop above runs each file the way it was written, and it is the loop
+`.github/workflows/ci.yml` runs.
 **The counts are in
 [`STATUS.md`](STATUS.md)** — one table, measured, and the only place they are
 written down.

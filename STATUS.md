@@ -166,7 +166,10 @@ heat are in the product surface:
 ### Test suites
 
 Counts measured by running every suite on **2026-10-14**. Lint and typecheck are
-clean. **Every backend suite is green.** The last three red suites were
+clean. **Every backend suite is green.** `.github/workflows/ci.yml` runs every
+suite below except the three browser suites, plus the contract drift check and
+`npm run build`, on every PR and every push to `main`. It has not yet run on
+GitHub; every command in it was run locally, including from a fresh clone. The last three red suites were
 pinned to state the real-data switches replaced, and were closed on 14 Oct: the
 `place` checks were rewritten to pin that the planner no longer offers it, and the
 hydrology and ledger pins were recounted against the 43.5 ha window rather than

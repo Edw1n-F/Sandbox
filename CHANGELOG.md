@@ -5,6 +5,42 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-14 — CI and CODEOWNERS
+
+### Added — `.github/workflows/ci.yml`
+
+The contract drift check existed but nothing called it unless someone remembered
+to. One workflow, four jobs, on every PR and every push to `main`:
+
+- `changes` uses `dorny/paths-filter` so a job whose folder did not change is
+  skipped. A skipped job satisfies a required check, so a frontend-only PR is not
+  left waiting on the backend.
+- `backend` installs `requirements.txt` + pytest on Python 3.14, runs
+  `preflight.py`, then every suite.
+- `contract` regenerates `contracts/openapi.json` and fails on `git diff`. It is a
+  separate job so it also runs on a PR that touches only `contracts/` (a hand-edit),
+  and so a red check reads "contract" with the one-line fix in the error.
+- `frontend` runs `npm ci`, `tsc`, lint, vitest and `npm run build`. The build is
+  there because a clean `tsc` does not prove Vite resolves the `@/*` alias.
+
+The browser suites are not in CI: they need both servers and exit 2 without them.
+
+### Fixed — `pytest tests/` was documented as the way to run the suites
+
+Running it collects 6 of the 17 suites. The rest are standalone `_run()` scripts
+pytest finds nothing in, so it skipped most of the checks and still reported green.
+README and CLAUDE.md now give the per-file loop CI runs: a script if the file has
+`__main__`, pytest otherwise.
+
+### Added — `.github/CODEOWNERS`
+
+Makes CLAUDE.md's shared-file table visible on the PR: each shared file is owned
+by all three people, so touching one auto-requests every reviewer. Areas follow
+`git log` ownership. It is soft enforcement until "Require review from Code
+Owners" is switched on for `main`, a repository setting the file cannot set.
+Edwin is listed as `Edw1n-F` (the repo owner) because CODEOWNERS silently ignores
+an account without write access.
+
 ## 2026-10-14 — the confidence ladder: code caps the claim
 
 ### Added — `app/agent/confidence.py`

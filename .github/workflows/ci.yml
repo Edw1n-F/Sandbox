@@ -1,0 +1,151 @@
+name: ci
+
+# One workflow, path-filtered per job. A job whose folder did not change is
+# *skipped*, and a skipped job satisfies a required status check, so a
+# frontend-only PR is not left waiting on a backend check that never runs.
+#
+# Not in CI: the browser suites (frontend/scripts/verify-*.mjs). They need both
+# servers up plus Playwright's Chromium, and exit 2 when the servers are
+# missing, so here they could only ever fail. Run them locally before merging a
+# rendering change (see CLAUDE.md, "Commands").
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same branch/PR makes the older run worthless; cancel it.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3.0.2
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+              - 'contracts/**'
+              - '.github/workflows/ci.yml'
+            backend:
+              - 'backend/**'
+              - '.github/workflows/ci.yml'
+            # The contract is generated from backend/ and committed in
+            # contracts/: a change on either side can make them disagree.
+            contract:
+              - 'backend/**'
+              - 'contracts/**'
+              - '.github/workflows/ci.yml'
+
+  backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    # Measured locally at ~2 min for every suite; test_run alone is ~70 s.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Three suites die on a decode error before running a check when the
+      # locale is not UTF-8. Ubuntu runners usually are; this makes it certain.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      # pytest is not in requirements.txt: only one suite needs it to run.
+      - run: pip install -r requirements.txt pytest
+      # The documented first-run step. Every key in the template is empty, so
+      # no language model is configured and the chat assembles its template card.
+      - run: cp .env.example .env
+      - run: python scripts/preflight.py
+      # Two runners, because the suites are two shapes. Most are standalone
+      # scripts with a _run() main that pytest collects nothing from, so pytest
+      # alone silently skips most of the checks STATUS.md counts;
+      # test_overlay_masking has no __main__ and only runs under pytest. Pick
+      # per file, never both.
+      - name: Backend suites
+        run: |
+          failed=""
+          for f in tests/test_*.py; do
+            echo "::group::$f"
+            if grep -q '__main__' "$f"; then
+              python "$f" || failed="$failed $f"
+            else
+              python -m pytest -q "$f" || failed="$failed $f"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::Failing suites:$failed"
+            exit 1
+          fi
+
+  contract:
+    needs: changes
+    if: needs.changes.outputs.contract == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      PYTHONUTF8: "1"
+    # Its own job, not a backend step, so that it also runs on a PR touching
+    # only contracts/ (a hand-edit), and so a red check says "contract" rather
+    # than "backend". test_openapi_contract covers the same ground inside the
+    # backend job; this step exists for the error message that names the fix.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: pip install -r requirements.txt
+      - name: contracts/openapi.json is up to date
+        run: |
+          python -m app.export_openapi
+          git diff --exit-code ../contracts/openapi.json || {
+            echo "::error file=contracts/openapi.json::A route or schema changed but contracts/openapi.json was not regenerated. Run: cd backend && python -m app.export_openapi, then commit contracts/openapi.json. Never hand-edit it."
+            exit 1
+          }
+
+  frontend:
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm test
+      # A clean tsc does not prove Vite resolves the same imports (the @/*
+      # alias has to be registered in both), so the build runs too.
+      - run: npm run build

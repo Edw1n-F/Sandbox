@@ -1,0 +1,37 @@
+# Owners are auto-requested as reviewers on PRs that touch their paths.
+# Last matching pattern wins: the broad default comes first, the shared files last.
+#
+# This is a review *request*, not a gate. It blocks a merge only if branch
+# protection on main has "Require review from Code Owners" turned on, which is
+# a GitHub repository setting this file cannot set.
+#
+# Three people. Edwin commits as ISFEdwin but is listed under the repo-owner
+# account, Edw1n-F, which is certain to have the write access CODEOWNERS needs.
+# Areas follow `git log --format='%an' -- <path>` as of 14 Oct 2026.
+
+# Default: anything not matched below belongs to the whole team.
+*                                   @Edw1n-F @xxyleea @ChenxuJY
+
+# Backend data pipeline, rasters and suites: mostly Edwin, then xxyleea.
+/backend/                           @Edw1n-F @xxyleea
+/backend/model/                     @ChenxuJY @Edw1n-F
+
+# The chat agent: xxyleea's.
+/backend/app/agent/                 @xxyleea @Edw1n-F
+
+# Frontend: mostly xxyleea, then Edwin.
+/frontend/                          @xxyleea @Edw1n-F
+
+# CI itself.
+/.github/                           @Edw1n-F @xxyleea @ChenxuJY
+
+# Shared files (CLAUDE.md, "Layer responsibilities"). Everyone edits these and
+# that is where the collisions come from, so every change gets every owner.
+/backend/app/main.py                @Edw1n-F @xxyleea @ChenxuJY
+/backend/app/config.py              @Edw1n-F @xxyleea @ChenxuJY
+/backend/.env.example               @Edw1n-F @xxyleea @ChenxuJY
+/backend/requirements.txt           @Edw1n-F @xxyleea @ChenxuJY
+/frontend/src/state/sceneStore.ts   @Edw1n-F @xxyleea @ChenxuJY
+/frontend/package-lock.json         @Edw1n-F @xxyleea @ChenxuJY
+/contracts/                         @Edw1n-F @xxyleea @ChenxuJY
+/STATUS.md                          @Edw1n-F @xxyleea @ChenxuJY

@@ -53,10 +53,13 @@ python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI
 python -m uvicorn app.main:app --reload --port 8001   # :8001 -- vite.config.ts proxies here
 python -m app.export_openapi                 # regenerate contracts/openapi.json after any route/schema change
 
-# Every suite is a standalone script, not a pytest run. On Windows set PYTHONUTF8=1,
-# or three suites die on a cp950 decode error before running a check. For the counts
-# and what each one covers, read STATUS.md -- do not trust a number typed into a comment.
-PYTHONUTF8=1 python -m pytest tests/          # or: for f in tests/test_*.py; do python "$f"; done
+# Most suites are standalone scripts, not pytest files: `pytest tests/` alone collects
+# nothing from them, skips most suites and still reports green. Run each file the way
+# it was written -- this is the loop CI runs. On Windows set PYTHONUTF8=1, or three
+# suites die on a cp950 decode error. Counts are in STATUS.md, not in a comment.
+for f in tests/test_*.py; do
+  if grep -q __main__ "$f"; then PYTHONUTF8=1 python "$f"; else PYTHONUTF8=1 python -m pytest -q "$f"; fi
+done
 
 # Frontend
 cd frontend && npm install && npm run dev    # :5173
@@ -139,6 +142,12 @@ rather than growing an existing module, and in the shared files below add at the
 | `requirements.txt`, `package-lock.json` | Never resolve by hand: take `main`'s, then re-run the install |
 | `STATUS.md` test table | Update in the same commit that adds a check |
 
+`.github/CODEOWNERS` lists every shared file above with all three owners, so a PR
+touching one auto-requests everyone's review. That is a request, not a gate: it
+blocks a merge only if branch protection on `main` has "Require review from Code
+Owners" switched on, which is a GitHub setting. Add a row here and a line there
+together.
+
 Do not run a formatter over a file you did not otherwise change.
 
 ## API contract
@@ -168,7 +177,8 @@ cd backend && python -m app.export_openapi    # then commit contracts/openapi.js
 ```
 
 Never edit that file by hand, and on a merge conflict take either side and
-regenerate. The frontend's `src/api/types.ts` is still hand-written; the contract
+regenerate. CI's `contract` job regenerates it and fails on any diff; that blocks
+a merge once the check is marked required on `main`. The frontend's `src/api/types.ts` is still hand-written; the contract
 is what you diff it against.
 
 Errors: 422 for validation, 404 with `{"detail": ...}`. **Both** a FastAPI
