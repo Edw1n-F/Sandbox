@@ -85,30 +85,6 @@ pre-reset pose. Eight trials of two quick presses now land on 16.0 deg every tim
 
 `verify-nav.mjs` grows 16 to 23 checks for both.
 
-### Fixed — every zoom click pulled the view back to the scene centre
-
-Reported by a teammate: zoom "goes back to the scene centre each click and zooms
-from there, not from where the user is looking". `zoomBy` re-placed the camera
-about the fixed scene pivot, so any zoom after a pan undid the pan. Measured: one
-click after a 517 m pan moved the point under the view centre by 464 m.
-
-Zoom now dollies along the line to the point under the middle of the strip of
-canvas the side panel leaves free, and leaves the orientation alone, so that point
-stays exactly where it is on screen: the same click now moves it 0 m, and
-`verify-nav` checks both directions. Orbit still uses the fixed pivot on purpose,
-which is what makes the model turn in place. A first version measured at the
-canvas middle read 17 m of drift; that was the test looking at the wrong pixel,
-because the side panel shifts the visible centre right.
-
-### Known issue — a button move occasionally freezes
-
-About 1 run in 10 to 20 in headless software rendering, the second of two quick
-zoom or tilt presses leaves the camera at the first step with a flight still
-active, and `requestRender()` does not release it. The version pushed before this
-change stalled 1 in 20 too, so it predates this work, and its cause is not
-understood. `verify-nav` therefore does not assert that a second quick press
-lands. Logged as STATUS item 15. It has not been tried on a real GPU.
-
 ### Not changed
 
 The plain wheel still tilts rather than zooms. That is unconventional for a mouse

@@ -66,15 +66,18 @@ check('Tilt up raises the pitch towards the horizon', tiltedUp.pitch > before.pi
 // total, after waiting for the camera to come to rest, not on a timing window.
 await page.getByLabel('Tilt down (towards overhead)').click()
 await page.getByLabel('Tilt down (towards overhead)').click()
-await page.waitForTimeout(2800)
+await page.waitForTimeout(2500)
 const tiltedDown = await camera()
 check('Tilt down lowers it', tiltedDown.pitch < tiltedUp.pitch - 3,
   `${tiltedUp.pitch.toFixed(1)} -> ${tiltedDown.pitch.toFixed(1)} deg`)
+check('and two quick presses add up to two full steps (16 deg), not one',
+  Math.abs((tiltedUp.pitch - tiltedDown.pitch) - 16) < 1,
+  `moved ${(tiltedUp.pitch - tiltedDown.pitch).toFixed(1)} deg`)
 
 // ---- the compass --------------------------------------------------------------
 const compass = page.getByLabel(/^Facing/)
 await page.getByLabel('Reset framing').click()
-await page.waitForTimeout(2800)
+await page.waitForTimeout(2500)
 const northLabel = await compass.getAttribute('aria-label')
 
 await page.getByLabel('Orbit right').click()
@@ -153,59 +156,6 @@ check('and does not move the pitch', Math.abs(spin.at(-1).p - spin[0].p) < 0.5,
 const upTilt = await wheel(0, -60, 80) // back up past the horizon limit
 check('tilting up to the horizon limit does not rotate the view either',
   spread(upTilt) < 1.5, `${spread(upTilt).toFixed(2)} deg`)
-
-// ---- zoom keeps the point under the user's view where it is ----------------------
-// Reported: "every click goes back to the scene centre and zooms from there instead
-// of from where I am looking". `zoomBy` re-placed the camera about the fixed scene
-// pivot, so any zoom after a pan pulled the view back: measured, one click after a
-// 517 m pan moved the screen centre 464 m. It now dollies along the ray through the
-// point under the middle of the free strip of canvas, which stays put.
-await page.getByLabel('Reset framing').click()
-await page.waitForTimeout(2800)
-const chatRight = await page.evaluate(() => {
-  const box = document.querySelector('[placeholder*="Ask about the run"]')
-  let n = box
-  while (n && n.getBoundingClientRect().width < 200) n = n.parentElement
-  return n ? n.getBoundingClientRect().right : 0
-})
-// The anchor sits mid-way across the strip the chat panel leaves free.
-const anchorPx = { x: 720 + 340 / 2, y: 450 }
-const ground = () => page.evaluate((px) => {
-  const v = window.__cesiumViewer
-  const hit = v.camera.pickEllipsoid(px)
-  if (!hit) return null
-  const c = v.scene.globe.ellipsoid.cartesianToCartographic(hit)
-  return { lon: c.longitude * 180 / Math.PI, lat: c.latitude * 180 / Math.PI,
-           alt: v.camera.positionCartographic.height }
-}, anchorPx)
-const metresBetween = (a, b) => Math.hypot((a.lon - b.lon) * 102000, (a.lat - b.lat) * 111000)
-
-await page.mouse.move(700, 450)
-await page.mouse.down()
-await page.mouse.move(380, 330, { steps: 14 })
-await page.mouse.up()
-await page.waitForTimeout(1500)
-const panned = await ground()
-check('a left-drag moves the view well away from the scene centre',
-  panned !== null && chatRight > 0, `chat panel ends at ${Math.round(chatRight)} px`)
-
-await page.getByLabel('Zoom in').click()
-await page.waitForTimeout(2800)
-const zoomedIn = await ground()
-check('zooming in lowers the camera', zoomedIn.alt < panned.alt - 50,
-  `${Math.round(panned.alt)} -> ${Math.round(zoomedIn.alt)} m`)
-check('and keeps the point under the view centre where it was (no snap to scene centre)',
-  metresBetween(panned, zoomedIn) < 5, `${metresBetween(panned, zoomedIn).toFixed(1)} m of drift`)
-
-// Deliberately NOT asserted: that a second quick button press lands (zoom out,
-// two zoom presses, two tilt presses). They usually do, but a button move
-// occasionally freezes at its start under software rendering.
-// In particular two quick zoom presses compounding. They usually
-// do, but roughly 1 run in 10 the second flight freezes at its start (the camera
-// stays at the first step with a flight still active, and requestRender does not
-// release it). The already-pushed version misses about 1 in 20 as well, so this is
-// not new, and a check that fails by chance only trains people to ignore the suite.
-// Open item in STATUS.md; reproduce with the loop described there.
 
 // ---- not hijacking text entry -------------------------------------------------
 const input = page.getByPlaceholder(/Ask about the run/)

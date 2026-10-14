@@ -255,7 +255,6 @@ export function frameExtent(
   // A re-frame replaces whatever a button press was heading for. Left set, the
   // next tilt would build on the pose from BEFORE the reset and snap the view back.
   pendingPose = null
-  pendingDolly = null
   const heading = CesiumMath.toRadians(options.headingDeg ?? DEFAULT_HEADING_DEG)
   const pitch = CesiumMath.toRadians(options.pitchDeg ?? DEFAULT_PITCH_DEG)
   const duration = options.duration ?? 1.2
@@ -535,7 +534,6 @@ export function orbitBy(
   pitchDeg: number,
   duration = 0.3,
 ): void {
-  pendingDolly = null
   const base = basePose(viewer)
   const heading = base.heading + CesiumMath.toRadians(headingDeg)
   const pitch = CesiumMath.clamp(
@@ -548,91 +546,20 @@ export function orbitBy(
 }
 
 /**
- * Where a zoom is heading, so quick presses add up (see `PendingPose`).
- * Separate from the orbit state because a dolly is a position, not a pose.
- */
-let pendingDolly: { token: number; anchor: Cartesian3; position: Cartesian3 } | null = null
-
-/**
- * The point on the ground under the middle of the strip of canvas the left panel
- * leaves free -- i.e. what the user perceives as "the centre of my view".
- */
-function visualCentreAnchor(viewer: Viewer): Cartesian3 {
-  const camera = viewer.camera
-  const canvas = viewer.scene.canvas
-  const width = Math.max(1, canvas?.clientWidth ?? 1)
-  const height = Math.max(1, canvas?.clientHeight ?? 1)
-  const inset = Math.min(sandboxPivot ? sandboxInsetLeft : 0, width * 0.4)
-  const pixel = new Cartesian2(width / 2 + inset / 2, height / 2)
-  const hit = camera.pickEllipsoid(pixel, Ellipsoid.WGS84)
-  if (hit) return hit
-  // Looking at the horizon there is no ground under the pixel: use a point along
-  // the ray through it so zooming still works and still keeps that pixel fixed.
-  const ray = camera.getPickRay(pixel)
-  const { range } = viewCentre(viewer)
-  // `getPickRay` can return undefined (no canvas yet); the view direction is the
-  // honest fallback, since the pixel is at most a few hundred px off-axis.
-  const origin = ray?.origin ?? camera.positionWC
-  const direction = ray?.direction ?? camera.directionWC
-  return Cartesian3.add(
-    origin,
-    Cartesian3.multiplyByScalar(direction, range, new Cartesian3()),
-    new Cartesian3(),
-  )
-}
-
-/**
- * Move towards (<1) or away from (>1) the point under the centre of the user's view.
- *
- * It dollies along the line from that point to the camera and leaves the
- * orientation alone, so the point stays exactly where it is on screen. The previous
- * version re-placed the camera about the fixed scene pivot, so every click pulled
- * the view back to the middle of the scene: measured, one click after a 517 m pan
- * moved the screen centre 464 m. Orbit still uses the fixed pivot, deliberately --
- * that is what makes the model turn in place -- but a zoom has no business
- * re-centring anything.
+ * Move the camera towards or away from what it is looking at.
  *
  * A distance multiply rather than `camera.zoomIn`, which is a per-tick delta: under
- * `requestRenderMode` there may be no tick to apply it on, so it does nothing at
- * all, silently, which is exactly how it presents. Quick presses chain onto the
- * destination of the flight in progress, for the same reason orbit does.
+ * `requestRenderMode` there may be no tick to apply it on, so it does nothing at all,
+ * silently, which is exactly how it presents.
  */
 export function zoomBy(viewer: Viewer, factor: number, duration = 0.3): void {
-  const camera = viewer.camera
   const controller = viewer.scene.screenSpaceCameraController
-  const anchor = pendingDolly?.anchor ?? visualCentreAnchor(viewer)
-  const from = pendingDolly?.position ?? Cartesian3.clone(camera.positionWC)
-
-  const offset = Cartesian3.subtract(from, anchor, new Cartesian3())
-  const distance = Math.max(Cartesian3.magnitude(offset), 1)
+  const base = basePose(viewer)
   const next = CesiumMath.clamp(
-    distance * factor,
+    base.range * factor,
     controller.minimumZoomDistance ?? 40,
     controller.maximumZoomDistance ?? 40_000,
   )
-  const destination = Cartesian3.add(
-    anchor,
-    Cartesian3.multiplyByScalar(offset, next / distance, new Cartesian3()),
-    new Cartesian3(),
-  )
-
-  // Orientation is the camera's own, unchanged: a pure dolly along the ray through
-  // the anchor, so the position and the orientation cannot contradict each other.
-  const orientation = {
-    direction: Cartesian3.clone(camera.directionWC),
-    up: Cartesian3.clone(camera.upWC),
-  }
-  pendingPose = null
-
-  if (duration <= 0) {
-    pendingDolly = null
-    camera.setView({ destination, orientation })
-    return
-  }
-  const token = nextToken++
-  pendingDolly = { token, anchor, position: destination }
-  const retire = () => {
-    if (pendingDolly?.token === token) pendingDolly = null
-  }
-  camera.flyTo({ destination, orientation, duration, complete: retire, cancel: retire })
+  const retire = rememberPose({ ...base, range: next }, duration)
+  placeCamera(viewer, base.point, base.heading, base.pitch, next, duration, sandboxPivot ? sandboxInsetLeft : 0, retire)
 }

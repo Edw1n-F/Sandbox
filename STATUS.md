@@ -204,7 +204,7 @@ copied from the code's output.
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
-| frontend navigation (`verify-nav.mjs`) | 25/25 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres, tilting past the pitch limit leaves the heading alone, and zooming keeps the point under the view centre where it was |
+| frontend navigation (`verify-nav.mjs`) | 23/23 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres, tilting past the pitch limit leaves the heading alone, and two quick button presses add up |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.
@@ -320,18 +320,6 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
 
 10. **No water-pour animation.** The wet grid is a static PNG swap.
 11. **No `remove`/undo anywhere.** A planner can add but not take away.
-
-**Camera**
-
-15. **A button move occasionally freezes at its start.** Roughly 1 run in 10 to 20,
-    the second of two quick presses on a zoom or tilt button leaves the camera at
-    the first step with a flight still marked active, and `scene.requestRender()`
-    does not release it. Measured in headless software rendering. The version
-    pushed before the zoom change stalled 1 in 20 as well, so it is not new, but
-    it is not understood either, and it has not been reproduced on a real GPU.
-    Keyboard and wheel moves are instant (`duration` 0) so they are unaffected.
-    This is why `verify-nav` does not assert that a second quick press lands: a
-    check that fails by chance only teaches people to ignore the suite.
 
 **Wired to nothing**
 
