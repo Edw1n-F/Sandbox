@@ -193,7 +193,7 @@ copied from the code's output.
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
-| backend `test_constants` | 16/16 | `python tests/test_constants.py` |
+| backend `test_constants` | 17/17 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 28/28 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
@@ -334,13 +334,19 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
     "what should I do" phrasing, but `ai_plan`'s result parser handles only
     `CHOOSE_TOOL` and `MASSING_TOOL`, so the call is discarded. Wire it to the
     endpoint or drop the tool from the list.
-14. **A duplicate test name makes one check unreachable.**
-    `test_constants.py` defines `test_no_class_is_counted_as_both_generation_and_retention`
-    twice (≈lines 85 and 402). Python keeps the second, so the first never runs.
-    pyflakes reports it. The suite's count is honest — it counts what the runner
-    collects — but one intended check is silently absent.
+14. **A duplicate test name makes one check unreachable.** → fixed, see
+    "Resolved" below.
 
-### Resolved — kept so the record is not lost
+**A duplicate test name hid a check for an unknown length of time.** On 14 Oct
+`test_constants.py` defined `test_no_class_is_counted_as_both_generation_and_retention`
+twice, with different bodies. Python keeps the later definition, so the earlier
+one was collected as a duplicate and silently discarded — it had never run. The
+suite counted 16 because that is what the runner collected, so the count was
+honest and the gap was invisible. Both now have distinct names and both pass:
+16 → 17. Worth remembering as the general shape: **a green suite count is
+evidence about the checks that ran, not about the checks that were written.**
+
+
 
 These were open items on 13 Oct and are closed. They are kept in one short block
 rather than deleted, because each was a decision someone will otherwise re-litigate.

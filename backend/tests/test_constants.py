@@ -82,8 +82,15 @@ def test_curve_number_ordering_is_physical() -> None:
     assert order == sorted(order, reverse=True), f"CN ordering is wrong: {order}"
 
 
-def test_no_class_is_counted_as_both_generation_and_retention() -> None:
-    """ADR-015: a water body is counted in exactly one term, never both."""
+def test_a_class_is_counted_as_generation_or_retention_but_never_both() -> None:
+    """ADR-015: a water body is counted in exactly one term, never both.
+
+    Renamed from `test_no_class_is_counted_as_both_generation_and_retention`,
+    which was also the name of a different check 220 lines below. Python kept
+    the later definition, so this one never ran -- it was collected as a
+    duplicate and silently discarded. See it asserted for real in
+    `test_a_retention_class_emits_no_generation_under_the_adr_015_wetland_case`.
+    """
     assert set(COUNTED_AS) == set(LAND_CLASSES)
     assert set(COUNTED_AS.values()) == {"generation", "retention"}
     for name, side in COUNTED_AS.items():
@@ -305,7 +312,7 @@ def test_curve_numbers_match_their_cited_tr55_rows() -> None:
     )
 
 
-def test_no_class_is_counted_as_both_generation_and_retention() -> None:
+def test_a_retention_class_emits_no_generation_under_the_adr_015_wetland_case() -> None:
     """ADR-015, and the wetland double-count that violated it.
 
     `COUNTED_AS` declared wetland a retention class, but `compute()` zeroed only
