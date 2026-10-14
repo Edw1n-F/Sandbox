@@ -462,6 +462,31 @@ own: it cannot write geometry, start a run, or change a plan. Interventions
 typed into the chat are routed to the AI planner, which is the module that owns
 geometry (and ADR-030's draft rule).
 
+**Confidence is capped by code, not claimed by the model.** This was the last
+field still left to self-assessment, and it was the one that contradicted
+everything else here: every other number is checked, and the model is never
+asked whether it is right. `agent/confidence.py` takes the model's proposed
+level as a **ceiling request** and lowers it as far as the run's own data quality
+requires — a heat anchor that failed to load, a sanity check that fired, an
+intervention that could not be applied, an unnamed data source. The percentage is
+then clamped into whatever band the surviving level owns, so "High · 40 %" cannot
+be rendered.
+
+Two things this ladder deliberately does *not* do. It never **raises** a level,
+because manufacturing confidence for a hesitant model is the same mistake
+mirrored. And a clean run caps at **Medium**, not High: the caps are statements
+about the run's *inputs*, and a clean input is not a strong finding. High stays
+reserved for a delta the run can demonstrate, which is the rule the prompt
+already asked for and this module now enforces.
+
+The run reports what the cap reads. `build_facts` carries a `data` block —
+booleans and small counts — alongside the facts, so the cap is computed from
+what the run actually said about itself rather than from what the client
+remembers to send. Missing keys read as *unknown*, not as clean. The same block
+reaches the model as prose in a `[DATA QUALITY]` section, never as a field it
+could quote: a model that copies a token into the card fails grounding, and one
+that reads a sentence can carry the caveat in the user's own language.
+
 **How it holds up.** With no provider configured the identical card is assembled
 by code from the run's own figures and labelled `source: "template"`. That is
 not a fallback to be hidden: every number in it is one the run actually
@@ -501,6 +526,7 @@ If you are changing something, these are the places that must move together:
 | A new field on the answer card | `agent/answer.py` (model **and** `ANSWER_SCHEMA`) + `CardView` in `ChatPanel.tsx` + anything `grounding.check_card` should now read |
 | A new stream event | `agent/chat_service.py` + the `Step`/event union in `api/chatApi.ts` + `ChatPanel.tsx`. The stream always ends with `done` |
 | A new LLM provider | `agent/llm.py` only — `complete_json` and `stream_text` are the whole surface |
+| A new confidence cap | `agent/confidence.py`'s `cap_of` + a key in `build_facts`' `data` block + a line in the prompt's `[DATA QUALITY]` section, so the card and the level agree |
 
 ---
 

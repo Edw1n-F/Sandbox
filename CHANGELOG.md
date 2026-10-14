@@ -5,6 +5,57 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-14 — the confidence ladder: code caps the claim
+
+### Added — `app/agent/confidence.py`
+
+Confidence was the one field in a card still set by the model's own
+self-assessment. Every other number is checked against the run by
+`grounding.check_card` and the model is never asked whether it is right, so the
+field contradicted the boundary the rest of the module holds. The model still
+*proposes* a level — it knows whether a delta was large or marginal — and code now
+decides how high that proposal may stand on evidence that actually exists.
+
+The ladder: base = the proposed level, capped by the run's data quality, lowered
+to Low by a residual ungrounded number, percentage clamped into the surviving
+level's band. The caps are `lstAvailable: false`, any fired sanity check, any
+skipped intervention, and an unnamed terrain or land-cover source.
+
+**A clean run now caps at Medium.** This is the change a user will notice: a card
+that previously read "High confidence · 92%" reads "Medium · 79%". The cap is
+about the run's *inputs*, and a clean input is not a strong finding — High stays
+reserved for a delta the run can demonstrate, which is what the prompt's rule 5
+already asked for. The ladder never *raises* a level either: manufacturing
+confidence for a hesitant model is the same mistake mirrored.
+
+`build_facts` gained a `data` block (booleans and small counts) carrying exactly
+what the cap reads, so the decision comes from what the run said about itself
+rather than from what a client remembered to send; missing keys read as unknown,
+not as clean. The same block reaches the model as **prose** in a new
+`[DATA QUALITY]` section — never as a field it could quote, since a copied token
+would fail grounding while a sentence can be carried into the card honestly. That
+section is exempt from the numeric renderer, and a test pins it.
+
+`_card_from` applies the ladder; `_cap_residual` re-runs it after the revision
+loop, which is the only point where "still ungrounded" is knowable. Re-applying
+is idempotent, so the stream path can cap twice safely.
+
+### Changed — `test_agent` 11/11 → 28/28
+
+The new checks are all "the code decides, not the model": a clean run caps a High
+proposal at Medium, a fired sanity check and a missing heat anchor each drive it
+to Low, a missing `data` block is read as unknown rather than clean, the ladder is
+idempotent, it never raises a level, the bands do not overlap, and the clamp keeps
+the percentage inside its own level's range.
+
+### Fixed — the no-run card blamed a missing model
+
+`template_card({})`'s default confidence note says "no language model is
+configured". On the no-run path that was the wrong reason: a model may be
+configured and reachable and the card looks identical, because the actual cause is
+that no scenario has been run. `_no_run_card` now says so. The template path for a
+real run is unchanged.
+
 ## 2026-10-14 — close stage 2: finish the `place` deletion, purge the orphan store, report a 429
 
 ### Removed — `place` from the natural-language front door

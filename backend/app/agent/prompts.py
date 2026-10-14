@@ -52,7 +52,9 @@ user can actually do with the sliders, projects and Run button.
 5. `confidence.note` is one sentence naming what the number rests on, so the reader \
 can check it. Medium is the honest default; High needs a delta that is clearly \
 non-zero. These are screening estimates, so never claim High for an absolute \
-figure, only for the direction of a clear change.
+figure, only for the direction of a clear change. Your proposed `level` is a \
+ceiling request, not the final answer: code lowers it when the run's own data \
+quality does not support it, and the percentage is clamped into the level's band.
 
 The user's question is about THIS run. If it is about something the sandbox cannot \
 know (policy, cost, politics, other districts), say that in one sentence and set \
@@ -101,7 +103,10 @@ def render_facts(facts: dict[str, Any]) -> str:
     def block(title: str, values: dict[str, Any]) -> str:
         if not values:
             return ""
-        lines = [f"{key}: {value}" for key, value in values.items() if isinstance(value, (int, float))]
+        # `bool` is a subclass of `int`, so a bool would render as "True" here
+        # and read as a fact. The data block is prose below, not numbers.
+        lines = [f"{key}: {value}" for key, value in values.items()
+                 if isinstance(value, (int, float)) and not isinstance(value, bool)]
         return f"[{title}]\n" + "\n".join(lines) if lines else ""
 
     parts = [
@@ -116,9 +121,42 @@ def render_facts(facts: dict[str, Any]) -> str:
         parts.append(f"[APPLIED INTERVENTIONS]\n" + "\n".join(f"- {a}" for a in applied))
     if skipped:
         parts.append(f"[SKIPPED INTERVENTIONS]\n" + "\n".join(f"- {s}" for s in skipped))
+    quality = _data_quality_note(facts.get("data") or {})
+    if quality:
+        parts.append(quality)
     body = "\n\n".join(p for p in parts if p)
     return f"FACTS\n{body}\n\nUnits: m3 = cubic metres, ha = hectares, \
 heatBlendedMean is a 0-1 index. Only these numbers may appear in your answer."
+
+
+def _data_quality_note(data: dict[str, Any]) -> str:
+    """What the run says about its own inputs, as prose rather than as fields.
+
+    Written as sentences for a reason. If this were rendered as `lstAvailable:
+    False` a model could quote the token, and a reader would have to know what it
+    means. As prose the model can carry the honest caveat into the card in the
+    user's own language -- and the confidence ladder already caps the level, so
+    the caveat and the number agree.
+    """
+    if not data:
+        return ""
+    lines: list[str] = []
+    if data.get("lstAvailable") is False:
+        lines.append("- The observed heat anchor did not load; heat figures come from a fallback field.")
+    else:
+        lines.append("- Heat figures are anchored to an observed Landsat surface-temperature scene.")
+    failed = data.get("sanityChecksFailed") or 0
+    if failed:
+        ids = ", ".join(str(i) for i in (data.get("sanityCheckIds") or []))
+        lines.append(f"- {failed} sanity check(s) fired on this run ({ids}): the numbers are arithmetically "
+                     f"legal but not credible, and confidence is capped accordingly.")
+    else:
+        lines.append("- No sanity check fired.")
+    if data.get("interventionsSkipped"):
+        lines.append("- Some interventions could not be applied, so this scenario is not exactly the one asked for.")
+    lines.append(f"- Terrain from {data.get('terrainSource') or 'an unnamed source'}; "
+                 f"land cover from {data.get('landCoverSource') or 'an unnamed source'}.")
+    return "[DATA QUALITY]\n" + "\n".join(lines)
 
 
 def user_turn(question: str, facts: dict[str, Any]) -> str:

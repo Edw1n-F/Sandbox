@@ -21,12 +21,11 @@ import json
 import time
 from typing import Any, Iterator
 
-from app.agent import grounding, llm
+from app.agent import confidence, grounding, llm
 from app.agent.answer import ANSWER_SCHEMA, AnswerCard, GroundingReport, template_card
 from app.agent.prompts import SYSTEM, json_system, user_turn
 
 __all__ = ["answer", "build_facts", "stream_events"]
-
 # Not a style choice: reasoning models bill their thinking against the same
 # budget as the answer. Measured on nemotron-3-ultra: a 900-token cap was
 # consumed by 382 reasoning tokens, so the reply came back `finish_reason:
@@ -49,10 +48,17 @@ def build_facts(run_result: dict[str, Any] | None) -> dict[str, Any]:
     Nothing is computed here. The chat explains a run that already happened;
     recomputing one inside a Q&A turns a fast reply into a 0.7 s simulation and
     lets the answer drift from the numbers the user is looking at.
+
+    The `data` block is the exception that proves that rule: it is not a
+    measurement the model may quote, it is what the run reports about its own
+    inputs. It is read here so the confidence ladder can cap a claim on evidence
+    that actually exists rather than on how sure the model felt.
     """
     if not run_result:
         return {}
     stats = run_result.get("stats") or {}
+    sources = run_result.get("sources") or {}
+    checks = run_result.get("sanityChecks") or []
     return {
         "inputs": run_result.get("inputs") or {},
         "scenario": stats.get("scenario") or {},
@@ -63,6 +69,17 @@ def build_facts(run_result: dict[str, Any] | None) -> dict[str, Any]:
         "ratios": stats.get("ratios") or {},
         "applied": run_result.get("interventionsApplied") or [],
         "skipped": run_result.get("interventionsSkipped") or [],
+        # Read, never quoted: the confidence ladder's inputs. Keys are booleans
+        # and small counts, so a card that echoed one would still fail grounding
+        # or land inside the 0-12 free range -- neither can smuggle a number in.
+        "data": {
+            "lstAvailable": bool(sources.get("lst")),
+            "sanityChecksFailed": len(checks),
+            "sanityCheckIds": [c.get("id") for c in checks if isinstance(c, dict)],
+            "interventionsSkipped": len(run_result.get("interventionsSkipped") or []),
+            "terrainSource": sources.get("terrain"),
+            "landCoverSource": sources.get("landCover"),
+        },
     }
 
 
@@ -118,7 +135,12 @@ def _draft(
 
 
 def _card_from(draft: dict[str, Any], facts: dict[str, Any], *, revised: bool) -> AnswerCard:
-    """Validate a draft against the model, then check its numbers."""
+    """Validate a draft against the model, then check its numbers, then cap it.
+
+    The cap runs on the *interim* verdict (did the revision happen at all), not
+    on who is applying it; `_cap_residual` re-runs once the revision loop has
+    settled, which is the only point at which "still ungrounded" is knowable.
+    """
     try:
         card = AnswerCard.model_validate(draft)
     except Exception:  # pydantic ValidationError and friends: fall back to a template
@@ -126,6 +148,45 @@ def _card_from(draft: dict[str, Any], facts: dict[str, Any], *, revised: bool) -
     problems = grounding.check_card(card, facts)
     card.grounding = GroundingReport(ok=not problems, ungrounded=problems, revised=revised)
     card.source = "model"
+    card.confidence = confidence.apply_ladder(
+        card.confidence, confidence.cap_of(facts.get("data") or {})
+    )
+    return card
+
+
+def _cap_residual(card: AnswerCard, facts: dict[str, Any]) -> AnswerCard:
+    """Re-cap once grounding is final: a surviving ungrounded number is a Low.
+
+    Called after the revision loop, because `_card_from` cannot know whether a
+    failed check will be repaired on the retry. Re-applying is idempotent -- the
+    ladder reads the card's current level as the proposal -- so a card that was
+    already capped stays where it is.
+    """
+    if card.source != "model":
+        return card
+    residual = bool(card.grounding and not card.grounding.ok)
+    card.confidence = confidence.apply_ladder(
+        card.confidence, confidence.cap_of(facts.get("data") or {}), ungrounded=residual
+    )
+    return card
+
+
+def _no_run_card() -> AnswerCard:
+    """The card for "ask me before anything has run".
+
+    `template_card({})` is the right shape but the wrong note: it explains itself
+    as "no language model is configured", which is not why *this* card was
+    assembled. A model may be configured and reachable; there is simply nothing
+    to explain yet. The distinction matters because STATUS.md's honesty claim is
+    that a card never misattributes why it looks the way it does.
+    """
+    card = template_card({})
+    card.kind = "general"
+    card.sentence = ("Run the scenario first: adjust the sliders, pick a project, and press "
+                     "Run. Then I can answer questions about it.")
+    card.confidence = card.confidence.model_copy(update={
+        "note": "No run in scope yet: there is nothing to explain until a scenario has been run.",
+    })
     return card
 
 
@@ -133,10 +194,7 @@ def answer(question: str, facts: dict[str, Any],
            history: list[dict[str, str]] | None = None) -> AnswerCard:
     """One answer, no streaming. Used by the plain POST endpoint and by tests."""
     if not facts:
-        card = template_card({})
-        card.sentence = "Run the scenario first: adjust the sliders, pick a project, and press Run. Then I can answer questions about it."
-        card.kind = "general"
-        return card
+        return _no_run_card()
     try:
         draft = _draft(facts, question, history)
     except llm.ProviderUnavailable:
@@ -157,7 +215,7 @@ def answer(question: str, facts: dict[str, Any],
             second = None
         if second:
             card = _card_from(second, facts, revised=True)
-    return card
+    return _cap_residual(card, facts)
 
 
 def stream_events(question: str, facts: dict[str, Any],
@@ -183,9 +241,7 @@ def stream_events(question: str, facts: dict[str, Any],
     yield from step(0, *STEPS[0], lambda: f"{len(facts.get('scenario', {}))} scenario measures")
 
     if not facts:
-        card = template_card({})
-        card.sentence = "Run the scenario first, then ask me about it."
-        card.kind = "general"
+        card = _no_run_card()
         yield {"event": "answer", "answer": card.model_dump()}
         yield {"event": "done", "status": "done", "ms": int((time.time() - started) * 1000)}
         return
@@ -279,6 +335,7 @@ def stream_events(question: str, facts: dict[str, Any],
         card = template_card(facts)
         ground_result = "template card — no check needed"
     else:
+        card = _cap_residual(card, facts)
         ground_result = ("all numbers trace to the run" if (card.grounding and card.grounding.ok)
                          else f"{len(card.grounding.ungrounded) if card.grounding else 0} ungrounded")
     yield {"event": "step_finished", "index": 2, "title": ground_title, "desc": ground_desc,
