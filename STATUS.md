@@ -192,7 +192,7 @@ copied from the code's output.
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
 | backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_run` | 32/32 | `python tests/test_run.py` — the live run loop |
+| backend `test_run` | 34/34 | `python tests/test_run.py` — the live run loop |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
 | backend `test_contract` | 23/23 | `python tests/test_contract.py` |
@@ -200,13 +200,14 @@ copied from the code's output.
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
 | backend `test_agent` | 28/28 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
-| backend `test_llm_provider` | 27/27 | `python tests/test_llm_provider.py` — the chat end to end through a scripted `FakeProvider`, no key |
+| backend `test_llm_provider` | 30/30 | `python tests/test_llm_provider.py` — the chat and the run card through a scripted `FakeProvider`, no key |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
-| frontend unit (`vitest`) | 53/53 | `npm test` — includes `streamChat` against real streams and the provenance receipt |
+| frontend unit (`vitest`) | 71/71 | `npm test` — includes `streamChat` against real streams, the provenance receipt, the trackpad wheel maths and the navigation cheat-sheet |
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
+| frontend navigation (`verify-nav.mjs`) | 29/29 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres, tilting past the pitch limit leaves the heading alone, rotating at the limit leaves the pitch alone, zooming leaves both alone, two quick zoom presses add up, zooming after a pan keeps the point under the view centre where it was, a vertical right-drag tilts without rotating and a horizontal one rotates without tilting, the mouse wheel zooms while a trackpad-drag stream tilts |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.
@@ -305,8 +306,12 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
    real providers send. What it cannot cover is a real provider's *response*.
    That is still checked by hand, and the free tier has been returning 429s.
 7. **A rate-limited provider costs a round trip.** The free tier is throttled and
-   slow. A 429 is now caught and reported, but only after the primary fails. A
-   paid model id — one `.env` line — removes it.
+   slow. A 429 is caught and reported, and `LLM_FALLBACK_MODELS` now walks three
+   additionally-verified free ids (`google/gemma-4-26b-a4b-it:free`,
+   `cohere/north-mini-code:free`,
+   `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` — each called and
+   confirmed to return prose on 14 Oct). A paid model id — one `.env` line —
+   removes the problem instead of routing around it.
 8. **Storage is JSON files, not PostGIS.** The seam is `app/db.py` and
    `scene_service.py` only, so this is a swap rather than a rewrite.
 9. **Two view modules have no unit coverage** — `view/onlineProps.ts` and
@@ -353,6 +358,46 @@ evidence about the checks that ran, not about the checks that were written.**
 
 These were open items on 13 Oct and are closed. They are kept in one short block
 rather than deleted, because each was a decision someone will otherwise re-litigate.
+
+**Rotate, tilt and zoom are three independent axes, and the gestures now match
+what each device is expected to do.** Two button-press complaints — "zoom doesn't
+zoom based on where the user is, but relative to default", and "tilt past a
+certain limit, it just starts rotating instead" — traced to one design error.
+`orbitBy`/`zoomBy` read `camera.heading` and `camera.pitch` back off the camera
+and rebuilt the *whole* pose from them, so heading and pitch were coupled on
+every move, and near the pitch limit that heading is ill-conditioned (`getHeading`
+is the angle of `cross(direction, up)`, whose length vanishes towards nadir).
+Each axis is now a delta applied to the live camera inside a frame centred on the
+orbit pivot: heading turns about the local vertical, pitch tilts about the
+camera's own horizontal `right`, and a zoom dollies along the line to the point
+under the view centre. None reads another's value. Measured: tilting past −88
+leaves the heading unchanged to 0.00°, rotating at the limit leaves pitch
+unchanged to 0.00°, a zoom moves neither, and the point under the view centre
+moves **0.0 px** through a zoom after a pan (it moved 464 m under the old
+behaviour).
+
+**The gesture map**: mouse wheel zooms, right-drag tilts (vertical) and rotates
+(horizontal); trackpad pinch zooms, two-finger drag tilts and rotates; keyboard
+`+`/`−` zoom and the arrow keys tilt and rotate. The wheel and the trackpad drag
+are the *same DOM event*, so `classifyWheel` separates them on shape — a mouse
+notch is one large `deltaY` with no horizontal component and over 120 ms since
+the last one; a trackpad streams many small fractional deltas. This is why the
+wheel used to tilt: the two could not be told apart, so the gesture that had to
+be chosen for the trackpad was applied to the mouse as well. Touch-screen `PINCH`
+stays bound to zoom; it arrives as touch events, not wheel events, so it does not
+compete.
+
+**The "second quick press does nothing" freeze was the frame rate, not a Cesium
+flight.** It was logged as unexplained during the earlier attempts: about 1 run in
+10–20, a second quick zoom or tilt press left the camera at the first step with a
+flight still marked active. The buttons glided for 0.3 s on
+`requestAnimationFrame`, and in the headless software renderer the browser suites
+run in, rAF fires roughly once every two seconds — so the "flight" got a single
+tick and a press arriving before the next frame got none. Every camera move is now
+applied outright, so it cannot be starved of frames, and two presses add up
+because each applies its whole delta to the live camera. `verify-nav` asserts the
+two-press case instead of skipping it: 1437 m → 447 m on two presses, against 791
+for one.
 
 **The `place` op is dormant, not deleted.** It is gone from the parser, the tool
 schema and `_massing_feature`, so no instruction can reach it; a model that emits

@@ -799,7 +799,7 @@ T1/
     │   │                         with the 3D tactical renderer
     │   ├── view/
     │   │   ├── SandboxViewer.tsx owns the Cesium Viewer
-    │   │   ├── cameraRig.ts      bbox framing, orbit, zoom, gesture bindings
+    │   │   ├── cameraRig.ts      bbox framing, one-axis rotate/tilt/zoom, gesture bindings
     │   │   ├── terrainLoader.ts  imagery + terrain binding, with honest fallback
     │   │   ├── demProvider.ts    terrain-RGB → CustomHeightmapTerrainProvider
     │   │   ├── tilesetLayer.ts   the real Open3Dhk 3D Tiles layer

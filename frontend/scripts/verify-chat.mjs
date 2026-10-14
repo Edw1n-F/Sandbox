@@ -107,8 +107,13 @@ await page.getByText('The buffer still overflows').first().waitFor({ timeout: 15
 check('the shimmer is gone once the answer lands',
   (await page.locator('.hud-shimmer').count()) === 0)
 
-const receipt = page.locator('details').first()
-check('a run card carries a provenance receipt', (await page.locator('details').count()) === 1)
+// A run now posts its own card, and that card carries a receipt -- so counting
+// `details` elements is no longer a way to tell "run answer" from "general
+// answer". The count simply has to rise when a run card appears.
+const receiptsAfterRun = await page.locator('details').count()
+check('a run card carries a provenance receipt',
+  receiptsAfterRun >= 1, `found ${receiptsAfterRun}`)
+const receipt = page.locator('details').last()
 check('the receipt is collapsed by default', (await receipt.getAttribute('open')) === null)
 check('the collapsed receipt names the run and the rainfall',
   /BASED ON · RUN [0-9A-F]{8} · \d+ MM/i.test(await receipt.locator('summary').innerText()),
@@ -134,8 +139,12 @@ queue.push({
 })
 await ask('What will this cost?')
 await page.getByText('Out of scope').first().waitFor({ timeout: 15000 })
-check('a general answer shows no receipt (it did not use the run)',
-  (await page.locator('details').count()) === 1)
+// The run card's receipt is still on screen, so the assertion is that the
+// general answer added none of its own -- the count is unchanged from before
+// this question was asked.
+check('a general answer adds no receipt of its own (it did not use the run)',
+  (await page.locator('details').count()) === receiptsAfterRun,
+  `${await page.locator('details').count()} vs ${receiptsAfterRun} before`)
 
 // ---- 4. a stream cut before done is reported, and the panel recovers -------
 queue.push({ body: sse(steps) }) // no answer, no done

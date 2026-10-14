@@ -43,6 +43,21 @@ from app.config import settings  # noqa: E402
 from app.services import run_service  # noqa: E402
 from app.services.sandbox_model import load_grids  # noqa: E402
 
+# This suite must not depend on a language model. It used to be immune by
+# accident: the free tier was always rate-limited, so the code path was always
+# the template. Once LLM_FALLBACK_MODELS started working, a real model wrote the
+# explanation and three checks began asserting on free-form prose -- which is
+# neither deterministic nor this suite's subject. Pinning the provider to
+# "unavailable" makes the tested path explicit: the run loop's own arithmetic and
+# the code-assembled card. The model path has its own coverage in
+# test_llm_provider.py, where the provider is scripted rather than live.
+#
+# Set before `settings` is read, and restored by nothing on purpose -- the suite
+# is standalone and exits.
+settings.llm_base_url = ""
+settings.llm_model = ""
+settings.anthropic_api_key = ""
+
 PASSED = 0
 FAILED = 0
 
@@ -227,12 +242,31 @@ def main() -> int:
     # ---- 7. honesty and refusal --------------------------------------------
     check("the explanation names the rainfall the run used",
           f"{ARTEFACT_MM:g} mm" in base["explanation"], base["explanation"][:70] + "…")
-    check("and says it is a screening flood extent",
-          "flood" in base["explanation"].lower())
     check("the explanation source is reported, never implied",
           base["explanationSource"] in ("anthropic", "openai-compatible",
                                         "template"),
           base["explanationSource"])
+    # The screening caveat is a property of the CODE path, not of whatever prose
+    # a model happens to write. Asserting the word "flood" in `explanation` was
+    # only reliable while the model was unreachable: once the fallback chain
+    # worked, a perfectly good model paragraph failed this check for not using
+    # the word. So the card is checked when there is one, and the prose only
+    # when code wrote it.
+    if base.get("explanationCard"):
+        card = base["explanationCard"]
+        check("the code-written explanation is a card, not loose prose",
+              card.get("kind") == "run" and card.get("source") == "template")
+        check("and the card states the screening status and the real cause",
+              "screening" in " ".join(card.get("caveats") or []).lower(),
+              (card.get("caveats") or [""])[0][:80])
+        check("and the card carries the run's own numbers as stats",
+              len(card.get("stats") or []) >= 3,
+              str([s.get("l") for s in (card.get("stats") or [])]))
+    else:
+        check("a model-written explanation says it is a screening flood extent",
+              "flood" in base["explanation"].lower()
+              or "screening" in base["explanation"].lower(),
+              base["explanation"][:90])
 
     try:
         run_service.run_scenario(SCENE_ID, 5000.0, 30.0, None, [])

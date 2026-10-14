@@ -14,14 +14,20 @@
  * So the bbox is framed as a bounding sphere instead, with a chosen heading and a
  * pitch shallow enough to show facades and steep enough to keep the plan readable.
  *
- * ## One placement routine, on purpose
+ * ## Framing and navigation are different problems
  *
- * `placeCamera` is shared by the bbox framing, the scroll pan and the orbit buttons.
- * The pan was out by a factor of ~57 when it computed its own world-space offset, and
- * four different ways of translating the camera directly each landed somewhere other
- * than the requested point. Displacing the ground *target* and re-placing the camera
- * relative to it reuses geometry that the framing check already pins, rather than
- * deriving a second, subtly different version of it.
+ * `frameExtent` (the opening view, reset, top-down) *places* the camera: it computes one
+ * absolute destination from a heading/pitch/range triple and flies there, deriving its
+ * orientation from the destination it just computed.
+ *
+ * `rotateBy` / `tiltBy` / `zoomBy` place nothing. Each *displaces* the live camera along
+ * exactly one axis, and reads no other axis to do it. That separation is the whole point:
+ * an earlier version rebuilt the pose from `camera.heading` and `camera.pitch` together on
+ * every move, which coupled them. Near the pitch limit the heading is ill-conditioned --
+ * `getHeading` is the angle of `cross(direction, up)`, whose length vanishes as the view
+ * approaches nadir -- so tilting past the end spun the view instead of stopping. Deriving
+ * each axis as a delta on the live camera, and never re-deriving the other two from
+ * read-back angles, is what keeps rotate, tilt and zoom from bleeding into each other.
  */
 import {
   CameraEventType,
@@ -155,69 +161,6 @@ export function fitDistance(viewer: Viewer, radius: number): number {
 }
 
 /**
- * Put the camera at `range` from `target`, looking at it.
- *
- * Offset from the target back to the camera, in local east-north-up. The view
- * direction for a heading/pitch pair is (sin h, cos h, sin p) in ENU: heading is a
- * compass bearing, so 0 is north and sin/cos are *not* interchangeable. Getting that
- * backwards does not look broken -- it is still a consistent oblique view -- it just
- * quietly views the site from the opposite side to the one the heading names, which is
- * the sort of thing nobody notices until the constant and the picture disagree.
- */
-function placeCamera(
-  viewer: Viewer,
-  target: Cartesian3,
-  heading: number,
-  pitch: number,
-  range: number,
-  duration: number,
-  insetLeft = 0,
-): void {
-  const frame = Transforms.eastNorthUpToFixedFrame(target, Ellipsoid.WGS84)
-  const back = new Cartesian3(
-    -range * Math.sin(heading) * Math.cos(pitch),
-    -range * Math.cos(heading) * Math.cos(pitch),
-    -range * Math.sin(pitch),
-  )
-  const destination = Matrix4.multiplyByPoint(frame, back, new Cartesian3())
-
-  // Derive direction and up from the destination that was just computed, rather than
-  // handing over the camera's current orientation.
-  //
-  // This is the part that matters, and it was found the hard way. Passing the
-  // camera's *existing* direction/up alongside a displaced destination is
-  // self-contradictory -- the orientation no longer describes the geometry -- and
-  // Cesium resolves the contradiction by re-deriving the position, which silently
-  // threw away almost the whole displacement. Measured: a 2 km pan arrived as 39 m,
-  // the same wrong answer from five different camera APIs, because all five were being
-  // handed the same inconsistent pair. `frameExtent` always derived its orientation
-  // from its own destination and always landed exactly; this is that, hoisted.
-  const direction = Cartesian3.normalize(
-    Cartesian3.subtract(target, destination, new Cartesian3()),
-    new Cartesian3(),
-  )
-  const up = Matrix4.multiplyByPointAsVector(frame, Cartesian3.UNIT_Z, new Cartesian3())
-
-  // Keep the pivot centred in the strip of canvas the left panel leaves free. Pure
-  // translation, same as `frameExtent`, so orientation and the pivot distance are untouched.
-  const inset = Math.min(insetLeft, (viewer.scene.canvas?.width ?? 0) * 0.4)
-  if (inset > 0) {
-    const right = Cartesian3.normalize(
-      Cartesian3.cross(direction, up, new Cartesian3()),
-      new Cartesian3(),
-    )
-    Cartesian3.multiplyByScalar(right, -(inset / 2) * metresPerPixel(viewer, range), right)
-    Cartesian3.add(destination, right, destination)
-  }
-
-  if (duration <= 0) {
-    viewer.camera.setView({ destination, orientation: { direction, up } })
-  } else {
-    viewer.camera.flyTo({ destination, orientation: { direction, up }, duration })
-  }
-}
-
-/**
  * Frame `extent` from the given heading and pitch.
  *
  * Returns the destination it flew to, so a caller can assert on it -- which is how the
@@ -279,6 +222,7 @@ export function frameExtent(
   } else {
     viewer.camera.flyTo({ destination, orientation: { direction, up }, duration })
   }
+  viewer.camera.lookAtTransform(Matrix4.IDENTITY)
   return destination
 }
 
@@ -293,149 +237,484 @@ export function tuneNavigation(viewer: Viewer): void {
   // Stops the camera dropping under the terrain on a drag, which on a 139 m relief
   // surface is a very reachable accident.
   controller.enableCollisionDetection = true
-  controller.enableTilt = true
+  // `enableTilt` is left alone here and turned off in `bindOrbitGestures`, which is
+  // where Cesium's own tilt is actually replaced. Setting it true here and false there
+  // would be a contradiction read in order.
 }
 
 /**
- * Rebind the mouse/trackpad so the gestures people reach for do what they expect.
+ * Rebind the mouse/trackpad so the gestures people reach for do what they expect, and
+ * so each one moves exactly one axis.
  *
- * | gesture       | stock behaviour | after this |
- * |---------------|-----------------|------------|
- * | left-drag     | pan + spin      | pan + spin (move the slab) |
- * | right-drag    | zoom            | **tilt** |
- * | middle-drag   | orbit           | tilt |
- * | wheel / 2-finger trackpad drag | zoom | **tilt** |
- * | pinch / ctrl+scroll | zoom    | zoom |
+ * | gesture          | stock behaviour | after this |
+ * |------------------|-----------------|------------|
+ * | left-drag        | pan + spin      | pan + spin (move the slab) |
+ * | right-drag       | zoom            | **tilt (vertical) + rotate (horizontal)** |
+ * | middle-drag      | tilt            | tilt (vertical) + rotate (horizontal) |
+ * | mouse wheel      | zoom            | zoom |
+ * | trackpad 2-finger | zoom           | **tilt (vertical) + rotate (horizontal)** |
+ * | ctrl+scroll      | zoom            | zoom |
+ * | touch pinch      | zoom            | zoom |
  *
- * Tilt is the gesture a trackpad user reaches for first (two-finger drag) and
- * the one a mouse user tries second (right-drag, since left is already "move").
- * Cesium's stock right-drag zooms, which duplicated the wheel and the buttons;
- * it now tilts instead. Plain wheel (which on a trackpad *is* the two-finger
- * drag) is mapped to tilt too, so the same gesture works with or without a
- * modifier. Pinch and ctrl+scroll stay zoom.
+ * ## Telling a mouse wheel from a trackpad two-finger drag
  *
- * ## Why right-drag is taken off the rotate list
+ * They are the same DOM event, which is the whole difficulty. A mouse wheel is a
+ * *discrete notch*: no horizontal component, and a large `deltaY` (100 px in Chrome,
+ * 120 in Firefox, or `deltaMode` 1 with a handful of lines). A trackpad two-finger drag
+ * is a *stream*: many small fractional deltas, roughly 20–60 a second, and never an
+ * exact zero on the axis the user did not mean. `classifyWheel` separates them on
+ * those three signals, and this handler routes a notch to zoom and a stream to
+ * tilt/rotate.
  *
- * In Cesium 3D there is no separate translate handler: `rotateEventTypes` is
- * *the drag gesture*, and panning is what `spin3D` does as part of rotating. So
- * left-drag stays on that list (it is the "move the slab" gesture the user
- * confirmed works); right-drag is removed so it can own tilt outright instead
- * of tilting *and* orbiting at once.
+ * ## Why the drags are handled here and not by Cesium
+ *
+ * Cesium's `tilt3D` ends in `rotate3D`, which is one drag producing *both* a heading
+ * change and a pitch change from the same mouse delta. That is actually what this
+ * gesture wants -- but it is entangled with Cesium's own pitch clamping and camera
+ * frame, and the heading it derives is ill-conditioned near nadir. Handling the drag
+ * here keeps each axis a separate `tiltBy`/`rotateBy`, so the axes stay independent
+ * and the pitch limit holds. Measured on a stock right-drag: 120 px sideways turned
+ * the heading 307 deg, and 120 px down tilted 42 deg.
  */
 export function bindOrbitGestures(viewer: Viewer): void {
   const controller = viewer.scene.screenSpaceCameraController
   controller.rotateEventTypes = [CameraEventType.LEFT_DRAG]
-  // RIGHT_DRAG and MIDDLE_DRAG both tilt. PINCH is left on zoom (a two-finger
-  // pinch is a zoom gesture, not a drag), and CTRL+LEFT_DRAG is dropped so a
-  // stray modifier does not silently change what the drag does.
-  controller.tiltEventTypes = [
-    CameraEventType.RIGHT_DRAG,
-    CameraEventType.MIDDLE_DRAG,
-  ]
+  // Nothing tilts through Cesium: the drag is ours, so each axis stays separate.
+  // `undefined` rather than `[]` -- `reactToInput` treats both as "no events", but
+  // undefined is the documented "disabled" value.
+  controller.tiltEventTypes = undefined
   controller.zoomEventTypes = [
     CameraEventType.PINCH,
-    { eventType: CameraEventType.WHEEL, modifier: KeyboardEventModifier.CTRL },
+    {
+      eventType: CameraEventType.WHEEL,
+      modifier: KeyboardEventModifier.CTRL,
+    },
   ]
-  // Faster zoom for what remains. Cesium's default is 5, and the district is 3 km
-  // across, so at the stock rate a pinch took several flicks to change scale usefully.
+  // PINCH stays on zoom. It is the touch-screen two-finger pinch and arrives as touch
+  // events, not as the `wheel` events the handler below consumes, so the two do not
+  // compete: a trackpad swipe tilts and rotates, a touchscreen pinch zooms.
   controller.zoomFactor = 12
+  // Tilt and rotate come from our own one-axis handler, so Cesium's own tilt must not
+  // also fire on the drags we are using.
+  controller.enableTilt = false
 
-  // Two-finger trackpad drag → tilt (vertical) + rotate (horizontal). A
-  // trackpad two-finger drag arrives as a `wheel` event carrying both deltaX
-  // and deltaY, so a single diagonal drag can tilt and rotate at once: up/down
-  // tilts, left/right orbits. A mouse scroll wheel tilts too (deltaY only).
-  // ctrl+wheel is left for Cesium's zoom binding above (the early return lets
-  // that through). `orbitBy(..., 0)` is an instant `setView`, not a `flyTo`,
-  // so a stream of wheel events does not queue animations. `Math.sign` gives a
-  // fixed step per notch regardless of deltaY magnitude, which varies by device.
-  viewer.scene.canvas?.addEventListener(
+  const canvas = viewer.scene.canvas
+  if (!canvas) return
+
+  // Wheel: a discrete notch zooms, a stream tilts and rotates. ctrl+wheel is left for
+  // Cesium's binding above (the early return lets it through), because a browser sends
+  // ctrl+wheel for its own pinch-zoom and that convention is worth keeping. Every move
+  // is applied outright, so a stream of events cannot queue anything up.
+  let lastWheelAt = 0
+  canvas.addEventListener(
     'wheel',
     (event: WheelEvent) => {
       if (event.ctrlKey) return
       event.preventDefault()
-      const tilt = -Math.sign(event.deltaY) * 5
-      const rot = Math.sign(event.deltaX) * 12
-      if (tilt !== 0 || rot !== 0) orbitBy(viewer, rot, tilt, 0)
+      // A timestamp of 0, or one that does not advance, means the gap is unknown;
+      // treat that as "not a stream" so a single synthetic event still zooms.
+      const gap =
+        lastWheelAt > 0 && event.timeStamp > lastWheelAt
+          ? event.timeStamp - lastWheelAt
+          : Infinity
+      lastWheelAt = event.timeStamp
+      if (classifyWheel(event.deltaX, event.deltaY, event.deltaMode, gap) === 'zoom') {
+        zoomBy(viewer, wheelToZoom(event.deltaY, event.deltaMode))
+        return
+      }
+      const { tiltDeg, rotateDeg } = wheelToOrbit(event.deltaX, event.deltaY, event.deltaMode)
+      if (tiltDeg !== 0) tiltBy(viewer, tiltDeg)
+      if (rotateDeg !== 0) rotateBy(viewer, rotateDeg)
     },
     { passive: false },
   )
+
+  // Right-drag and middle-drag tilt and rotate: horizontal travel turns the view,
+  // vertical travel tilts it, and the two are separate calls so they cannot disturb
+  // one another. A `pointerdown` with button 1 (middle) or 2 (right) starts it;
+  // `pointerup`/`pointercancel`/`lostpointercapture` end it, so a drag that leaves the
+  // canvas cannot leave the binding stuck on.
+  let dragButton: number | null = null
+  let lastX = 0
+  let lastY = 0
+  const endDrag = () => {
+    dragButton = null
+  }
+  canvas.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 1 && event.button !== 2) return
+    dragButton = event.button
+    lastX = event.clientX
+    lastY = event.clientY
+    event.preventDefault()
+    canvas.setPointerCapture?.(event.pointerId)
+  })
+  canvas.addEventListener('pointermove', (event: PointerEvent) => {
+    if (dragButton === null) return
+    const dx = event.clientX - lastX
+    const dy = event.clientY - lastY
+    lastX = event.clientX
+    lastY = event.clientY
+    // Dragging right turns the view the way the arrow keys do; dragging down looks
+    // further down, which is a *lower* pitch. Both match the direction Cesium's own
+    // drags had, measured: 120 px down moved pitch -33 -> -75.
+    if (dx !== 0) rotateBy(viewer, dx * DRAG_ROTATE_DEG_PER_PX)
+    if (dy !== 0) tiltBy(viewer, -dy * DRAG_TILT_DEG_PER_PX)
+  })
+  canvas.addEventListener('pointerup', endDrag)
+  canvas.addEventListener('pointercancel', endDrag)
+  canvas.addEventListener('lostpointercapture', endDrag)
+  // A right-drag otherwise opens the browser context menu on release, which on this
+  // canvas means the drag ends with a menu over the map.
+  canvas.addEventListener('contextmenu', (event: Event) => event.preventDefault())
 }
 
-/** The point the camera is looking at, as close to the frame centre as we can get. */
-function viewCentre(viewer: Viewer): { point: Cartesian3; range: number } {
-  const camera = viewer.camera
-  if (sandboxPivot) {
-    const distance = Cartesian3.distance(camera.positionWC, sandboxPivot)
-    return { point: sandboxPivot, range: Math.max(distance, 1) }
+/** Degrees per CSS pixel of a tilt/rotate drag. Slower than the wheel, because a drag
+ *  reports every pixel of travel rather than one delta per notch. */
+const DRAG_TILT_DEG_PER_PX = 0.35
+const DRAG_ROTATE_DEG_PER_PX = 0.3
+
+/**
+ * Degrees of camera motion per CSS pixel of wheel delta or drag.
+ *
+ * A mouse wheel sends one event per notch (~100 px), so `TILT_DEG_PER_PX` 0.05 makes one
+ * notch about the 5 deg the old fixed-step handler used. A trackpad streams hundreds of
+ * tiny events, and they add up to something proportionate to the distance the fingers
+ * actually travelled. `ROTATE_DEG_PER_PX` is higher because a horizontal swipe covers
+ * fewer pixels for the same felt effort.
+ */
+const TILT_DEG_PER_PX = 0.05
+const ROTATE_DEG_PER_PX = 0.12
+/** The most one *wheel event* may move the camera. A fast flick can report several
+ *  hundred px in a single event; unbounded, that is a lurch. A drag is not capped --
+ *  it is a continuous gesture the user is watching, so the cap would only make a fast
+ *  drag feel unresponsive. */
+const MAX_STEP_DEG = 8
+/** A cross-axis delta this small is the fingers drifting, not a decision.
+ *  Without it a purely vertical swipe also spins the view. */
+const AXIS_DEAD_ZONE_PX = 2
+/** `WheelEvent.deltaMode`: 0 pixels, 1 lines, 2 pages. */
+const LINE_PX = 16
+const PAGE_PX = 400
+
+/**
+ * How a wheel event is told apart from a trackpad two-finger drag.
+ *
+ * A mouse wheel is one discrete notch: a big `deltaY` (100 px in Chrome, 120 in
+ * Firefox), no horizontal component at all, and the next notch at least
+ * `MOUSE_NOTCH_GAP_MS` away. A trackpad streams events far faster than that, reports
+ * fractional deltas, and almost always leaves a stray non-zero `deltaX`.
+ *
+ * The gap is the load-bearing signal. A mouse reports an exact `deltaX === 0`, which
+ * would be conclusive on its own -- but a trackpad can too, on a perfectly vertical
+ * swipe, and Chrome's own trackpad handling reports `deltaX` exactly 0 in some
+ * configurations. So the gap carries the decision and the other two only corroborate:
+ * a fast, small-delta stream is a trackpad whatever its `deltaX` says.
+ */
+const MOUSE_NOTCH_GAP_MS = 120
+const TRACKPAD_DELTA_MAX_PX = 30
+
+export type WheelIntent = 'zoom' | 'orbit'
+
+/**
+ * Decide whether one wheel event means "zoom" (mouse wheel) or "tilt/rotate"
+ * (trackpad two-finger drag).
+ *
+ * Pure and exported so the three signals can be tested rather than felt. The
+ * alternative -- giving the trackpad its own gesture and leaving the wheel unbound --
+ * was the previous state and it was wrong: a mouse wheel then tilted, which is not
+ * what a mouse wheel does anywhere else.
+ */
+export function classifyWheel(
+  deltaX: number,
+  deltaY: number,
+  deltaMode = 0,
+  gapMs = Infinity,
+): WheelIntent {
+  const scale = deltaMode === 1 ? LINE_PX : deltaMode === 2 ? PAGE_PX : 1
+  const dy = Math.abs(deltaY * scale)
+  const dx = Math.abs(deltaX * scale)
+  // A big vertical delta, arriving on its own, is a notch. Everything else is a stream.
+  const looksLikeNotch = dy >= TRACKPAD_DELTA_MAX_PX && dx === 0
+  return looksLikeNotch && gapMs >= MOUSE_NOTCH_GAP_MS ? 'zoom' : 'orbit'
+}
+
+/** Zoom factor per mouse-wheel notch. A notch is ~100 px, so this is a fixed step per
+ *  notch rather than a distance-proportional one -- the whole point of a notched wheel
+ *  is that every notch is the same size. */
+const ZOOM_PER_NOTCH = 1 / 0.8
+
+/**
+ * Turn a mouse-wheel notch into a zoom factor, `<1` for zoom in.
+ *
+ * Discrete by design: the sign of `deltaY` picks the direction and the magnitude is
+ * ignored, because a notched wheel's magnitude is an artefact of the browser (100 vs
+ * 120) rather than something the user did. Scaling by it would make the same gesture
+ * zoom further in Firefox than in Chrome.
+ */
+export function wheelToZoom(deltaY: number, deltaMode = 0): number {
+  const scale = deltaMode === 1 ? LINE_PX : deltaMode === 2 ? PAGE_PX : 1
+  const dy = deltaY * scale
+  if (dy === 0) return 1
+  return dy > 0 ? ZOOM_PER_NOTCH : 1 / ZOOM_PER_NOTCH
+}
+
+/**
+ * Turn one wheel event into a camera move.
+ *
+ * Exported and pure so the sensitivity can be tested rather than felt: the old
+ * handler used `Math.sign` to give a fixed step per event, which is right for a
+ * mouse (one notch, one event) and badly wrong for a trackpad, which streams
+ * ~60 events a second plus a momentum tail. One gentle swipe became dozens of
+ * 5 deg steps and hit the pitch clamp at once. Scaling by the real delta makes
+ * the motion follow the fingers instead.
+ *
+ * The dominant axis wins: if one axis is more than twice the other, the weaker
+ * one is zeroed. Trackpads never report an exact zero on the axis you did not
+ * mean, so without this a vertical swipe also rotates.
+ */
+export function wheelToOrbit(
+  deltaX: number,
+  deltaY: number,
+  deltaMode = 0,
+): { tiltDeg: number; rotateDeg: number } {
+  const scale = deltaMode === 1 ? LINE_PX : deltaMode === 2 ? PAGE_PX : 1
+  let dx = deltaX * scale
+  let dy = deltaY * scale
+  if (Math.abs(dx) < AXIS_DEAD_ZONE_PX) dx = 0
+  if (Math.abs(dy) < AXIS_DEAD_ZONE_PX) dy = 0
+  if (Math.abs(dx) > 2 * Math.abs(dy)) dy = 0
+  else if (Math.abs(dy) > 2 * Math.abs(dx)) dx = 0
+  const clamp = (v: number) => Math.max(-MAX_STEP_DEG, Math.min(MAX_STEP_DEG, v))
+  return {
+    // Scrolling "down" (positive deltaY) tilts toward the horizon, matching the
+    // sign the previous handler used.
+    tiltDeg: clamp(-dy * TILT_DEG_PER_PX) || 0,
+    rotateDeg: clamp(dx * ROTATE_DEG_PER_PX) || 0,
   }
-  const canvas = viewer.scene.canvas
-  const middle = new Cartesian2(
-    Math.max(1, canvas?.clientWidth ?? 1) / 2,
-    Math.max(1, canvas?.clientHeight ?? 1) / 2,
-  )
-  // The middle of the frame, which is the thing being orbited around. Picking the
-  // ellipsoid rather than the terrain is deliberate: it is always defined, so the orbit
-  // cannot fail halfway, and the error is bounded by the relief -- 141 m here.
-  const picked = camera.pickEllipsoid(middle, Ellipsoid.WGS84)
-  // Looking at the horizon there is nothing under the crosshair, so orbit about a point
-  // along the view ray instead. Orbiting still works; there is simply no ground to
-  // hold still.
-  const point =
-    picked ??
-    Cartesian3.add(
+}
+
+/**
+ * Apply a camera move. `duration` parameters were removed from the callers: every move
+ * is applied at once.
+ *
+ * The 0.3 s glide the buttons used to have was cosmetic, and it was the thing that broke.
+ * It advanced on `requestAnimationFrame`, and in the headless software renderer this
+ * project's browser suites run in, rAF fires roughly once every two seconds -- so a
+ * "0.3 s" flight got a single tick, and a press arriving before the next frame got none
+ * at all and appeared to do nothing. That is the freeze recorded as STATUS item 15,
+ * where a second quick press on a zoom or tilt button left the camera at the first step;
+ * the earlier attempts blamed `camera.flyTo`'s flight state, but the frame rate is the
+ * common cause. A move that is applied outright cannot be starved of frames, and two
+ * presses add up exactly because each applies its whole delta to the live camera.
+ *
+ * The keyboard and wheel paths have always been instant for the same reason.
+ */
+function applyImmediately(step: () => void, viewer: Viewer): void {
+  step()
+  viewer.scene.requestRender()
+}
+
+/**
+ * A frame centred on the point the camera orbits, with +Z along the local vertical.
+ *
+ * Rotating inside this frame and restoring `Matrix4.IDENTITY` afterwards is what makes
+ * rotate and tilt single-axis. `Camera.rotate(axis, a)` rotates the camera's position,
+ * direction and up together about `axis`; pick the local vertical and only the heading
+ * can move, pick the (horizontal) right vector and only the pitch can move. Neither
+ * reads the other, so neither can disturb the other -- including at the pitch limits,
+ * where re-deriving a heading from `cross(direction, up)` is numerically hopeless.
+ */
+function pivotFrame(pivot: Cartesian3): Matrix4 {
+  return Transforms.eastNorthUpToFixedFrame(pivot, Ellipsoid.WGS84)
+}
+
+/** Apply `fn` with the camera's frame temporarily set to the pivot's ENU frame. */
+function inPivotFrame(viewer: Viewer, pivot: Cartesian3, fn: () => void): void {
+  const camera = viewer.camera
+  camera.lookAtTransform(pivotFrame(pivot))
+  try {
+    fn()
+  } finally {
+    // In a `finally` on purpose. Leaving the camera in a pivot frame would make every
+    // later `setView`/`flyTo` destination be read as pivot-relative, so the camera would
+    // land somewhere unrelated and every subsequent move would compound the error.
+    camera.lookAtTransform(Matrix4.IDENTITY)
+  }
+}
+
+/** The pitch orbit limits, in radians, as the constants above define them. */
+const MIN_PITCH_RAD = CesiumMath.toRadians(MIN_PITCH_DEG)
+const MAX_PITCH_RAD = CesiumMath.toRadians(MAX_PITCH_DEG)
+
+/**
+ * How far `tiltBy` may turn for a requested `deltaRad`, given the pitch it starts from.
+ *
+ * Pure, and separate from the camera so it can be tested: the whole reported bug is in
+ * this number. Without the clamp a tilt past the limit keeps going, crosses straight
+ * down, and comes back up on the other side with the heading flipped ~180 deg -- which
+ * is what "it starts rotating instead" is. Clamping the delta to reach the limit exactly
+ * and no further means the view simply stops.
+ *
+ * The sign check covers a case the clamp alone gets backwards. The top-down framing puts
+ * the pitch at -90, past the -88 tilt limit, and clamping `-90 + -10` lands on -88 --
+ * which, measured from -90, is a move *upwards* of 2 deg in response to a request to tilt
+ * *down*. Returning 0 instead leaves the view where it is.
+ */
+export function pitchDelta(currentPitch: number, deltaRad: number): number {
+  const allowed =
+    CesiumMath.clamp(currentPitch + deltaRad, MIN_PITCH_RAD, MAX_PITCH_RAD) - currentPitch
+  return Math.sign(allowed) === Math.sign(deltaRad) ? allowed : 0
+}
+
+/**
+ * Turn the camera about the pivot's vertical axis. Heading only; pitch and range are
+ * untouched by construction.
+ */
+export function rotateBy(viewer: Viewer, headingDeg: number): void {
+  const pivot = pivotPoint(viewer)
+  if (!pivot) return
+  const angle = CesiumMath.toRadians(headingDeg)
+  applyImmediately(() => {
+    inPivotFrame(viewer, pivot, () => viewer.camera.rotate(Cartesian3.UNIT_Z, angle))
+  }, viewer)
+}
+
+/**
+ * Tilt the camera up or down about its own horizontal axis. Pitch only.
+ *
+ * `camera.right` is horizontal by construction (it is `cross(direction, up)`), so
+ * rotating about it changes the pitch and cannot change the heading. At a pitch limit
+ * `pitchDelta` returns 0 and this is a no-op, which is the point: the view stops dead
+ * rather than sliding into a rotation.
+ *
+ * The angle is *negated* into `rotate`. `pitchDeg` is in the app's convention, where
+ * positive raises the view towards the horizon; `rotate` measures the opposite way, so
+ * `+10` on this axis lowers the pitch (measured: -33 -> -43). Getting this backwards is
+ * not a small error: the pitch then walks out of its range instead of stopping at the
+ * limit, crosses straight down, and the heading flips 180 deg -- which is exactly the
+ * "tilting past the limit starts rotating" report, reintroduced.
+ */
+export function tiltBy(viewer: Viewer, pitchDeg: number): void {
+  const pivot = pivotPoint(viewer)
+  if (!pivot) return
+  const camera = viewer.camera
+  const allowed = pitchDelta(camera.pitch, CesiumMath.toRadians(pitchDeg))
+  if (allowed === 0) return
+  applyImmediately(() => {
+    inPivotFrame(viewer, pivot, () => camera.rotate(camera.right, -allowed))
+  }, viewer)
+}
+
+/**
+ * The point the camera turns and dollies about, as close to what the user is looking at
+ * as we can get.
+ *
+ * The sandbox pivot when the terrain tileset has supplied one -- that is the centre of
+ * the model, and orbiting it is what makes the district turn in place rather than swing
+ * out of frame. A picked ground point under the middle of the visible strip otherwise,
+ * so a demo with no tileset still behaves.
+ */
+function pivotPoint(viewer: Viewer): Cartesian3 | null {
+  if (sandboxPivot) return sandboxPivot
+  return groundPoint(viewer)
+}
+
+/**
+ * The point under the middle of the strip of canvas the left panel leaves free.
+ *
+ * Picking order matters. `scene.pickPosition` reads the depth buffer, so it lands on the
+ * actual 3D tile surface -- but it returns a point in absolute world space only when the
+ * camera transform is identity, which it is here. `globe.pick` next, for terrain. The
+ * ellipsoid last: it is always defined, so a move never fails halfway, and its error is
+ * bounded by the relief. Looking at the horizon there is no ground at all, so a point
+ * along the view ray stands in and the move still works.
+ */
+function groundPoint(viewer: Viewer): Cartesian3 | null {
+  const camera = viewer.camera
+  const scene = viewer.scene
+  const canvas = scene.canvas
+  const width = Math.max(1, canvas?.clientWidth ?? 1)
+  const height = Math.max(1, canvas?.clientHeight ?? 1)
+  const inset = Math.min(sandboxPivot ? sandboxInsetLeft : 0, width * 0.4)
+  const pixel = new Cartesian2(width / 2 + inset / 2, height / 2)
+
+  const depth = scene.pickPositionSupported ? scene.pickPosition(pixel) : undefined
+  if (depth) return depth
+  const ray = camera.getPickRay(pixel)
+  if (ray) {
+    const onGlobe = scene.globe?.pick(ray, scene)
+    if (onGlobe) return onGlobe
+  }
+  const onEllipsoid = camera.pickEllipsoid(pixel, Ellipsoid.WGS84)
+  if (onEllipsoid) return onEllipsoid
+  if (ray) {
+    return Cartesian3.add(
       camera.positionWC,
-      Cartesian3.multiplyByScalar(camera.directionWC, 4000, new Cartesian3()),
+      Cartesian3.multiplyByScalar(ray.direction, 4000, new Cartesian3()),
       new Cartesian3(),
     )
-  const range = Math.max(
-    Cartesian3.magnitude(
-      Cartesian3.subtract(camera.positionWC, point, new Cartesian3()),
-    ),
-    1,
-  )
-  return { point, range }
+  }
+  return null
 }
 
 /**
- * Orbit the camera around whatever it is looking at.
+ * Move towards (<1) or away from (>1) the point under the middle of the user's view.
  *
- * Rotates *about the subject* rather than spinning in place, because spinning in place
- * throws the subject out of frame -- fine for a landscape, useless for inspecting a
- * building. Reuses `placeCamera` so an orbit and the 3D-view button cannot disagree
- * about where the camera ends up.
- */
-export function orbitBy(
-  viewer: Viewer,
-  headingDeg: number,
-  pitchDeg: number,
-  duration = 0.3,
-): void {
-  const camera = viewer.camera
-  const heading = camera.heading + CesiumMath.toRadians(headingDeg)
-  const pitch = CesiumMath.clamp(
-    camera.pitch + CesiumMath.toRadians(pitchDeg),
-    CesiumMath.toRadians(MIN_PITCH_DEG),
-    CesiumMath.toRadians(MAX_PITCH_DEG),
-  )
-  const { point, range } = viewCentre(viewer)
-  placeCamera(viewer, point, heading, pitch, range, duration, sandboxPivot ? sandboxInsetLeft : 0)
-}
-
-/**
- * Move the camera towards or away from what it is looking at.
+ * The camera travels along the line joining it to that anchor, so the anchor is exactly
+ * the fixed point of the projection and stays put on screen: measured, the anchor moves
+ * 0.0 px through a 0.55 zoom. Orientation is read once and never rewritten, so a zoom
+ * cannot alter the heading or the pitch, and the distance is clamped to the controller's
+ * own limits so it cannot be dolly-walked through the ground.
  *
- * A distance multiply rather than `camera.zoomIn`, which is a per-tick delta: under
- * `requestRenderMode` there may be no tick to apply it on, so it does nothing at all,
- * silently, which is exactly how it presents.
+ * This is deliberately NOT the old behaviour of re-placing the camera about the scene
+ * pivot. That re-centred every zoom on the middle of the district, so after a pan a
+ * single click pulled the view 464 m back to where the user was not looking.
  */
-export function zoomBy(viewer: Viewer, factor: number, duration = 0.3): void {
+export function zoomBy(viewer: Viewer, factor: number): void {
   const camera = viewer.camera
   const controller = viewer.scene.screenSpaceCameraController
-  const { point, range } = viewCentre(viewer)
+  const anchor = pivotOrGround(viewer)
+  if (!anchor) return
+  const offset = Cartesian3.subtract(camera.positionWC, anchor, new Cartesian3())
+  const distance = Math.max(Cartesian3.magnitude(offset), 1)
   const next = CesiumMath.clamp(
-    range * factor,
+    distance * factor,
     controller.minimumZoomDistance ?? 40,
     controller.maximumZoomDistance ?? 40_000,
   )
-  placeCamera(viewer, point, camera.heading, camera.pitch, next, duration, sandboxPivot ? sandboxInsetLeft : 0)
+  const unit = Cartesian3.normalize(offset, new Cartesian3())
+  // Orientation is untouched -- read it and hand it straight back, so a dolly cannot
+  // move the heading or the pitch.
+  const direction = Cartesian3.clone(camera.directionWC)
+  const up = Cartesian3.clone(camera.upWC)
+  applyImmediately(() => {
+    camera.setView({
+      destination: Cartesian3.add(
+        anchor,
+        Cartesian3.multiplyByScalar(unit, next, new Cartesian3()),
+        new Cartesian3(),
+      ),
+      orientation: { direction, up },
+      convert: false,
+    })
+  }, viewer)
 }
+
+/**
+ * `groundPoint`, but falling back to the sandbox pivot when there is no canvas geometry
+ * under the middle of the view -- a dolly needs *some* anchor, and the model centre is a
+ * far better one than the screen centre.
+ */
+function pivotOrGround(viewer: Viewer): Cartesian3 | null {
+  return groundPoint(viewer) ?? sandboxPivot
+}
+
+/**
+ * Orbit the camera about what it is looking at. Heading and pitch, as two independent
+ * moves: `headingDeg` turns, `pitchDeg` tilts, and neither can move the other.
+ */
+export function orbitBy(viewer: Viewer, headingDeg: number, pitchDeg: number): void {
+  if (headingDeg !== 0) rotateBy(viewer, headingDeg)
+  if (pitchDeg !== 0) tiltBy(viewer, pitchDeg)
+}
+
