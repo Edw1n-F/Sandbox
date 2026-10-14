@@ -200,10 +200,11 @@ copied from the code's output.
 | backend `test_llm_provider` | 30/30 | `python tests/test_llm_provider.py` — the chat and the run card through a scripted `FakeProvider`, no key |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
-| frontend unit (`vitest`) | 53/53 | `npm test` — includes `streamChat` against real streams and the provenance receipt |
+| frontend unit (`vitest`) | 71/71 | `npm test` — includes `streamChat` against real streams, the provenance receipt, the trackpad wheel maths and the navigation cheat-sheet |
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
+| frontend navigation (`verify-nav.mjs`) | 16/16 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.

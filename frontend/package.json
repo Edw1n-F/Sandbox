@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "verify:3d": "node scripts/verify-3d.mjs",
     "verify:ux": "node scripts/verify-ux.mjs",
-    "verify:chat": "node scripts/verify-chat.mjs"
+    "verify:chat": "node scripts/verify-chat.mjs",
+    "verify:nav": "node scripts/verify-nav.mjs"
   },
   "dependencies": {
     "@emotion/react": "^11.13.3",

@@ -34,6 +34,7 @@ import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions } from './interventionLayer'
+import { publishHeading } from './cameraHeading'
 import { demElevationRange } from './demProvider'
 import {
   createBaseImageryLayer,
@@ -219,7 +220,22 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     cameraControl.orbit = (headingDeg, pitchDeg) => orbitBy(viewer, headingDeg, pitchDeg)
     cameraControl.zoom = (factor) => zoomBy(viewer, factor)
 
+    // Publish the heading for the compass. `changed` fires only once the camera
+    // has moved by `percentageChanged` of its view, so it is lowered from the 0.5
+    // default: at 0.5 a slow rotation published nothing until it was far off.
+    // `isLive` guards the callback because StrictMode can destroy the viewer
+    // while a change event is still queued.
+    viewer.camera.percentageChanged = 0.01
+    const onCameraChanged = () => {
+      if (!isLive(viewer)) return
+      publishHeading(CesiumMath.toDegrees(viewer.camera.heading))
+    }
+    viewer.camera.changed.addEventListener(onCameraChanged)
+    viewer.camera.moveEnd.addEventListener(onCameraChanged)
+
     return () => {
+      viewer.camera.changed.removeEventListener(onCameraChanged)
+      viewer.camera.moveEnd.removeEventListener(onCameraChanged)
       overlaysRef.current = { wetGrid: null, heatmap: null }
       drapedRef.current = { wetGrid: null, heatmap: null }
       baseRef.current = null
@@ -531,6 +547,16 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         case '-':
         case '_':
           zoomBy(viewer, 1 / ZOOM_STEP, 0)
+          break
+        // Home and 0 re-frame, T goes top-down. These are the two jumps that
+        // arrows and +/- cannot reach, and they are what a lost user wants most.
+        case 'Home':
+        case '0':
+          cameraControl.reset()
+          break
+        case 't':
+        case 'T':
+          cameraControl.topDown()
           break
         default:
           return

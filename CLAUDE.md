@@ -68,7 +68,7 @@ npm run lint && npm test                     # eslint --max-warnings 0, vitest
 # Browser suites: need BOTH servers up. They exit 2 if the servers are missing,
 # so a missing server can never read as a pass. Setup once:
 #   npm i --no-save playwright && npx playwright install chromium
-node scripts/verify-3d.mjs && node scripts/verify-ux.mjs && node scripts/verify-chat.mjs
+node scripts/verify-3d.mjs && node scripts/verify-ux.mjs && node scripts/verify-chat.mjs && node scripts/verify-nav.mjs
 ```
 
 `seed_interventions.py` and `make_citymodel.py` are gone: the derived-intervention

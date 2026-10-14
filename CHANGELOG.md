@@ -14,6 +14,56 @@ month — move every dated section older than the current month into
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
 
+## 2026-10-14 — navigation: trackpad sensitivity, a compass, tilt buttons and a cheat-sheet
+
+### Fixed — a trackpad swipe lurched the camera
+
+The wheel handler applied `Math.sign(delta) * 5 deg` on every event. A mouse wheel
+sends one event per notch, so that suited a mouse. A trackpad streams about 60
+events a second plus a momentum tail after the fingers lift, so one gentle swipe
+became dozens of 5 deg steps and hit the pitch clamp at once. And because a
+trackpad never reports an exact zero on the axis you did not mean,
+`Math.sign(deltaX)` turned a stray 0.4 into a full 12 deg rotation: a vertical
+swipe also spun the view.
+
+`wheelToOrbit()` is now pure and exported. It scales by the real delta, zeroes the
+weaker axis when one dominates 2:1, ignores sub-2px jitter, caps any single event
+at 8 deg, and reads line/page `deltaMode`. Ten checks pin it, and restoring the
+old `Math.sign` logic fails exactly the five tied to the reported symptoms. **The
+three constants are estimates and want trying on a real trackpad**; they sit at the
+top of `cameraRig.ts`.
+
+### Added — everything gesture-only is now reachable without a gesture
+
+- **Tilt up / tilt down buttons.** Tilt was right-drag or a two-finger drag only,
+  which left a touch user, or a mouse without a right button, no way to look up or
+  down.
+- **A compass.** It turns against the view so north stays north, rests when the
+  view is within 2 deg of north-up, and facing it rotates the short way round. The
+  opening framing is heading 335, so it reads "Facing 335 degrees" on first paint
+  by design. Heading lives in `cameraHeading.ts`, a small external store rather
+  than Zustand, because it changes every frame of a drag and only the compass
+  reads it.
+- **`T` goes top-down and `Home` / `0` resets.** Arrow keys and `+` / `-` already
+  worked but nothing said so.
+- **A `?` cheat-sheet**, opened on the first visit only and again from the button.
+  Non-modal, closes on Escape, and a blocked `localStorage` reads as "seen" so a
+  private window is never nagged on every load.
+
+The cheat-sheet is data (`navHelp.ts`) so a test can hold it to what the app
+binds. It describes the wheel as it behaves today (tilt, not zoom), because a
+help panel describing a gesture the app does not have teaches people to do
+something that silently fails.
+
+### Not changed
+
+The plain wheel still tilts rather than zooms. That is unconventional for a mouse
+user, but the right fix needs a real mouse to tune against, so it is deferred
+rather than guessed. Phone and touch layouts were not worked on: the product is
+desktop-only.
+
+`verify-nav.mjs` (16 checks) is new, and `vitest` goes 53 to 71.
+
 ## 2026-10-14 — the model writes the run card, not a paragraph beside it
 
 ### Changed — the run's explanation is the same card the chat produces
