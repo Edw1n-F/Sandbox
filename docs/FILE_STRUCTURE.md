@@ -95,7 +95,7 @@ trigger a viewer action without the Cesium instance being drilled into the tree.
 | `_verify-common.mjs` | shared plumbing: Playwright resolution, server preflight, the checker, error capture, the tileset-aware `settleViewer` |
 | `verify-3d.mjs` | 17 checks: tileset load, camera framing, pan, the run reaching `POST /run`, both overlays drawn from the run's own id, canvas change, the flood/heat toggles |
 | `verify-ux.mjs` | 21 checks: first paint, loading affordance, failure paths (404 / unreachable / 5xx / malformed payload), phone layout, keyboard reach, slider names, reduced motion, slow network |
-| `verify-chat.mjs` | 14 checks on the chat panel with the stream mocked (so no model is needed): the provenance receipt, the live region, the in-progress shimmer, a general answer carrying no receipt, and a stream cut before `done` |
+| `verify-chat.mjs` | 17 checks on the chat panel with the stream mocked (so no model is needed): the provenance receipt, the live region, the in-progress shimmer, a general answer carrying no receipt, and a stream cut before `done` |
 
 Both need the dev server on `:5173` **and** the backend on **`:8001`** (that is what
 `vite.config.ts` proxies `/api`, `/static` and `/health` to). They are not part of

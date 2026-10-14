@@ -194,7 +194,7 @@ copied from the code's output.
 | frontend unit (`vitest`) | 53/53 | `npm test` — includes `streamChat` against real streams and the provenance receipt |
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
-| frontend chat panel (`verify-chat.mjs`) | 14/14 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
+| frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.

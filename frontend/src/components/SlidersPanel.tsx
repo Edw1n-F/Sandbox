@@ -224,11 +224,23 @@ export default function SlidersPanel() {
           onClick={() => void run(selectedPlanIds)}
           sx={{ mt: 0.5 }}
         >
-          {running
-            ? 'Running…'
-            : selectedPlanIds.length > 1
-              ? `▶ Run ${selectedPlanIds.length} projects`
-              : '▶ Run Simulation'}
+          {running ? (
+            <Stack direction="row" spacing={0.75} alignItems="center" justifyContent="center">
+              {/* The button is filled with the signal green, so a shimmering label
+                  would fight its own background. A small pulsing ring reads as
+                  "working" without touching the text. */}
+              <Box
+                className="hud-spinner"
+                component="span"
+                sx={{ width: 11, height: 11, borderRadius: '50%', border: '2px solid rgba(4,18,10,0.35)', borderTopColor: '#04120a' }}
+              />
+              <span>Running…</span>
+            </Stack>
+          ) : selectedPlanIds.length > 1 ? (
+            `▶ Run ${selectedPlanIds.length} projects`
+          ) : (
+            '▶ Run Simulation'
+          )}
         </Button>
 
         {selectedPlanIds.length === 0 && !running && (
@@ -237,7 +249,7 @@ export default function SlidersPanel() {
           </Typography>
         )}
         {running && (
-          <Typography variant="caption" color="text.secondary">
+          <Typography className="hud-shimmer" variant="caption" sx={{ display: 'block' }}>
             Re-running runoff + retention at{' '}
             {intensity.toFixed(0)} mm/hr × {durationH} h ({totalMm.toFixed(0)} mm
             total) at {tideState} tide and re-rendering both overlays.

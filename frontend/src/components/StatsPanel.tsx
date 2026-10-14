@@ -52,7 +52,9 @@ export default function StatsPanel() {
   if (running && !runResult) {
     return (
       <HudPanel title="Stats" sx={{ width: '100%' }}>
-        <Typography variant="caption" color="text.secondary">Computing…</Typography>
+        <Typography className="hud-shimmer" variant="caption">
+          Computing the buffer deficit, wet area and heat index…
+        </Typography>
       </HudPanel>
     )
   }

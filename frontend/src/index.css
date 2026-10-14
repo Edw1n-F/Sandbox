@@ -141,6 +141,20 @@ body,
   animation: hud-shimmer 1.6s linear infinite;
 }
 
+/* Small rotating ring for a filled button, where a text shimmer would be
+   unreadable against the signal green. */
+@keyframes hud-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hud-spinner {
+  display: inline-block;
+  animation: hud-spin 0.9s linear infinite;
+  flex: none;
+}
+
 /* Reduced motion: stop the decorative motion, keep the information. The shimmer
    becomes a steady, fully visible label; the pulsing dot stops. Nothing here
    removes a spinner or a status, because those carry meaning, not decoration. */
@@ -157,5 +171,10 @@ body,
   }
   .hud-dot {
     animation: none;
+  }
+  /* The ring keeps turning: it is the only sign the run is alive. Slowing it
+     rather than stopping it keeps that signal without the fast rotation. */
+  .hud-spinner {
+    animation-duration: 3s;
   }
 }

@@ -75,10 +75,21 @@ const ask = async (text) => {
 }
 const status = page.getByRole('status').filter({ hasNotText: 'Initialising' })
 
-// A real run, so the chat has a run to be asked about.
+// A real run, so the chat has a run to be asked about. The click also gives the
+// one window in which the run wait is on screen, so the run-wait affordances are
+// checked here rather than in a separate pass.
 await page.getByText('Run Simulation').first().click()
+const shimmerDuringRun = page.locator('.hud-shimmer').first()
+await shimmerDuringRun.waitFor({ state: 'visible', timeout: 6000 }).catch(() => undefined)
+check('the run wait shimmers rather than sitting on a static label',
+  await shimmerDuringRun.isVisible().catch(() => false),
+  (await shimmerDuringRun.innerText().catch(() => '')).slice(0, 60))
+check('the run button carries a spinner, since a shimmer would fight its fill',
+  await page.locator('.hud-spinner').first().isVisible().catch(() => false))
 await page.waitForResponse((r) => r.url().endsWith('/run') && r.request().method() === 'POST', { timeout: 90000 })
 await page.waitForFunction(() => !document.body.innerText.includes('Running…'), null, { timeout: 90000 })
+check('the run affordances are gone once the run finishes',
+  (await page.locator('.hud-spinner').count()) === 0)
 
 // ---- 1. a complete run card: shimmer while working, receipt after ----------
 queue.push({
