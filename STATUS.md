@@ -204,7 +204,7 @@ copied from the code's output.
 | frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; the chat stream is mocked, so it needs no language model |
-| frontend navigation (`verify-nav.mjs`) | 16/16 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres |
+| frontend navigation (`verify-nav.mjs`) | 23/23 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres, tilting past the pitch limit leaves the heading alone, and two quick button presses add up |
 
 `test_overlay_masking` is pytest-style with no `__main__`, so run it with
 `python -m pytest`; the `for f in tests/test_*.py` loop prints nothing for it.
