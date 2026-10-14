@@ -16,6 +16,13 @@ Structured output is forced, not requested. A schema in the prompt is a
 suggestion; a tool the model must call (Anthropic) or a ``response_format``
 (OpenAI-compatible) is a guarantee, and the difference matters because the
 answer card is parsed by code and rendered by field.
+
+Providers sit behind a :class:`Provider` protocol. :func:`get_provider` resolves
+one from settings on every call (Anthropic key first, then base URL + model), and
+:func:`use_provider` swaps in another -- in practice
+:class:`app.agent.fake_provider.FakeProvider` -- so the chat can be driven end to
+end in a test with no key and no network. The module-level functions are thin
+delegates, so no caller had to change when the protocol arrived.
 """
 
 from __future__ import annotations
@@ -25,20 +32,28 @@ import re
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Literal
+from typing import Any, Iterator, Literal, Protocol, runtime_checkable
 
 from app.config import settings
 
 __all__ = [
+    "AnthropicProvider",
     "LLMError",
     "Message",
+    "OpenAICompatibleProvider",
+    "Provider",
     "ProviderUnavailable",
     "Turn",
     "Usage",
     "complete_json",
+    "complete_text",
+    "get_provider",
     "provider_name",
+    "set_provider",
     "stream_text",
+    "use_provider",
 ]
 
 def json_contract() -> str:
@@ -96,25 +111,77 @@ class Turn:
     usage: Usage = field(default_factory=Usage)
 
 
+@runtime_checkable
+class Provider(Protocol):
+    """What the chat needs from a model, and nothing more.
+
+    Three calls, all synchronous, all raising ProviderUnavailable / LLMError on
+    failure. The outermost-``{...}`` repair on ``complete_json`` is *not* a
+    provider's job: it lives in the public :func:`complete_json`, so every
+    provider -- the fake included -- gets the same parse behaviour.
+    """
+
+    name: str
+
+    def complete_json(self, system: str, messages: list[Message], schema: dict,
+                      max_tokens: int) -> Turn: ...
+
+    def stream_text(self, system: str, messages: list[Message], max_tokens: int) -> Iterator[str]: ...
+
+    def complete_text(self, system: str, prompt: str, max_tokens: int) -> str: ...
+
+
+#: A provider installed by :func:`set_provider` / :func:`use_provider`. When set
+#: it wins over settings outright -- that is the point of an override.
+_override: Provider | None = None
+
+
+def set_provider(provider: Provider | None) -> Provider | None:
+    """Install `provider` (or clear with None). Returns the previous override.
+
+    Prefer :func:`use_provider` in tests: it restores the previous value even
+    when the test fails, so a fake cannot leak into the next test.
+    """
+    global _override
+    previous = _override
+    _override = provider
+    return previous
+
+
+@contextmanager
+def use_provider(provider: Provider) -> Iterator[Provider]:
+    """Install `provider` for the duration of a `with` block, then restore."""
+    previous = set_provider(provider)
+    try:
+        yield provider
+    finally:
+        set_provider(previous)
+
+
+def get_provider() -> Provider:
+    """The override if one is set, else the provider settings describe, else raise.
+
+    Resolved on every call, not cached: settings are read at call time
+    everywhere else in this module, and tests patch them.
+    Anthropic wins over an OpenAI-compatible setup -- a leftover
+    ``ANTHROPIC_API_KEY`` silently disables an OpenRouter / Ollama config, which
+    is a documented trap rather than a bug to fix here.
+    """
+    if _override is not None:
+        return _override
+    if getattr(settings, "anthropic_api_key", "") or "":
+        return AnthropicProvider()
+    if (getattr(settings, "llm_base_url", "") or "") and (getattr(settings, "llm_model", "") or ""):
+        return OpenAICompatibleProvider()
+    raise ProviderUnavailable("no LLM provider configured")
+
+
 def provider_name() -> str:
     """Which provider will be used, or 'none'. Drives the UI's status dot."""
-    if getattr(settings, "anthropic_api_key", ""):
-        return "anthropic"
-    if getattr(settings, "llm_base_url", "") and getattr(settings, "llm_model", ""):
-        return "openai-compatible"
-    return "none"
-
-
-def _require() -> tuple[str, str, str]:
-    """(kind, credential, model) for the configured provider, or raise."""
-    key = getattr(settings, "anthropic_api_key", "") or ""
-    if key:
-        return "anthropic", key, getattr(settings, "anthropic_model", "") or "claude-sonnet-4-5"
-    base = getattr(settings, "llm_base_url", "") or ""
-    model = getattr(settings, "llm_model", "") or ""
-    if base and model:
-        return "openai", getattr(settings, "llm_api_key", "") or "", model
-    raise ProviderUnavailable("no LLM provider configured")
+    try:
+        return get_provider().name
+    except ProviderUnavailable:
+        return "none"
 
 
 def _post(url: str, headers: dict[str, str], payload: dict) -> dict:
@@ -160,69 +227,79 @@ def _anthropic_headers(key: str) -> dict[str, str]:
     }
 
 
-def _anthropic_json(system: str, messages: list[Message], schema: dict, max_tokens: int) -> Turn:
-    """Structured output by forcing a tool call whose input_schema is the schema.
+class AnthropicProvider:
+    """Anthropic Messages API. Reads its key and model from settings per call."""
 
-    The model cannot reply in prose it cannot be parsed from, because the only
-    way to answer is to call the tool. This is the whole reason the answer card
-    survives a model that would otherwise wrap JSON in a sentence.
-    """
-    key = getattr(settings, "anthropic_api_key", "")
-    model = getattr(settings, "anthropic_model", "") or "claude-sonnet-4-5"
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": m.role, "content": m.text} for m in messages],
-        "tools": [{
-            "name": "emit_answer",
-            "description": "Emit the answer card.",
-            "input_schema": schema,
-        }],
-        "tool_choice": {"type": "tool", "name": "emit_answer"},
-    }
-    raw = _post(ANTHROPIC_URL, _anthropic_headers(key), payload)
-    text = ""
-    for block in raw.get("content", []) or []:
-        if block.get("type") == "tool_use":
-            text = json.dumps(block.get("input", {}))
-            break
-    usage = raw.get("usage", {}) or {}
-    return Turn(
-        text=text,
-        usage=Usage(
-            input_tokens=int(usage.get("input_tokens", 0) or 0),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
-        ),
-    )
+    name = "anthropic"
 
+    def complete_json(self, system: str, messages: list[Message], schema: dict,
+                      max_tokens: int) -> Turn:
+        """Structured output by forcing a tool call whose input_schema is the schema.
 
-def _anthropic_stream(system: str, messages: list[Message], max_tokens: int) -> Iterator[str]:
-    key = getattr(settings, "anthropic_api_key", "")
-    model = getattr(settings, "anthropic_model", "") or "claude-sonnet-4-5"
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "system": system,
-        "messages": [{"role": m.role, "content": m.text} for m in messages],
-        "stream": True,
-    }
-    buffer = b""
-    for chunk in _post_stream(ANTHROPIC_URL, _anthropic_headers(key), payload):
-        buffer += chunk
-        while b"\n\n" in buffer:
-            event, buffer = buffer.split(b"\n\n", 1)
-            for line in event.split(b"\n"):
-                if not line.startswith(b"data:"):
-                    continue
-                try:
-                    data = json.loads(line[5:].strip())
-                except json.JSONDecodeError:
-                    continue
-                if data.get("type") == "content_block_delta":
-                    delta = data.get("delta", {})
-                    if delta.get("type") == "text_delta":
-                        yield str(delta.get("text", ""))
+        The model cannot reply in prose it cannot be parsed from, because the only
+        way to answer is to call the tool. This is the whole reason the answer card
+        survives a model that would otherwise wrap JSON in a sentence.
+        """
+        key = getattr(settings, "anthropic_api_key", "")
+        model = getattr(settings, "anthropic_model", "") or "claude-sonnet-4-5"
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": m.role, "content": m.text} for m in messages],
+            "tools": [{
+                "name": "emit_answer",
+                "description": "Emit the answer card.",
+                "input_schema": schema,
+            }],
+            "tool_choice": {"type": "tool", "name": "emit_answer"},
+        }
+        raw = _post(ANTHROPIC_URL, _anthropic_headers(key), payload)
+        text = ""
+        for block in raw.get("content", []) or []:
+            if block.get("type") == "tool_use":
+                text = json.dumps(block.get("input", {}))
+                break
+        usage = raw.get("usage", {}) or {}
+        return Turn(
+            text=text,
+            usage=Usage(
+                input_tokens=int(usage.get("input_tokens", 0) or 0),
+                output_tokens=int(usage.get("output_tokens", 0) or 0),
+            ),
+        )
+
+    def stream_text(self, system: str, messages: list[Message], max_tokens: int) -> Iterator[str]:
+        key = getattr(settings, "anthropic_api_key", "")
+        model = getattr(settings, "anthropic_model", "") or "claude-sonnet-4-5"
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "messages": [{"role": m.role, "content": m.text} for m in messages],
+            "stream": True,
+        }
+        buffer = b""
+        for chunk in _post_stream(ANTHROPIC_URL, _anthropic_headers(key), payload):
+            buffer += chunk
+            while b"\n\n" in buffer:
+                event, buffer = buffer.split(b"\n\n", 1)
+                for line in event.split(b"\n"):
+                    if not line.startswith(b"data:"):
+                        continue
+                    try:
+                        data = json.loads(line[5:].strip())
+                    except json.JSONDecodeError:
+                        continue
+                    if data.get("type") == "content_block_delta":
+                        delta = data.get("delta", {})
+                        if delta.get("type") == "text_delta":
+                            yield str(delta.get("text", ""))
+
+    def complete_text(self, system: str, prompt: str, max_tokens: int) -> str:
+        # As before: Anthropic has no model chain, so prose goes through the same
+        # forced-tool call with an open schema.
+        return self.complete_json(system, [Message("user", prompt)], {"type": "object"}, max_tokens).text
 
 
 # --------------------------------------------------------------------------- #
@@ -305,59 +382,97 @@ def _openai_json_once(model: str, system: str, messages: list[Message], max_toke
     )
 
 
-def _openai_json(system: str, messages: list[Message], schema: dict, max_tokens: int) -> Turn:
-    """Structured output, walking the model chain until one answers.
+class OpenAICompatibleProvider:
+    """Any /chat/completions endpoint (OpenRouter, Ollama, vLLM, ...).
 
-    Two failure shapes are worth advancing past rather than reporting:
-    a throttled upstream (429 / 5xx, routine on shared free pools) and an empty
-    `content` -- reasoning models routinely route every token to the reasoning
-    channel, which is a 200 with nothing in it.
+    Reads base URL, key, model chain and JSON mode from settings per call.
     """
-    chain = model_chain()
-    last: Exception | None = None
-    for index, model in enumerate(chain):
-        try:
-            turn = _openai_json_once(model, system, messages, max_tokens)
-        except LLMError as exc:
-            last = exc
-            advance = exc.retryable or "400" in exc.message
-            if not advance or index == len(chain) - 1:
-                raise
-            continue
-        if turn.text.strip() or index == len(chain) - 1:
-            return turn
-    raise last or LLMError("no model answered", retryable=True)
 
+    name = "openai-compatible"
 
-def _openai_stream(system: str, messages: list[Message], max_tokens: int) -> Iterator[str]:
-    model = getattr(settings, "llm_model", "")
-    payload = {
-        "model": model,
-        "max_tokens": max_tokens,
-        # Same contract as the non-streaming call: a stream cannot be forced
-        # into JSON, so it has to be asked for.
-        "messages": [{"role": "system", "content": f"{system}\n\n{json_contract()}"}]
-        + [{"role": m.role, "content": m.text} for m in messages],
-        "stream": True,
-    }
-    buffer = b""
-    for chunk in _post_stream(_openai_endpoint(), _openai_headers(getattr(settings, "llm_api_key", "") or ""), payload):
-        buffer += chunk
-        while b"\n" in buffer:
-            line, buffer = buffer.split(b"\n", 1)
-            if not line.startswith(b"data:"):
-                continue
-            data = line[5:].strip()
-            if data == b"[DONE]":
-                return
+    def complete_json(self, system: str, messages: list[Message], schema: dict,
+                      max_tokens: int) -> Turn:
+        """Structured output, walking the model chain until one answers.
+
+        Two failure shapes are worth advancing past rather than reporting:
+        a throttled upstream (429 / 5xx, routine on shared free pools) and an empty
+        `content` -- reasoning models routinely route every token to the reasoning
+        channel, which is a 200 with nothing in it.
+        """
+        chain = model_chain()
+        last: Exception | None = None
+        for index, model in enumerate(chain):
             try:
-                payload_event = json.loads(data)
-            except json.JSONDecodeError:
+                turn = _openai_json_once(model, system, messages, max_tokens)
+            except LLMError as exc:
+                last = exc
+                advance = exc.retryable or "400" in exc.message
+                if not advance or index == len(chain) - 1:
+                    raise
                 continue
-            for choice in payload_event.get("choices", []) or []:
-                delta = choice.get("delta", {}) or {}
-                if delta.get("content"):
-                    yield str(delta["content"])
+            if turn.text.strip() or index == len(chain) - 1:
+                return turn
+        raise last or LLMError("no model answered", retryable=True)
+
+    def stream_text(self, system: str, messages: list[Message], max_tokens: int) -> Iterator[str]:
+        model = getattr(settings, "llm_model", "")
+        payload = {
+            "model": model,
+            "max_tokens": max_tokens,
+            # Same contract as the non-streaming call: a stream cannot be forced
+            # into JSON, so it has to be asked for.
+            "messages": [{"role": "system", "content": f"{system}\n\n{json_contract()}"}]
+            + [{"role": m.role, "content": m.text} for m in messages],
+            "stream": True,
+        }
+        buffer = b""
+        for chunk in _post_stream(_openai_endpoint(), _openai_headers(getattr(settings, "llm_api_key", "") or ""), payload):
+            buffer += chunk
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                if not line.startswith(b"data:"):
+                    continue
+                data = line[5:].strip()
+                if data == b"[DONE]":
+                    return
+                try:
+                    payload_event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                for choice in payload_event.get("choices", []) or []:
+                    delta = choice.get("delta", {}) or {}
+                    if delta.get("content"):
+                        yield str(delta["content"])
+
+    def complete_text(self, system: str, prompt: str, max_tokens: int) -> str:
+        """Plain prose, no JSON contract, walking the model chain past 429s and empty replies."""
+        headers = _openai_headers(getattr(settings, "llm_api_key", "") or "")
+        last: Exception | None = None
+        for model in model_chain():
+            body = {"model": model, "max_tokens": max_tokens,
+                    "messages": [{"role": "system", "content": system},
+                                 {"role": "user", "content": prompt}]}
+            # Free-tier 429s are usually a shared-pool hiccup of a few seconds, not a
+            # hard outage: retry the SAME model briefly before advancing. Advancing
+            # to another model does not help when the whole free family is throttled
+            # at once (both Gemma ids 429 together), so backoff is the real lever.
+            for attempt in range(3):
+                try:
+                    raw = _post(_openai_endpoint(), headers, body)
+                    break
+                except LLMError as exc:
+                    last = exc
+                    if not exc.retryable:
+                        raise
+                    if attempt < 2:
+                        time.sleep(1.5 * (attempt + 1))
+            else:
+                continue
+            for choice in raw.get("choices", []) or []:
+                text = str(((choice.get("message") or {}).get("content")) or "").strip()
+                if text:
+                    return text
+        raise last or LLMError("no model answered", retryable=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -372,11 +487,7 @@ def complete_json(
     max_tokens: int = 900,
 ) -> Turn:
     """One structured call. Raises ProviderUnavailable / LLMError."""
-    kind, _, _ = _require()
-    if kind == "anthropic":
-        turn = _anthropic_json(system, messages, schema, max_tokens)
-    else:
-        turn = _openai_json(system, messages, schema, max_tokens)
+    turn = get_provider().complete_json(system, messages, schema, max_tokens)
     # A model that answers in prose around the JSON still parses: take the
     # outermost {...} rather than failing the whole turn.
     if not turn.text.strip().startswith("{"):
@@ -387,12 +498,13 @@ def complete_json(
 
 
 def stream_text(*, system: str, messages: list[Message], max_tokens: int = 700) -> Iterator[str]:
-    """Yield text deltas. Raises ProviderUnavailable / LLMError."""
-    kind, _, _ = _require()
-    if kind == "anthropic":
-        yield from _anthropic_stream(system, messages, max_tokens)
-    else:
-        yield from _openai_stream(system, messages, max_tokens)
+    """Yield text deltas. Raises ProviderUnavailable / LLMError.
+
+    Still a generator, so -- as before -- the provider is resolved on the first
+    ``next()``, not at the call. chat_service relies on that: it wraps the
+    iteration, not the call, in its ProviderUnavailable handler.
+    """
+    yield from get_provider().stream_text(system, messages, max_tokens)
 
 
 def complete_text(*, system: str, prompt: str, max_tokens: int = 400) -> str:
@@ -401,33 +513,4 @@ def complete_text(*, system: str, prompt: str, max_tokens: int = 400) -> str:
     For callers that want a paragraph (the run explanation), not a card. Raises
     ProviderUnavailable / LLMError when no model in the chain answers.
     """
-    kind, _, _ = _require()
-    if kind == "anthropic":
-        return _anthropic_json(system, [Message("user", prompt)], {"type": "object"}, max_tokens).text
-    headers = _openai_headers(getattr(settings, "llm_api_key", "") or "")
-    last: Exception | None = None
-    for model in model_chain():
-        body = {"model": model, "max_tokens": max_tokens,
-                "messages": [{"role": "system", "content": system},
-                             {"role": "user", "content": prompt}]}
-        # Free-tier 429s are usually a shared-pool hiccup of a few seconds, not a
-        # hard outage: retry the SAME model briefly before advancing. Advancing
-        # to another model does not help when the whole free family is throttled
-        # at once (both Gemma ids 429 together), so backoff is the real lever.
-        for attempt in range(3):
-            try:
-                raw = _post(_openai_endpoint(), headers, body)
-                break
-            except LLMError as exc:
-                last = exc
-                if not exc.retryable:
-                    raise
-                if attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
-        else:
-            continue
-        for choice in raw.get("choices", []) or []:
-            text = str(((choice.get("message") or {}).get("content")) or "").strip()
-            if text:
-                return text
-    raise last or LLMError("no model answered", retryable=True)
+    return get_provider().complete_text(system, prompt, max_tokens)

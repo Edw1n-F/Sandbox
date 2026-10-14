@@ -5,6 +5,42 @@ Every non-trivial change gets an entry. Newest first.
 Gap numbers quoted inside an entry are the ones current **on that entry's date** —
 they are not retroactively renumbered. The live list is [`STATUS.md`](STATUS.md).
 
+## 2026-10-14 — a provider protocol, and a fake to test the chat with
+
+### Changed — `app/agent/llm.py` is a `Provider` protocol
+
+The two real backends are now classes, `AnthropicProvider` and
+`OpenAICompatibleProvider`, behind a `Provider` protocol with three calls:
+`complete_json`, `stream_text` and `complete_text`. The old private functions
+were moved in unchanged, only re-indented, so the payloads, the 400 fallback that
+drops `response_format`, the model chain and the 429 backoff are the same code.
+`get_provider()` resolves a provider from settings on every call, in the old order
+(Anthropic key first). The public module functions are thin delegates over it, so
+no caller changed.
+
+`use_provider(p)` swaps a provider in for a `with` block and restores the old
+one in `finally`, so a test cannot leak a fake into the next test.
+
+### Added — `FakeProvider` and `test_llm_provider.py` (27/27)
+
+`app/agent/fake_provider.py` replays a scripted list of replies and records every
+call. Nothing in `app/` imports it. An unscripted call raises rather than
+returning `""`, because an empty reply would let the chat's own fallbacks hide the
+test bug.
+
+The suite drives the real `answer` and `stream_events` with no key and no network.
+It covers each path that was verified only by hand before:
+
+- a stream rejected with 400 or 429, or broken mid-way, gets one unstreamed retry
+- a stream with zero deltas recovers the same way
+- an ungrounded first draft triggers a revision that names the bad number
+- a revision that is still ungrounded ends at Low confidence
+- no provider at all gives a labelled template card with exactly one `done`
+
+With `_post` patched, it also pins the request shapes both real providers send.
+Mutation-checked: removing the unstreamed retry, the 400 fallback or the `finally`
+restore each turns the suite red.
+
 ## 2026-10-14 — CI and CODEOWNERS
 
 ### Added — `.github/workflows/ci.yml`

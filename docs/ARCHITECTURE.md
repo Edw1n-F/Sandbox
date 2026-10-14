@@ -525,7 +525,7 @@ If you are changing something, these are the places that must move together:
 | A new massing operation | `MASSING_TOOL` + `parse_massing_intent` + `_massing_feature` + `applyMassingOps`, **and a test that an unrecognised scope is dropped rather than widened** |
 | A new field on the answer card | `agent/answer.py` (model **and** `ANSWER_SCHEMA`) + `CardView` in `ChatPanel.tsx` + anything `grounding.check_card` should now read |
 | A new stream event | `agent/chat_service.py` + the `Step`/event union in `api/chatApi.ts` + `ChatPanel.tsx`. The stream always ends with `done` |
-| A new LLM provider | `agent/llm.py` only — `complete_json` and `stream_text` are the whole surface |
+| A new LLM provider | A class in `agent/llm.py` satisfying `Provider` (`complete_json`, `stream_text`, `complete_text`) + a branch in `get_provider()` + a wire-shape test in `test_llm_provider.py` with `_post` patched |
 | A new confidence cap | `agent/confidence.py`'s `cap_of` + a key in `build_facts`' `data` block + a line in the prompt's `[DATA QUALITY]` section, so the card and the level agree |
 
 ---
