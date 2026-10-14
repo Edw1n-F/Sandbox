@@ -80,3 +80,8 @@ frontend/verify-after-run.png
 
 # Original source directory for the MTR station model (duplicate of backend/model/).
 backend/plan_project-model/
+
+# Local raw-tile dump used while rebuilding the Open3Dhk + Overture pipeline.
+# ~1.9 GB on this host. The committed artefacts (buildings_hsk.json, DSM/DEM
+# npz files) are what the pipeline produces from it, not the source itself.
+raw_data/

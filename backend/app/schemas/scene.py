@@ -307,6 +307,7 @@ class TerrainRead(RowModel):
     waterbody_url: str | None = None
     infrastructure_url: str | None = None
     plan_project_url: str | None = None
+    plan_project_footprint_url: str | None = None
 
 
 PlanType = Literal[

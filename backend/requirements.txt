@@ -41,6 +41,11 @@ rasterio>=1.3
 # If the macOS failure ever returns, pin that machine, not everyone.
 scipy>=1.16.1
 
+# trimesh reads the Open3Dhk b3dm/cmpt tiles in scripts/tiles_to_buildings.py and
+# the mtr_station.glb footprint in scripts/compute_plan_project_footprint.py.
+# No ceiling: the 5.x API we rely on (trimesh.load, scene.graph) is stable.
+trimesh>=4.0
+
 # Test-only: powers fastapi.testclient in tests/test_contract.py (ADR-036).
 httpx>=0.27
 

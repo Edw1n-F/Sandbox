@@ -403,6 +403,11 @@ def get_terrain(scene_id: str) -> TerrainRead:
             if (settings.model_dir / "mtr_station.glb").exists()
             else None
         ),
+        plan_project_footprint_url=(
+            settings.public_url("plan_project_footprint.json")
+            if (settings.data_dir / "plan_project_footprint.json").exists()
+            else None
+        ),
     )
 
 

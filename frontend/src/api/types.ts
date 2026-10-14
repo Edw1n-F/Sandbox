@@ -73,6 +73,7 @@ export interface TerrainMeta {
   waterbodyUrl?: string | null
   infrastructureUrl?: string | null
   planProjectUrl?: string | null
+  planProjectFootprintUrl?: string | null
 }
 
 export type PlanType =

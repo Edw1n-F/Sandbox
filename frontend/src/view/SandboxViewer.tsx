@@ -14,11 +14,9 @@ import {
   Cartesian2,
   Cartesian3,
   Cartesian4,
-  Cartographic,
   ClippingPlane,
   ClippingPlaneCollection,
   ClassificationType,
-  Cesium3DTileFeature,
   Color,
   Entity,
   ImageMaterialProperty,
@@ -29,8 +27,6 @@ import {
   Model,
   NearFarScalar,
   Rectangle,
-  ScreenSpaceEventHandler,
-  ScreenSpaceEventType,
   Transforms,
   VerticalOrigin,
   Viewer,
@@ -64,12 +60,21 @@ import {
   type Extent,
 } from './cameraRig'
 import { applyViewMode, boundaryColour } from './viewModes'
+import booleanIntersects from '@turf/boolean-intersects'
+import type { Feature, FeatureCollection, MultiPolygon, Polygon } from 'geojson'
+import {
+  collectIntersectingIds,
+  createFootprintLayer,
+  type BuildingProps,
+  type FootprintLayerHandle,
+} from './footprintLayer'
 
 let propsHandle: OnlinePropHandle | null = null
 let tilesetHandle: TilesetHandle | null = null
 let terrainTilesetHandle: TilesetHandle | null = null
 let mtrModel: Model | null = null
 let mtrMarker: Entity | null = null
+let footprintLayer: FootprintLayerHandle | null = null
 
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
@@ -627,7 +632,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24, name: 'buildings' }).then((handle) => {
       if (cancelled || !handle) return
       tilesetHandle = handle
-      handle.tileset.show = showRealBuildings
+      // While planProject is on, the 2.5D footprint overlay replaces this layer.
+      handle.tileset.show = showRealBuildings && !showPlanProject
       viewer.scene.requestRender()
     })
 
@@ -641,9 +647,9 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
   useEffect(() => {
     if (!tilesetHandle) return
-    tilesetHandle.tileset.show = showRealBuildings
+    tilesetHandle.tileset.show = showRealBuildings && !showPlanProject
     viewerRef.current?.scene.requestRender()
-  }, [showRealBuildings])
+  }, [showRealBuildings, showPlanProject])
 
   // ---- 3D Tiles terrain visual mesh (6-NW-12D terrain(TB)) ----------------
   // Loaded as a Primitive alongside the globe TerrainProvider.  The globe
@@ -731,57 +737,36 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     console.info('[planProject] loading GLB:', url)
     setPlanProjectLoading(true)
     let cancelled = false
-    const MTR_LON = 113.9932
-    const MTR_LAT = 22.4328
+    // Confirmed inside scene bbox (113.9922–113.9994 E, 22.431–22.4363 N).
+    // Real station (22°25′55″N 113°59′17″E) is ~400 m west of the scene boundary,
+    // so we place the model at the cluster of buildings the station would replace.
+    const MTR_LON = 113.9930
+    const MTR_LAT = 22.4360
     const MTR_SCALE = 50
 
     void whenDemReady().then(async () => {
       if (cancelled) return
       const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
-      // Place origin at terrain level first; we'll lift it after loading
-      // once we know the real bounding sphere from the parsed geometry.
-      return Model.fromGltfAsync({
+      // The GLB has a baked -90° X rotation (Blender Y-up export convention).
+      // After Cesium applies it, the visual base of the model aligns with the
+      // ENU origin (Z=0 in local frame). Place the origin directly at terrain
+      // height — no vertical offset needed.
+      const originH = terrainM
+      const labelH  = terrainM + (0.45 + 0.48) * MTR_SCALE + 5   // above model top
+      console.info(`[planProject] terrain=${terrainM.toFixed(1)} m, origin=${originH.toFixed(1)} m`)
+
+      const model = await Model.fromGltfAsync({
         url,
         modelMatrix: Transforms.eastNorthUpToFixedFrame(
-          Cartesian3.fromDegrees(MTR_LON, MTR_LAT, terrainM),
+          Cartesian3.fromDegrees(MTR_LON, MTR_LAT, originH),
         ),
         scale: MTR_SCALE,
       })
-    }).then((model) => {
-      if (!model || cancelled || !isLive(viewerRef.current)) {
-        model?.destroy()
-        return
-      }
+      if (cancelled || !isLive(viewerRef.current)) { model.destroy(); return }
       const v = viewerRef.current!
-      v.scene.primitives.add(model)
       mtrModel = model
+      v.scene.primitives.add(model)
 
-      // Shift the model up so its bottom sits on the terrain.
-      // boundingSphere.center is the geometric centre of the model in ECEF.
-      // radius is the half-extent. The bottom of the bounding sphere is
-      // centre.height - radius; we want that to equal terrainM.
-      const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
-      const sphere = model.boundingSphere
-      const centerCarto = Cartographic.fromCartesian(sphere.center)
-      const centerH = centerCarto.height           // height of model centre in ECEF
-      const bottomH = centerH - sphere.radius      // height of lowest point of bounding sphere
-      const lift = terrainM - bottomH              // delta needed to land the bottom on terrain
-      console.info(
-        `[planProject] terrain=${terrainM.toFixed(1)} m, ` +
-        `sphere centre=${centerH.toFixed(1)} m, radius=${sphere.radius.toFixed(1)} m, ` +
-        `bottom=${bottomH.toFixed(1)} m, lift=${lift.toFixed(1)} m`
-      )
-
-      // Re-place with the corrected height: origin moves up by `lift`.
-      // terrainM was the initial origin height, so new origin = terrainM + lift.
-      const newOriginH = terrainM + lift
-      model.modelMatrix = Transforms.eastNorthUpToFixedFrame(
-        Cartesian3.fromDegrees(MTR_LON, MTR_LAT, newOriginH),
-      )
-      const labelH = newOriginH + sphere.radius + 5
-      v.scene.requestRender()
-
-      // Label + glowing point so users can locate the station instantly
       mtrMarker = v.entities.add({
         position: Cartesian3.fromDegrees(MTR_LON, MTR_LAT, labelH),
         label: {
@@ -793,7 +778,6 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           outlineWidth: 3,
           verticalOrigin: VerticalOrigin.BOTTOM,
           pixelOffset: new Cartesian2(0, -10),
-          // Fade in 500–3000 m, invisible outside 8000 m
           scaleByDistance: new NearFarScalar(500, 1.0, 3000, 0.75),
           translucencyByDistance: new NearFarScalar(3000, 1.0, 8000, 0.0),
           showBackground: true,
@@ -806,13 +790,11 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           color: Color.fromCssColorString('#5cff9d'),
           outlineColor: Color.fromCssColorString('#0a2e1a'),
           outlineWidth: 2,
-          // Pulse via scaleByDistance keeps it visible from far
           scaleByDistance: new NearFarScalar(300, 1.4, 5000, 0.6),
           disableDepthTestDistance: Number.POSITIVE_INFINITY,
         },
       })
 
-      // Fly to the station so the user doesn't have to hunt for it
       void v.camera.flyTo({
         destination: Cartesian3.fromDegrees(MTR_LON, MTR_LAT - 0.004, labelH + 300),
         orientation: {
@@ -825,7 +807,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
       v.scene.requestRender()
       setPlanProjectLoading(false)
-      console.info('[planProject] GLB loaded and added to the scene')
+      console.info('[planProject] GLB loaded and visible')
     }).catch((err) => {
       setPlanProjectLoading(false)
       console.error('[planProject] GLB failed to load:', err)
@@ -845,24 +827,51 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
   }, [terrainMeta?.planProjectUrl, showPlanProject, setPlanProjectLoading])
 
-  // ---- Building pick-to-hide (active only while Plan Project is on) -------
+  // ---- 2.5D footprint overlay (Plan Project companion) --------------------
+  // When Plan Project is on, swap the textured 3D Tiles mesh for a planning-doc
+  // style white massing extruded from buildings_hsk.json, and hide the few
+  // boxes under the GLB footprint so the station reads cleanly.
   useEffect(() => {
     const viewer = viewerRef.current
-    if (!isLive(viewer) || !showPlanProject) return
+    const buildingsUrl = terrainMeta?.buildingsUrl
+    const footprintUrl = terrainMeta?.planProjectFootprintUrl
+    if (!isLive(viewer) || !showPlanProject || !buildingsUrl || !footprintUrl) {
+      footprintLayer?.destroy()
+      footprintLayer = null
+      return
+    }
 
-    const handler = new ScreenSpaceEventHandler(viewer.scene.canvas)
-    handler.setInputAction((movement: { position: Cartesian2 }) => {
-      const picked = viewer.scene.pick(movement.position)
-      if (picked instanceof Cesium3DTileFeature) {
-        picked.show = false
-        viewer.scene.requestRender()
+    let cancelled = false
+    void (async () => {
+      try {
+        // DEM must be ready before createFootprintLayer samples ground heights
+        // for each footprint, otherwise every box sinks into the terrain.
+        await whenDemReady()
+        if (cancelled || !isLive(viewerRef.current)) return
+        const [buildings, footprint] = await Promise.all([
+          fetch(buildingsUrl).then((r) => r.json() as Promise<FeatureCollection<Polygon | MultiPolygon, BuildingProps>>),
+          fetch(footprintUrl).then((r) => r.json() as Promise<Feature<Polygon> | Polygon>),
+        ])
+        if (cancelled || !isLive(viewerRef.current)) return
+        const hidden = collectIntersectingIds(buildings, footprint, (a, b) =>
+          booleanIntersects(a as never, b as never),
+        )
+        footprintLayer?.destroy()
+        footprintLayer = createFootprintLayer(viewerRef.current, buildings, hidden)
+        console.warn(
+          `[planProject] 2.5D overlay: ${footprintLayer.size} boxes, ${hidden.size} hidden by GLB footprint`,
+        )
+      } catch (err) {
+        console.error('[planProject] 2.5D overlay failed:', err)
       }
-    }, ScreenSpaceEventType.LEFT_CLICK)
+    })()
 
     return () => {
-      handler.destroy()
+      cancelled = true
+      footprintLayer?.destroy()
+      footprintLayer = null
     }
-  }, [showPlanProject])
+  }, [showPlanProject, terrainMeta?.buildingsUrl, terrainMeta?.planProjectFootprintUrl])
 
   return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }

@@ -1,11 +1,11 @@
 # Status
 
-The live state of the HSK / HT planning sandbox, **measured on 2026-10-14**.
+The live state of the HSK / HT planning sandbox, **measured on 2026-10-15**.
 Nothing here is a target. The architecture rationale is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 > **Read the stage table below before reading the flow.** "Works" here means
-> *verified by running it on 14 Oct* — not *designed*. Anything authored against
+> *verified by running it on 15 Oct* — not *designed*. Anything authored against
 > the retired 786 ha extent was purged on 14 Oct and is not described here.
 
 ---
@@ -16,14 +16,17 @@ Nothing here is a target. The architecture rationale is in
 |---|---|---|
 | 0 | Scaffold and the first feature buildout | Discarded — built on a placeholder world |
 | 1 | Real spatial foundation: terrain, land cover, buildings | **Done** |
-| 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Current, complete** |
-| 3 | Scenario composition: fixed project footprints and toggles | **Not started** |
+| 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Done** |
+| 3 | Scenario composition: fixed project footprints and toggles | **Partially — one fixed project** (HSK MTR station GLB with a planning-doc 2.5D overlay mode) |
 | 4 | Intervention authoring: AI suggestions, NL → card, parameter card, pin/unpin | **Not started** |
 | 5 | Demo narrative, validation, pitch | Not started |
 
-Stage 2 is closed. Stage 3 is the next build, and it is additive: the run loop
-already consumes interventions correctly, so Stage 3 supplies footprints rather
-than machinery.
+Stage 2 is closed. Stage 3 is partially open: the Plan Project toggle lands the
+first fixed-footprint case and the view-mode machinery (GLB overlay + 2.5D
+massing + overlap hiding) it rides on. What is still missing is **a second
+project** and **the toggles / composition UI** that would turn one project into
+a scenario. The run loop is unchanged; this is a visual layer so far, not a
+run-input one.
 
 ### What the two unbuilt stages mean for a demo
 
