@@ -55,36 +55,6 @@ binds. It describes the wheel as it behaves today (tilt, not zoom), because a
 help panel describing a gesture the app does not have teaches people to do
 something that silently fails.
 
-### Fixed — tilting past the limit started rotating the view
-
-Reported as "past a threshold it starts doing something to another axis".
-Reproduced through the real wheel handler: with the pitch pinned at -88 deg, a
-purely vertical swipe turned the heading by about 75 deg per event (302 deg over
-ten events), while the opposite limit drifted 0.05 deg. At -88 the look direction
-is 2 deg off straight-down, so the local vertical I passed as "up" was almost
-parallel to it. Cesium derives heading from `cross(direction, up)`, whose length
-there is sin(2 deg) = 0.035, so its angle was all rounding.
-
-`placeCamera` now gives Cesium an "up" that is exactly perpendicular to the look
-direction (the vertical with its component along the direction removed). Tilting
-past the limit now leaves the heading unchanged, and rotating at the limit rotates
-without moving the pitch. A first attempt cached the last good heading; making
-"up" perpendicular fixed it on its own, so the cache was removed as a workaround
-for the wrong cause.
-
-### Fixed — two quick button presses landed anywhere from 8 to 16 deg
-
-The buttons fly for 0.3 s, and a second press read the camera mid-flight and
-restarted from there, discarding the rest of the first move. Wheel and keyboard
-use duration 0 so they never hit it, which is why only the buttons felt
-unreliable. A press made while a flight is in progress now builds on that
-flight's destination. "In progress" follows the flight's own complete and cancel
-callbacks, because a wall-clock timeout was tried first and failed exactly when
-frames were slow. A re-frame clears it so the next tilt cannot snap back to a
-pre-reset pose. Eight trials of two quick presses now land on 16.0 deg every time.
-
-`verify-nav.mjs` grows 16 to 23 checks for both.
-
 ### Not changed
 
 The plain wheel still tilts rather than zooms. That is unconventional for a mouse

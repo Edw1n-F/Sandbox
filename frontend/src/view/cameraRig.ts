@@ -172,7 +172,6 @@ function placeCamera(
   range: number,
   duration: number,
   insetLeft = 0,
-  onFlightEnd?: () => void,
 ): void {
   const frame = Transforms.eastNorthUpToFixedFrame(target, Ellipsoid.WGS84)
   const back = new Cartesian3(
@@ -197,23 +196,7 @@ function placeCamera(
     Cartesian3.subtract(target, destination, new Cartesian3()),
     new Cartesian3(),
   )
-  // "Up" must be perpendicular to the look direction. The local vertical is not:
-  // at pitch -88 the direction is 2 deg off straight-down, so vertical-as-up is
-  // almost ANTI-parallel to it, and Cesium derives heading from cross(direction,
-  // up) -- a vector whose length is sin(2 deg) = 0.035 and whose angle is
-  // therefore all rounding. That is what spun the view when tilting past the
-  // limit. Removing the part of vertical that lies along the direction leaves the
-  // camera's true screen-up: same convention, well-conditioned at every pitch.
-  const vertical = Matrix4.multiplyByPointAsVector(frame, Cartesian3.UNIT_Z, new Cartesian3())
-  const along = Cartesian3.dot(vertical, direction)
-  const up = Cartesian3.normalize(
-    Cartesian3.subtract(
-      vertical,
-      Cartesian3.multiplyByScalar(direction, along, new Cartesian3()),
-      new Cartesian3(),
-    ),
-    new Cartesian3(),
-  )
+  const up = Matrix4.multiplyByPointAsVector(frame, Cartesian3.UNIT_Z, new Cartesian3())
 
   // Keep the pivot centred in the strip of canvas the left panel leaves free. Pure
   // translation, same as `frameExtent`, so orientation and the pivot distance are untouched.
@@ -230,13 +213,7 @@ function placeCamera(
   if (duration <= 0) {
     viewer.camera.setView({ destination, orientation: { direction, up } })
   } else {
-    viewer.camera.flyTo({
-      destination,
-      orientation: { direction, up },
-      duration,
-      complete: onFlightEnd,
-      cancel: onFlightEnd,
-    })
+    viewer.camera.flyTo({ destination, orientation: { direction, up }, duration })
   }
 }
 
@@ -252,9 +229,6 @@ export function frameExtent(
   extent: Extent,
   options: FrameOptions = {},
 ): Cartesian3 {
-  // A re-frame replaces whatever a button press was heading for. Left set, the
-  // next tilt would build on the pose from BEFORE the reset and snap the view back.
-  pendingPose = null
   const heading = CesiumMath.toRadians(options.headingDeg ?? DEFAULT_HEADING_DEG)
   const pitch = CesiumMath.toRadians(options.pitchDeg ?? DEFAULT_PITCH_DEG)
   const duration = options.duration ?? 1.2
@@ -480,69 +454,21 @@ function viewCentre(viewer: Viewer): { point: Cartesian3; range: number } {
  * building. Reuses `placeCamera` so an orbit and the 3D-view button cannot disagree
  * about where the camera ends up.
  */
-/**
- * Where an animated move is heading, so a second press builds on it.
- *
- * The buttons fly for 0.3 s. A second press used to read the camera MID-FLIGHT,
- * then start a new flight from that half-way pose, discarding the rest of the
- * first: two presses meant to move 16 deg moved 8 to 16 depending on timing. Wheel
- * and keyboard use duration 0 so they never hit it, which is why only the buttons
- * felt unreliable.
- *
- * While a flight is in progress, new moves are applied to its DESTINATION. "In
- * progress" is decided by the flight's own complete/cancel callbacks and not by a
- * wall-clock timeout: a timeout was tried first and failed exactly when frames
- * were slow (the flight had not started moving by the time the timeout expired, so
- * the second press read the unmoved camera and one press was lost). Each pose
- * carries a token so a flight that is cancelled BY the next one cannot clear it.
- */
-interface PendingPose {
-  token: number
-  heading: number
-  pitch: number
-  range: number
-  point: Cartesian3
-}
-let pendingPose: PendingPose | null = null
-let nextToken = 1
-
-function basePose(viewer: Viewer): Omit<PendingPose, 'token'> {
-  if (pendingPose) return pendingPose
-  const { point, range } = viewCentre(viewer)
-  return { heading: viewer.camera.heading, pitch: viewer.camera.pitch, range, point }
-}
-
-/** Record where this move ends; returns the callback that retires it. */
-function rememberPose(pose: Omit<PendingPose, 'token'>, duration: number): (() => void) | undefined {
-  if (duration <= 0) {
-    pendingPose = null
-    return undefined
-  }
-  const token = nextToken++
-  pendingPose = { ...pose, token }
-  // Called on complete AND on cancel. Clearing only on a token match means a
-  // newer flight (which cancels this one) keeps its own pending pose, while a
-  // flight cancelled by the user grabbing the camera correctly forgets it.
-  return () => {
-    if (pendingPose?.token === token) pendingPose = null
-  }
-}
-
 export function orbitBy(
   viewer: Viewer,
   headingDeg: number,
   pitchDeg: number,
   duration = 0.3,
 ): void {
-  const base = basePose(viewer)
-  const heading = base.heading + CesiumMath.toRadians(headingDeg)
+  const camera = viewer.camera
+  const heading = camera.heading + CesiumMath.toRadians(headingDeg)
   const pitch = CesiumMath.clamp(
-    base.pitch + CesiumMath.toRadians(pitchDeg),
+    camera.pitch + CesiumMath.toRadians(pitchDeg),
     CesiumMath.toRadians(MIN_PITCH_DEG),
     CesiumMath.toRadians(MAX_PITCH_DEG),
   )
-  const retire = rememberPose({ ...base, heading, pitch }, duration)
-  placeCamera(viewer, base.point, heading, pitch, base.range, duration, sandboxPivot ? sandboxInsetLeft : 0, retire)
+  const { point, range } = viewCentre(viewer)
+  placeCamera(viewer, point, heading, pitch, range, duration, sandboxPivot ? sandboxInsetLeft : 0)
 }
 
 /**
@@ -553,13 +479,13 @@ export function orbitBy(
  * silently, which is exactly how it presents.
  */
 export function zoomBy(viewer: Viewer, factor: number, duration = 0.3): void {
+  const camera = viewer.camera
   const controller = viewer.scene.screenSpaceCameraController
-  const base = basePose(viewer)
+  const { point, range } = viewCentre(viewer)
   const next = CesiumMath.clamp(
-    base.range * factor,
+    range * factor,
     controller.minimumZoomDistance ?? 40,
     controller.maximumZoomDistance ?? 40_000,
   )
-  const retire = rememberPose({ ...base, range: next }, duration)
-  placeCamera(viewer, base.point, base.heading, base.pitch, next, duration, sandboxPivot ? sandboxInsetLeft : 0, retire)
+  placeCamera(viewer, point, camera.heading, camera.pitch, next, duration, sandboxPivot ? sandboxInsetLeft : 0)
 }
