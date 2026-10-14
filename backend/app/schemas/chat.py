@@ -2,17 +2,12 @@
 
 from __future__ import annotations
 
-import re
-from typing import Literal
-
 from pydantic import BaseModel, Field, field_validator
 
 __all__ = ["ChatRequest", "MAX_HISTORY", "MAX_QUESTION"]
 
 MAX_QUESTION = 600
 MAX_HISTORY = 8
-
-_QUESTION_RE = re.compile(r"^[\S\s]{1,600}$")
 
 
 class ChatRequest(BaseModel):
@@ -43,10 +38,3 @@ class ChatRequest(BaseModel):
     @classmethod
     def _cap(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
         return value[-MAX_HISTORY:]
-
-
-class HistoryTurn(BaseModel):
-    """One prior turn, for clients that want the shape."""
-
-    role: Literal["user", "assistant"]
-    text: str

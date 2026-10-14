@@ -4,7 +4,7 @@
  * CLAUDE.md: "Scene as entry anchor" — all rendering begins at `getScene`.
  */
 import { http } from './client'
-import type { EnvParams, RunResult, Scene, TerrainMeta } from './types'
+import type { RunResult, Scene, TerrainMeta } from './types'
 
 /** `GET /api/scenes/{sceneId}` — the 3D sandbox init entry point. */
 export async function getScene(sceneId: string): Promise<Scene> {
@@ -15,15 +15,6 @@ export async function getScene(sceneId: string): Promise<Scene> {
 /** `GET /api/scenes/{sceneId}/terrain` — provider inputs for Cesium. */
 export async function getTerrain(sceneId: string): Promise<TerrainMeta> {
   const { data } = await http.get<TerrainMeta>(`/scenes/${sceneId}/terrain`)
-  return data
-}
-
-/** `PUT /api/scenes/{sceneId}` — partial update; omitted fields are preserved. */
-export async function updateScene(
-  sceneId: string,
-  payload: { envParams?: EnvParams; name?: string },
-): Promise<Scene> {
-  const { data } = await http.put<Scene>(`/scenes/${sceneId}`, payload)
   return data
 }
 

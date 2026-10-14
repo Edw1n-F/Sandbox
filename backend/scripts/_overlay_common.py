@@ -411,16 +411,6 @@ def _synthesise_land_class(rows: int, cols: int) -> np.ndarray:
     return land
 
 
-def rgba_from_class(
-    land: np.ndarray, colours: dict[str, tuple[int, int, int, int]]
-) -> np.ndarray:
-    """Map a class-index array to an RGBA image via integer lookup tables."""
-    lut = np.zeros((len(LAND_CLASSES), 4), dtype=np.uint8)
-    for i, name in enumerate(LAND_CLASSES):
-        lut[i] = colours[name]
-    return lut[land]
-
-
 def building_footprint_mask(ov: "Overlay") -> np.ndarray | None:
     """Boolean raster: ``True`` where a cell lies under a building footprint.
 

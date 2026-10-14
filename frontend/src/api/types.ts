@@ -156,18 +156,6 @@ export interface LayerVisibility {  imagery: boolean
 }
 
 /**
- * A proposal produced by the AI module.
- *
- * The shape is deliberately identical to a hand-drawn intervention: same
- * geometry, same `style`, same validation. That is the point — §3.3.2 requires
- * user-drawn and AI-proposed features to share one
- * normalise/validate/render pipeline, so nothing downstream needs to know
- * which produced a feature except the `source` flag.
- */
-export type InterventionSource = 'manual' | 'ai'
-
-
-/**
  * One side of a live run's ledger: today (`baseline`) or the scenario.
  *
  * `heatMean` is the land-class index the ledger has always reported;

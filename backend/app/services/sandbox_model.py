@@ -1080,7 +1080,6 @@ INTERVENTION_EFFECTS: dict[str, dict[str, Any]] = {
                        "why": "a 3D operation on existing buildings; it changes "
                               "shade and exposure, not land cover"},
 }
-DEFAULT_PERMEABLE_CN = 72.0
 
 # The largest share of the study area one intervention may rework. Beyond this it
 # is describing a land-use change rather than a feature someone would build, and

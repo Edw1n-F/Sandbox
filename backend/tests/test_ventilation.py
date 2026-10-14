@@ -14,7 +14,6 @@ Three things are being defended here, and only one of them is arithmetic.
 from __future__ import annotations
 
 import json
-import math
 import sys
 import time
 from pathlib import Path

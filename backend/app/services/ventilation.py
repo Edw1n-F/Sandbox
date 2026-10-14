@@ -67,9 +67,6 @@ from app.config import settings
 # failure this module exists to rule out.
 from app.services.design_metrics import (  # noqa: F401
     CARDINALS,
-    VR_COMFORTABLE_PEDESTRIAN,
-    VR_CONGESTED_STREET,
-    VR_OPEN_SPACE,
     Footprint,
     _TRAVEL,
     cell_fad,

@@ -38,7 +38,6 @@ from app.services.sandbox_model import (
     DEFAULT_RAINFALL_MM,
     load_grids,
     routed_ledger,
-    sea_level_report,
 )
 
 router = APIRouter(tags=["scenes"])

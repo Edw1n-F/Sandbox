@@ -21,10 +21,7 @@ for _p in (BACKEND_DIR, BACKEND_DIR / "scripts", BACKEND_DIR / "tests"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-import numpy as np  # noqa: E402
-
 from app.services.sandbox_model import (  # noqa: E402
-    DEFAULT_RAINFALL_MM,
     DRAINAGE_STANDARD_MM_H,
     REFERENCE_HYETOGRAPHS,
     hourly_storm_simulation,

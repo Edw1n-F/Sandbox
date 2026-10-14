@@ -13,9 +13,7 @@ land-class rebuild happen in later scripts.
 from __future__ import annotations
 
 import io
-import json
 import struct
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -25,9 +23,6 @@ ROOT = Path(__file__).resolve().parents[1]
 CITY_DIR = ROOT / "model" / "city_model"
 DATA = ROOT / "data"
 CELL = 1.0  # DSM cell, metres
-
-# Study bbox in EPSG:2326 is derived from the tiles themselves.
-B3DM_MAGIC = b"b3dm"
 
 
 def iter_b3dm(raw: bytes):

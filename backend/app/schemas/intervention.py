@@ -9,10 +9,9 @@ geometry.  ``InterventionIn`` refuses to let a caller assert ``status`` at all -
 only the service assigns it.
 """
 
-from datetime import datetime
 from typing import Any
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator
 
 from app.schemas.scene import (
     GeometryType,
@@ -137,16 +136,6 @@ class InterventionFeatureCollection(WireModel):
 
     type: str = "FeatureCollection"
     features: list[InterventionFeature] = Field(default_factory=list)
-
-
-class InterventionRead(InterventionIn):
-    """Stored feature, including service-assigned fields."""
-
-    id: str
-    plan_id: str
-    status: InterventionStatus = "draft"
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
 
 
 InterventionFeature.model_rebuild()

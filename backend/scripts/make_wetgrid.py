@@ -42,7 +42,6 @@ from _overlay_common import (  # noqa: E402
     attach_to_scene,
     building_footprint_mask,
     COUNTED_AS,
-    CN_CITATIONS,
     CN_SOURCE,
     CURVE_NUMBER_HSG_D,
     DEPRESSION_STORAGE_M,

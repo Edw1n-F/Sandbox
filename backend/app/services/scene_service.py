@@ -28,7 +28,6 @@ from app.schemas.intervention import (
     InterventionCreateResponse,
     InterventionFeature,
     InterventionFeatureCollection,
-    InterventionIn,
     InterventionProperties,
 )
 from app.schemas.plan import PlanCreate, PlanListRead, PlanRead, PlanUpdate
@@ -297,13 +296,6 @@ def create_plan(scene_id: str, payload: PlanCreate) -> InterventionCreateRespons
     return InterventionCreateResponse(
         plan_id=plan_id, scene_id=scene_id, intervention_count=len(stored)
     )
-
-
-def get_plan(plan_id: str) -> PlanRead:
-    doc = db.read_doc(db.plan_path(plan_id))
-    if doc is None:
-        raise PlanNotFound(plan_id)
-    return PlanRead.from_row(doc)
 
 
 def update_plan(plan_id: str, payload: PlanUpdate) -> PlanRead:

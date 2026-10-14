@@ -32,19 +32,12 @@ import {
   setDemBounds,
 } from './demProvider'
 
-const OSM_TILE_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
-const OSM_ATTRIBUTION = '© OpenStreetMap contributors'
-
 export interface TerrainBinding {
   terrainProvider: TerrainProvider
   /** False when we fell back to a flat surface. The UI must disclose this. */
   terrainIsReal: boolean
   /** Human-readable reason for any fallback, or null when terrain is real. */
   terrainNote: string | null
-}
-
-export function hasIonToken(): boolean {
-  return Boolean(import.meta.env.VITE_CESIUM_ION_TOKEN)
 }
 
 /**
@@ -224,5 +217,3 @@ export async function createOverlayLayer(
   const provider = await SingleTileImageryProvider.fromUrl(url, { rectangle })
   return new ImageryLayer(provider, { alpha })
 }
-
-export { OSM_ATTRIBUTION, OSM_TILE_TEMPLATE }

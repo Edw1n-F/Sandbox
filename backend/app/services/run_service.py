@@ -71,7 +71,6 @@ from make_wetgrid import (  # noqa: E402
 from _overlay_common import HEAT_INDEX, LAND_CLASSES  # noqa: E402
 from hydrology import fill_and_spill  # noqa: E402
 from app.services.temperature_field import (  # noqa: E402
-    SCENARIO_PRESETS,
     SURFACE_TO_AIR_OFFSET_C,
     load_observed_lst,
     temperature_field,
@@ -173,7 +172,6 @@ def anomaly_rgba(anomaly_c: np.ndarray) -> np.ndarray:
 # temperature analogue of the rainfall slider's intensity: a real input driving
 # one honest output (the field re-anchors so its mean matches). The observed
 # Landsat scene supplies the default; presets are documented offsets above it.
-DEFAULT_TEMPERATURE_C = 30.0
 
 # Above the slider's rainfall maximum the CN formula's own validity is
 # questionable; the schema bounds the request, this is just the labelled cap.

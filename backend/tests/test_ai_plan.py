@@ -39,7 +39,6 @@ from app.services.ai_plan import (
     _post_json,
     build_prompt,
     generate_plan,
-    get_provider,
     load_grounding,
     parse_fit_intent,
     parse_intent,

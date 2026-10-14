@@ -13,7 +13,6 @@ from pydantic import ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
 from app.schemas.scene import (
-    InterventionSource,
     PlanSource,
     PlanType,
     WireModel,

@@ -6,7 +6,7 @@ scene on the Landsat 30 m grid cropped to the bbox, in degrees C, NaN where the
 QA band flags cloud, shadow, cirrus or snow.
 """
 from __future__ import annotations
-import json, sys, urllib.parse, urllib.request
+import json, urllib.parse, urllib.request
 from pathlib import Path
 import numpy as np, rasterio
 from rasterio.windows import from_bounds

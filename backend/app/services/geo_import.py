@@ -36,28 +36,6 @@ def load_study_area(path: Path | None = None) -> dict[str, Any]:
         return json.load(fh)
 
 
-def validate_geometry(geometry: dict[str, Any]) -> dict[str, Any]:
-    """Check a GeoJSON geometry against §4.4 (single CRS) and §4.2.3 (type CHECK)."""
-    allowed = {"Point", "LineString", "Polygon"}
-    gtype = geometry.get("type")
-    if gtype not in allowed:
-        raise GeoValidationError(
-            f"Unsupported geometry type {gtype!r}; expected one of {sorted(allowed)}"
-        )
-    if "coordinates" not in geometry:
-        raise GeoValidationError("Geometry has no 'coordinates'")
-
-    for lon, lat in _iter_positions(geometry["coordinates"]):
-        if not math.isfinite(lon) or not math.isfinite(lat):
-            raise GeoValidationError(f"Non-finite coordinate [{lon}, {lat}]")
-        if not (-180.0 <= lon <= 180.0) or not (-90.0 <= lat <= 90.0):
-            raise GeoValidationError(
-                f"Coordinate [{lon}, {lat}] is outside EPSG:4326. The spec mandates "
-                "EPSG:4326 end to end; reproject before ingest rather than guessing."
-            )
-    return geometry
-
-
 def _iter_positions(coords: Any):
     if (
         isinstance(coords, (list, tuple))

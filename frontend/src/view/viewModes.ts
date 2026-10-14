@@ -37,18 +37,6 @@ import type { ViewMode } from '@/api/types'
 
 export type { ViewMode }
 
-/** UI copy. Kept next to the palette so the switch and the look cannot drift. */
-export const VIEW_MODES: Record<ViewMode, { label: string; blurb: string }> = {
-  survey: {
-    label: 'Survey',
-    blurb: 'Daylight basemap, real buildings. For reading the plan.',
-  },
-  tactical: {
-    label: 'Tactical',
-    blurb: 'Dark instrument view. Real buildings and terrain traced in neon.',
-  },
-}
-
 const ACCENT = '#3fe0ff'
 
 /** The study-area outline: warm over a photograph, cyan over the dark globe. */
@@ -56,19 +44,6 @@ const BOUNDARY = { survey: '#ffd54f', tactical: ACCENT }
 
 export function boundaryColour(mode: ViewMode): Color {
   return Color.fromCssColorString(BOUNDARY[mode])
-}
-
-/**
- * Height ramp endpoints and band count.
- *
- * These mirror the shader in `techMaterial.ts`, and the legend reads them, so the
- * two have to agree. Quoting rather than retyping is the only reason they cannot
- * drift apart silently.
- */
-export const HEIGHT_RAMP = {
-  low: '#0d4a78',
-  high: '#ffb03a',
-  bands: 6,
 }
 
 export interface ViewModeContext {

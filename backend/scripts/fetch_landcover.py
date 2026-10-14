@@ -72,13 +72,6 @@ ESA_TO_OURS: dict[int, str] = {
 CROPLAND_IS_APPROXIMATION = True
 
 
-def tile_name(lon: float, lat: float) -> str:
-    """ESA tiles are 3x3 degrees named by their south-west corner."""
-    south = int(np.floor(lat / 3.0) * 3)
-    west = int(np.floor(lon / 3.0) * 3)
-    return f"N{south:02d}E{west:03d}"
-
-
 def covering_tiles(bounds: tuple[float, float, float, float]) -> list[str]:
     """Every 3x3 degree tile the extent touches.
 

@@ -61,14 +61,6 @@ let terrainTilesetHandle: TilesetHandle | null = null
 
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
-export function usePropsRevision(): number {
-  return useProps((s) => s.rev)
-}
-
-export function onlinePropStatus(): { loaded: number; failed: number } {
-  return { loaded: propsHandle?.loaded().length ?? 0, failed: propsHandle?.failed().length ?? 0 }
-}
-
 /**
  * A viewer is only usable while it exists and has not been destroyed.
  *

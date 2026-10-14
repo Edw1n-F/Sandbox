@@ -1,10 +1,9 @@
 /**
  * Chat endpoints: one question about a run, answered as a grounded card.
  *
- * Two ways to ask, same answer:
+ * One way to ask:
  *
- * - `postChat`     -- the card, once it is finished.
- * - `streamChat`   -- server-sent events as it happens: steps, deltas, the card.
+ * - `streamChat`   -- server-sent events: steps, deltas, the card.
  *
  * The event names mirror the backend's `app/schemas/stream.py` set (itself
  * taken from the Constellation repo): `run_started`, `step_started`,
@@ -14,7 +13,6 @@
  * POST with a body -- `EventSource` can only GET, and the run this question is
  * about has to be sent.
  */
-import { http } from './client'
 
 /** One headline number. */
 export interface StatItem {
@@ -70,18 +68,6 @@ export interface ChatRequestBody {
   question: string
   run?: unknown | null
   history?: ChatTurn[]
-}
-
-/** `POST /api/scenes/{sceneId}/chat` -> the finished card. */
-export async function postChat(
-  sceneId: string,
-  body: ChatRequestBody,
-): Promise<AnswerCard> {
-  const { data } = await http.post<{ answer: AnswerCard }>(
-    `/scenes/${sceneId}/chat`,
-    body,
-  )
-  return data.answer
 }
 
 // ---- streaming ---------------------------------------------------------- //
@@ -170,6 +156,3 @@ export async function streamChat(
     onEvent({ event: 'done', status: 'failed', ms: 0 })
   }
 }
-
-/** The base path the http client is configured with (kept for callers that need it). */
-export const chatBase = http

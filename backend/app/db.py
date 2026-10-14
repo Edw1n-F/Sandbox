@@ -108,10 +108,6 @@ def list_docs(directory: Path) -> list[Path]:
     return sorted(p for p in directory.glob("*.json") if p.is_file())
 
 
-def is_file_store() -> bool:
-    return settings.store_mode.lower() == "file"
-
-
 def assert_store_mode() -> None:
     """Fail loudly rather than silently degrading if the mode is unknown."""
     mode = settings.store_mode.lower()
