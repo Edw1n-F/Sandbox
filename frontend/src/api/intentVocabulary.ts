@@ -80,11 +80,22 @@ export const INTENT_VOCABULARY: IntentVocabulary = {
     railing: 'road',
     reservoir: 'water_reservoir',
     pond: 'water_reservoir',
+    // Synonyms the routing test found missing, mirrored from
+    // contracts/intent_vocabulary.json (and therefore from
+    // `ai_plan.EN_ALIASES`, the one vocabulary). Without them a proposal-shaped
+    // turn like "dig a basin in the north" never took the client fast path.
+    'green corridor': 'green_space',
+    'tree corridor': 'green_space',
+    'permeable plaza': 'permeable_paving',
+    basin: 'water_reservoir',
+    'floodable park': 'flood_storage',
+    wetland: 'flood_storage',
   },
   kinds: {
     water_reservoir: 'water reservoir',
     green_space: 'green space',
     permeable_paving: 'permeable paving',
+    flood_storage: 'floodable ground',
     drainage: 'drainage',
     road: 'road',
   },
