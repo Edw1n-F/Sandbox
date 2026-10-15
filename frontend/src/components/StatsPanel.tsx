@@ -62,6 +62,9 @@ export default function StatsPanel() {
   if (!runResult) return null
   const { stats, inputs } = runResult
   const delta = stats.delta
+  // Optional: absent on a run from an older backend, and on a run that moved no
+  // cell. The row it feeds is shown only when cells actually changed.
+  const localHeat = stats.temperature?.local
   const deltaColor =
     Math.abs(delta.unstoredM3) < 1
       ? 'text.secondary'
@@ -140,11 +143,30 @@ export default function StatsPanel() {
         </Typography>
       </Stack>
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Δ surface temp</Typography>
+        <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Δ surface temp (mean)</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>
           {signed(delta.surfaceMeanC, ' °C', 1)}
         </Typography>
       </Stack>
+      {localHeat && localHeat.cellsChanged > 0 && (
+        <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+          <Typography className="hud-label" sx={{ fontSize: 8.5 }}>
+            Δ surface temp (local)
+          </Typography>
+          <Typography
+            className="hud-mono"
+            sx={{ fontSize: 11.5 }}
+            title={
+              'Largest single-cell shift and how many 5 m cells moved by more than ' +
+              `${localHeat.thresholdC} °C. The mean above is held to the slider ` +
+              'by construction, so a project that adds shade or blocks wind shows ' +
+              'up here and not there.'
+            }
+          >
+            {signed(localHeat.peakDeltaC, ' °C', 2)} · {localHeat.cellsChanged} cells
+          </Typography>
+        </Stack>
+      )}
       <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
         <Typography className="hud-label" sx={{ fontSize: 8.5 }}>Green · paved</Typography>
         <Typography className="hud-mono" sx={{ fontSize: 11.5 }}>

@@ -8,7 +8,7 @@
  * React's unmount does not release, so a viewer left alive leaks on every
  * remount. StrictMode double-mounts in development, which is where that shows.
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { create } from 'zustand'
 import {
   Cartesian2,
@@ -76,30 +76,50 @@ import {
 let propsHandle: OnlinePropHandle | null = null
 let tilesetHandle: TilesetHandle | null = null
 let terrainTilesetHandle: TilesetHandle | null = null
-let mtrModel: Model | null = null
-let mtrMarker: Entity | null = null
 let footprintLayer: FootprintLayerHandle | null = null
 
 /**
- * The planned project whose 3D model this viewer draws.
+ * Every loaded planned-project model, keyed by project id.
  *
- * Kept as a constant because the GLB and its footprint sidecar are single
- * assets on the scene record, not a per-project lookup. When a second modelled
- * project lands this becomes a map from project id to model URL, which is why
- * the id is named here rather than inlined at the check.
+ * A Map rather than the single `mtrModel` slot this replaces: a slot can hold
+ * one project, so a second modeled project would silently take the first one's
+ * place. The marker is carried alongside because the two are added and removed
+ * together -- leaking one without the other was a real risk with two separate
+ * module-level `let`s.
  */
-const STATION_PROJECT_ID = 'mtr-station'
+interface ProjectModelEntry {
+  model: Model
+  marker: Entity | null
+}
+const projectModels = new Map<string, ProjectModelEntry>()
+
+function removeProjectModel(viewer: Viewer | null | undefined, entry: ProjectModelEntry): void {
+  if (entry.model && !entry.model.isDestroyed()) viewer?.scene.primitives.remove(entry.model)
+  if (entry.marker && viewer && !viewer.isDestroyed()) viewer.entities.remove(entry.marker)
+}
 
 /**
- * The boxes a planned project stands on, recomputed with the 2.5D layer.
+ * The 2.5D boxes each planned project stands on, keyed by project id and
+ * recomputed with the 2.5D layer.
  *
- * A module-level `let` for the same reason `footprintLayer` is one: the footprint
- * effect and the selection effect are separate, and the second has to read what
- * the first computed. `EMPTY_IDS` is shared and never mutated, so "nothing
- * hidden" is one value rather than a new Set on every render.
+ * Per project, not one set, because the boxes to hide are the union over
+ * whichever projects are selected: with a single set, turning one of two
+ * projects off would restore the other's boxes too. A module-level `Map` for the
+ * same reason `footprintLayer` is a module-level `let` -- the footprint effect
+ * and the selection effect are separate, and the second has to read what the
+ * first computed.
  */
-let stationHiddenIds: ReadonlySet<string> = new Set<string>()
-const EMPTY_IDS: ReadonlySet<string> = new Set<string>()
+const projectHiddenIds = new Map<string, ReadonlySet<string>>()
+
+/** The boxes to hide for a given selection: the union over the selected projects. */
+function hiddenFor(selected: ReadonlySet<string>): ReadonlySet<string> {
+  const out = new Set<string>()
+  for (const projectId of selected) {
+    const ids = projectHiddenIds.get(projectId)
+    if (ids) for (const id of ids) out.add(id)
+  }
+  return out
+}
 
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
@@ -212,22 +232,34 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
   const plans = usePlanStore((s) => s.plans)
   /**
-   * Whether the MTR station project is active.
+   * The ids of the planned projects that are currently on.
    *
-   * Read from the run's selection rather than a layer flag, so the station is
-   * visible exactly when the run scores it. Two sources of truth for "is the
-   * station on" is how the picture and the number come to disagree.
+   * Read from the run's selection rather than a layer flag, so a project is
+   * visible exactly when the run scores it. Two sources of truth for "is it on"
+   * is how the picture and the number come to disagree.
    *
    * The selection holds plan **uuids**, not project ids: `create_plan` mints a
    * uuid and the seeder tags the plan with `params.projectId`. Comparing the
-   * selection against the project id directly therefore never matches, which is
-   * a bug this line had on its first draft -- the station appeared in the panel
-   * as selected and nothing moved on the map. Resolve through the plan list.
+   * selection against a project id directly never matches -- the first draft did
+   * that, and the project showed as selected in the panel while nothing moved on
+   * the map. Resolve through the plan list.
+   *
+   * Memoised so the set only changes identity when the selection does: the model
+   * effect depends on it, and a fresh Set per render would reload every model.
    */
-  const stationPlanId = plans.find(
-    (p) => (p.params as { projectId?: string } | undefined)?.projectId === STATION_PROJECT_ID,
-  )?.planId
-  const showStation = Boolean(stationPlanId) && selectedPlanIds.includes(stationPlanId!)
+  const selectedProjectIds = useMemo(() => {
+    const byPlan = new Map<string, string>()
+    for (const p of plans) {
+      const projectId = (p.params as { projectId?: string } | undefined)?.projectId
+      if (projectId) byPlan.set(p.planId, projectId)
+    }
+    const out = new Set<string>()
+    for (const planId of selectedPlanIds) {
+      const projectId = byPlan.get(planId)
+      if (projectId) out.add(projectId)
+    }
+    return out
+  }, [plans, selectedPlanIds])
   /**
    * The same value, for the footprint effect to read without depending on it.
    *
@@ -236,8 +268,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
    * applies the hidden set. The selection is applied by `setHiddenIds` instead,
    * which is what that method is for.
    */
-  const showStationRef = useRef(showStation)
-  showStationRef.current = showStation
+  const selectedProjectIdsRef = useRef(selectedProjectIds)
+  selectedProjectIdsRef.current = selectedProjectIds
   const setPlanProjectLoading = useSceneStore((s) => s.setPlanProjectLoading)
   const layers = useSceneStore((s) => s.layers)
   const viewMode = useSceneStore((s) => s.viewMode)
@@ -829,81 +861,103 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     }
   }, [showInterventions, interventions])
 
-  // ---- MTR Plan Project GLB model ----------------------------------------
+  // ---- Planned-project GLB models -----------------------------------------
+  // One effect for every project the scene lists, not one per hardcoded id. The
+  // list comes from the scene record (built server-side from
+  // `data/projects/*.json`), so a second modeled project appears with no change
+  // here -- that was the point of replacing the two singular URL fields.
+  //
+  // A project's model is shown iff its plan is in the run's selection, which is
+  // the same source of truth the run uses. The models are held in a Map keyed by
+  // project id; the previous single `mtrModel` slot could only ever hold one.
   useEffect(() => {
     const viewer = viewerRef.current
-    const url = terrainMeta?.planProjectUrl
-    if (!isLive(viewer) || !url || !showStation) {
-      if (mtrModel && !mtrModel.isDestroyed()) {
-        viewer?.scene.primitives.remove(mtrModel)
-        mtrModel = null
-      }
+    const projects = (terrainMeta?.projects ?? []).filter((p) => p.modelUrl)
+    if (!isLive(viewer)) return
+
+    let cancelled = false
+    const wanted = projects.filter((p) => selectedProjectIds.has(p.projectId))
+    const wantedIds = new Set(wanted.map((p) => p.projectId))
+
+    // Drop models for projects that are no longer selected.
+    for (const [id, entry] of projectModels) {
+      if (wantedIds.has(id)) continue
+      removeProjectModel(viewer, entry)
+      projectModels.delete(id)
+    }
+    if (!wanted.length) {
+      viewer.scene.requestRender()
       return
     }
 
-    console.warn('[planProject] loading GLB:', url)
     setPlanProjectLoading(true)
-    let cancelled = false
-    // Confirmed inside scene bbox (113.9922–113.9994 E, 22.431–22.4363 N).
-    // Real station (22°25′55″N 113°59′17″E) is ~400 m west of the scene boundary,
-    // so we place the model at the cluster of buildings the station would replace.
-    const MTR_LON = 113.9930
-    const MTR_LAT = 22.4360
-    const MTR_SCALE = 50
-
     void whenDemReady().then(async () => {
-      if (cancelled) return
-      const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
-      // The GLB has a baked -90° X rotation (Blender Y-up export convention).
-      // After Cesium applies it, the visual base of the model aligns with the
-      // ENU origin (Z=0 in local frame). Place the origin directly at terrain
-      // height — no vertical offset needed.
-      const originH = terrainM
-      const labelH  = terrainM + (0.45 + 0.48) * MTR_SCALE + 5   // above model top
-      console.warn(`[planProject] terrain=${terrainM.toFixed(1)} m, origin=${originH.toFixed(1)} m`)
-
-      const model = await Model.fromGltfAsync({
-        url,
-        modelMatrix: Transforms.eastNorthUpToFixedFrame(
-          Cartesian3.fromDegrees(MTR_LON, MTR_LAT, originH),
-        ),
-        scale: MTR_SCALE,
-      })
-      if (cancelled || !isLive(viewerRef.current)) { model.destroy(); return }
-      const v = viewerRef.current!
-      mtrModel = model
-      v.scene.primitives.add(model)
-
-      mtrMarker = v.entities.add({
-        position: Cartesian3.fromDegrees(MTR_LON, MTR_LAT, labelH),
-        label: {
-          text: '洪水桥站\nMTR Hung Shui Kiu',
-          font: 'bold 14px sans-serif',
-          style: LabelStyle.FILL_AND_OUTLINE,
-          fillColor: Color.WHITE,
-          outlineColor: Color.fromCssColorString('#0a2e1a'),
-          outlineWidth: 3,
-          verticalOrigin: VerticalOrigin.BOTTOM,
-          pixelOffset: new Cartesian2(0, -10),
-          scaleByDistance: new NearFarScalar(500, 1.0, 3000, 0.75),
-          translucencyByDistance: new NearFarScalar(3000, 1.0, 8000, 0.0),
-          showBackground: true,
-          backgroundColor: Color.fromCssColorString('#0d4a2c').withAlpha(0.82),
-          backgroundPadding: new Cartesian2(8, 5),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-        point: {
-          pixelSize: 14,
-          color: Color.fromCssColorString('#5cff9d'),
-          outlineColor: Color.fromCssColorString('#0a2e1a'),
-          outlineWidth: 2,
-          scaleByDistance: new NearFarScalar(300, 1.4, 5000, 0.6),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-      })
-
-      void v.camera.flyTo({
-        destination: Cartesian3.fromDegrees(MTR_LON, MTR_LAT - 0.004, labelH + 300),
+      if (cancelled || !isLive(viewerRef.current)) return
+      for (const project of wanted) {
+        if (projectModels.has(project.projectId)) continue
+        const origin = project.origin
+        if (!origin) {
+          console.error(`[projects] ${project.projectId} has no origin; cannot place its model`)
+          continue
+        }
+        const [lon, lat] = origin
+        const scale = project.scale ?? 1
+        const terrainM = sampleDemHeight(lon, lat) ?? 11.3
+        // The GLB has a baked -90° X rotation (Blender Y-up export convention).
+        // After Cesium applies it, the visual base of the model aligns with the
+        // ENU origin (Z=0 in local frame). Place the origin directly at terrain
+        // height — no vertical offset needed.
+        const labelH = terrainM + (0.45 + 0.48) * scale + 5
+        try {
+          const model = await Model.fromGltfAsync({
+            url: project.modelUrl!,
+            modelMatrix: Transforms.eastNorthUpToFixedFrame(
+              Cartesian3.fromDegrees(lon, lat, terrainM),
+            ),
+            scale,
+          })
+          if (cancelled || !isLive(viewerRef.current)) { model.destroy(); return }
+          const v = viewerRef.current!
+          v.scene.primitives.add(model)
+          const marker = project.label ? v.entities.add({
+            position: Cartesian3.fromDegrees(lon, lat, labelH),
+            label: {
+              text: project.label,
+              font: 'bold 14px sans-serif',
+              style: LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Color.WHITE,
+              outlineColor: Color.fromCssColorString('#0a2e1a'),
+              outlineWidth: 3,
+              verticalOrigin: VerticalOrigin.BOTTOM,
+              pixelOffset: new Cartesian2(0, -10),
+              scaleByDistance: new NearFarScalar(500, 1.0, 3000, 0.75),
+              translucencyByDistance: new NearFarScalar(3000, 1.0, 8000, 0.0),
+              showBackground: true,
+              backgroundColor: Color.fromCssColorString('#0d4a2c').withAlpha(0.82),
+              backgroundPadding: new Cartesian2(8, 5),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            point: {
+              pixelSize: 14,
+              color: Color.fromCssColorString('#5cff9d'),
+              outlineColor: Color.fromCssColorString('#0a2e1a'),
+              outlineWidth: 2,
+              scaleByDistance: new NearFarScalar(300, 1.4, 5000, 0.6),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+          }) : null
+          projectModels.set(project.projectId, { model, marker })
+          console.warn(`[projects] ${project.projectId} model loaded at ${lon}, ${lat}`)
+        } catch (err) {
+          // One project failing to load must not take the others with it.
+          console.error(`[projects] ${project.projectId} model failed:`, err)
+        }
+      }
+      if (cancelled || !isLive(viewerRef.current)) return
+      viewerRef.current!.scene.requestRender()
+      setPlanProjectLoading(false)
+      void viewerRef.current!.camera.flyTo({
+        destination: Cartesian3.fromDegrees(wanted[0].origin![0], wanted[0].origin![1] - 0.004, 360),
         orientation: {
           heading: CesiumMath.toRadians(0),
           pitch: CesiumMath.toRadians(-25),
@@ -911,44 +965,40 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         },
         duration: 2.0,
       })
-
-      v.scene.requestRender()
-      setPlanProjectLoading(false)
-      console.warn('[planProject] GLB loaded and visible')
     }).catch((err) => {
       setPlanProjectLoading(false)
-      console.error('[planProject] GLB failed to load:', err)
+      console.error('[projects] model load failed:', err)
     })
 
-    return () => {
-      cancelled = true
-      setPlanProjectLoading(false)
-      if (mtrModel && !mtrModel.isDestroyed()) {
-        viewerRef.current?.scene.primitives.remove(mtrModel)
-        mtrModel = null
-      }
-      if (mtrMarker) {
-        viewerRef.current?.entities.remove(mtrMarker)
-        mtrMarker = null
-      }
-    }
-  }, [terrainMeta?.planProjectUrl, showStation, setPlanProjectLoading])
+    return () => { cancelled = true }
+  }, [terrainMeta?.projects, selectedProjectIds, setPlanProjectLoading])
 
-  // ---- 2.5D footprint overlay (Plan Project companion) --------------------
+  // Removing a project's model on unmount is the sibling of the load above, and
+  // is deliberately its own effect: the load effect's cleanup only cancels an
+  // in-flight fetch, so a viewer teardown would otherwise leave its models and
+  // markers in the destroyed scene.
+  useEffect(() => () => {
+    const viewer = viewerRef.current
+    for (const entry of projectModels.values()) removeProjectModel(viewer, entry)
+    projectModels.clear()
+  }, [])
+
+  // ---- 2.5D footprint overlay ---------------------------------------------
   // Draw the city as 2.5D white massing in place of the textured 3D Tiles.
   //
   // This is the building *style* and nothing else: whether a planned project is
   // present is a separate question, answered by the run's selection. The set of
-  // boxes a project covers is computed here because it needs the building list,
-  // and stashed in `stationHiddenIds` for the effect below to apply.
+  // boxes each project covers is computed here because it needs the building
+  // list, and kept per project in `projectHiddenIds` for the effect below to
+  // apply.
   useEffect(() => {
     const viewer = viewerRef.current
     const buildingsUrl = terrainMeta?.buildingsUrl
-    const footprintUrl = terrainMeta?.planProjectFootprintUrl
-    if (!isLive(viewer) || !showMassing25d || !buildingsUrl || !footprintUrl) {
+    const withFootprint = (terrainMeta?.projects ?? []).filter((p) => p.footprintUrl)
+    if (!isLive(viewer) || !showMassing25d || !buildingsUrl) {
       footprintLayer?.destroy()
       footprintLayer = null
-      stationHiddenIds = new Set()
+      projectHiddenIds.clear()
       return
     }
 
@@ -959,29 +1009,35 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         // for each footprint, otherwise every box sinks into the terrain.
         await whenDemReady()
         if (cancelled || !isLive(viewerRef.current)) return
-        const [buildings, footprint] = await Promise.all([
+        const [buildings, footprints] = await Promise.all([
           fetch(buildingsUrl).then((r) => r.json() as Promise<FeatureCollection<Polygon | MultiPolygon, BuildingProps>>),
-          fetch(footprintUrl).then((r) => r.json() as Promise<Feature<Polygon> | Polygon>),
+          Promise.all(withFootprint.map(async (p) => ({
+            projectId: p.projectId,
+            footprint: await fetch(p.footprintUrl!).then((r) => r.json() as Promise<Feature<Polygon> | Polygon>),
+          }))),
         ])
         if (cancelled || !isLive(viewerRef.current)) return
-        stationHiddenIds = collectIntersectingIds(buildings, footprint, (a, b) =>
-          booleanIntersects(a as never, b as never),
-        )
+        projectHiddenIds.clear()
+        for (const { projectId, footprint } of footprints) {
+          projectHiddenIds.set(projectId, collectIntersectingIds(buildings, footprint, (a, b) =>
+            booleanIntersects(a as never, b as never),
+          ))
+        }
         footprintLayer?.destroy()
-        // Built with the project's boxes hidden or shown according to the
-        // current selection, so the layer is never briefly wrong. Read through
-        // the ref: `showStation` is deliberately NOT a dependency of this effect
-        // (see below), so the prop value here would be a stale closure.
+        // Built with the selected projects' boxes already hidden, so the layer is
+        // never briefly wrong. Read through the ref: the selection is deliberately
+        // NOT a dependency of this effect (see below), so the closed-over value
+        // would be stale.
         footprintLayer = createFootprintLayer(
           viewerRef.current,
           buildings,
-          showStationRef.current ? stationHiddenIds : EMPTY_IDS,
+          hiddenFor(selectedProjectIdsRef.current),
         )
         console.warn(
-          `[planProject] 2.5D overlay: ${footprintLayer.size} boxes, ${stationHiddenIds.size} under the project footprint`,
+          `[projects] 2.5D overlay: ${footprintLayer.size} boxes, footprints for ${projectHiddenIds.size} project(s)`,
         )
       } catch (err) {
-        console.error('[planProject] 2.5D overlay failed:', err)
+        console.error('[projects] 2.5D overlay failed:', err)
       }
     })()
 
@@ -990,18 +1046,20 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       footprintLayer?.destroy()
       footprintLayer = null
     }
-  }, [showMassing25d, terrainMeta?.buildingsUrl, terrainMeta?.planProjectFootprintUrl])
+  }, [showMassing25d, terrainMeta?.buildingsUrl, terrainMeta?.projects])
 
-  // Hide the boxes a planned project stands on -- only while that project is
-  // actually on. With the project off there is nothing to replace them with, and
-  // a hole in the massing reads as missing data rather than as a design choice.
+  // Hide the boxes the selected projects stand on -- only while those projects
+  // are actually on. With a project off there is nothing to replace its boxes
+  // with, and a hole in the massing reads as missing data rather than a design
+  // choice. The visible set is the UNION over every selected project, so two
+  // projects each hide their own boxes and turning one off restores only its own.
   //
   // A separate effect rather than a rebuild: `setHiddenIds` toggles 390 entities
   // in place, where recreating the layer would tear down and refetch.
   useEffect(() => {
-    footprintLayer?.setHiddenIds(showStation ? stationHiddenIds : EMPTY_IDS)
+    footprintLayer?.setHiddenIds(hiddenFor(selectedProjectIds))
     viewerRef.current?.scene.requestRender()
-  }, [showStation])
+  }, [selectedProjectIds])
 
   return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }

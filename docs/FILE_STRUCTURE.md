@@ -114,8 +114,12 @@ one-off setup.
 ## What is *not* source
 
 Two directories under `backend/data/` are a **runtime store**, not part of the build.
-Exactly two files in them are committed — the seeded scene and the baseline plan —
-and `.gitignore` allowlists precisely those by id.
+Three kinds of file in them are committed — the seeded scene, the baseline plan, and
+the plans for planned projects (`plans/project-<id>.json` with its
+`interventions/project-<id>-<n>.json`). `.gitignore` allowlists the first two by id
+and the third with one `project-*` glob, so adding a project needs no ignore-file
+edit. The project plans are committed deliberately: they are authored from
+`data/projects/<id>.json` and have to read the same on every clone.
 
 Everything else there is residue. The suites that create records redirect
 `settings.*_dir` at a temp copy (`backend/tests/_tmpstore.py`), so running them no

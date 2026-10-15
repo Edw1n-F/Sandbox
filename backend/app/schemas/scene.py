@@ -306,8 +306,33 @@ class TerrainRead(RowModel):
     terrain_3d_url: str | None = None
     waterbody_url: str | None = None
     infrastructure_url: str | None = None
-    plan_project_url: str | None = None
-    plan_project_footprint_url: str | None = None
+    projects: list["ProjectModel"] = Field(default_factory=list)
+
+
+class ProjectModel(WireModel):
+    """One planned project's 3D presence on a scene.
+
+    A list, not two singular fields. `plan_project_url` and
+    `plan_project_footprint_url` described exactly one modeled project on the
+    whole scene, so the viewer's model handle and its project id were both
+    hardcoded and a second model could not appear at all -- the URLs, not the
+    frontend, were the ceiling.
+
+    Built server-side from `data/projects/*.json`, which is the one home for a
+    project's non-geometric facts. The geometry and the effects live in the same
+    file; this is the subset the viewer needs in order to draw it.
+    """
+
+    project_id: str
+    name: str
+    model_url: str | None = None
+    footprint_url: str | None = None
+    # Where the model's origin sits and how big to draw it. Must match what
+    # `compute_plan_project_footprint.py` used, or the 2.5D boxes hidden beneath
+    # the model will not line up with the model itself.
+    origin: tuple[float, float] | None = None
+    scale: float = 1.0
+    label: str | None = None
 
 
 PlanType = Literal[

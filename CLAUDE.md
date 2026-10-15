@@ -47,6 +47,7 @@ python scripts/tiles_to_rasters.py           # Open3Dhk tiles -> 5 m DTM + flow 
 python scripts/build_buildings.py            # Open3Dhk + Overture -> buildings_hsk.json
 python scripts/build_landclass.py            # fuse WorldCover + trees + real buildings
 python scripts/seed_scene.py                 # prints the sceneId
+python scripts/seed_projects.py              # data/projects/*.json -> plans; only needed after adding/editing a project (plans are committed)
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)

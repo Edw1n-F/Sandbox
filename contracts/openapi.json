@@ -933,6 +933,85 @@
         "title": "PlanUpdate",
         "type": "object"
       },
+      "ProjectModel": {
+        "additionalProperties": false,
+        "description": "One planned project's 3D presence on a scene.\n\nA list, not two singular fields. `plan_project_url` and\n`plan_project_footprint_url` described exactly one modeled project on the\nwhole scene, so the viewer's model handle and its project id were both\nhardcoded and a second model could not appear at all -- the URLs, not the\nfrontend, were the ceiling.\n\nBuilt server-side from `data/projects/*.json`, which is the one home for a\nproject's non-geometric facts. The geometry and the effects live in the same\nfile; this is the subset the viewer needs in order to draw it.",
+        "properties": {
+          "footprintUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprinturl"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "modelUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelurl"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "projectId": {
+            "title": "Projectid",
+            "type": "string"
+          },
+          "scale": {
+            "default": 1.0,
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "required": [
+          "projectId",
+          "name"
+        ],
+        "title": "ProjectModel",
+        "type": "object"
+      },
       "RunRequest": {
         "additionalProperties": false,
         "description": "POST /api/scenes/{sceneId}/run body -- one live simulation run.\n\nThe per-run inputs ADR-024 refused to persist onto the scene: they belong\nto a run, not to the object every plan hangs off. ``plan_id`` selects the\nscenario; ``None`` is a baseline run (today's land cover, no\ninterventions).\n\n``plan_ids`` is the cumulative selection: every active project's plan, whose\ninterventions are merged into one scenario. It exists because the brief's\nwhole point is *cumulative* effect -- \"rather than only assessing each\nproject individually\" -- and a single-plan run cannot express that. When\nboth are sent ``plan_ids`` wins and ``plan_id`` is treated as its first\nentry, so a single-project client and a cumulative one share one code path.",
@@ -1383,27 +1462,12 @@
             ],
             "title": "Infrastructureurl"
           },
-          "planProjectFootprintUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Planprojectfootprinturl"
-          },
-          "planProjectUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Planprojecturl"
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectModel"
+            },
+            "title": "Projects",
+            "type": "array"
           },
           "terrain3DUrl": {
             "anyOf": [

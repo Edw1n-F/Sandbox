@@ -311,6 +311,45 @@ def _heat_terms(grids: Grids, scene_id: str,
     return terms
 
 
+# A cell counts as "moved" when its surface temperature differs by more than this.
+# 0.1 C is above the float noise of two re-anchored fields (which agree to ~1e-6
+# where nothing changed) and below anything a planner would call a real shift.
+LOCAL_HEAT_THRESHOLD_C = 0.1
+
+
+def local_heat_effect(scen_anomaly: np.ndarray, base_anomaly: np.ndarray,
+                      cell_area_m2: float) -> dict[str, Any]:
+    """Where, and by how much, a scenario moved the surface temperature.
+
+    The site-mean rows cannot show this, and not by accident: the temperature
+    field is re-anchored so its mean equals the scenario mean, which makes
+    ``surfaceMeanC`` read the slider whatever a project does. A project that adds
+    shade or blocks wind redistributes heat across the cells it stands on, so its
+    effect lives in the per-cell difference and nowhere else. Reporting only the
+    mean would tell a planner that a project which cooled one block "changed
+    nothing", which is the exact failure the stats panel exists to prevent.
+
+    ``peakDeltaC`` is signed by the largest-magnitude cell, so "-0.4" (cooler)
+    and "+0.4" (hotter) are distinguishable; a bare magnitude would hide which
+    way the project cut. ``meanDeltaC`` is reported alongside it to make the
+    pinning visible rather than asserted: it is ~0 by construction.
+    """
+    diff = np.asarray(scen_anomaly, dtype=np.float64) - np.asarray(base_anomaly, dtype=np.float64)
+    moved = np.abs(diff) > LOCAL_HEAT_THRESHOLD_C
+    cells = int(moved.sum())
+    peak = float(diff.flat[int(np.abs(diff).argmax())]) if diff.size else 0.0
+    return {
+        "cellsChanged": cells,
+        "areaChangedM2": round(cells * float(cell_area_m2), 1),
+        "peakDeltaC": round(peak, 3),
+        "meanDeltaC": round(float(diff.mean()), 5) if diff.size else 0.0,
+        "thresholdC": LOCAL_HEAT_THRESHOLD_C,
+        # True when the site mean cannot show an effect that exists. The panel
+        # reads this to say "unchanged at the mean" instead of implying "no effect".
+        "hiddenAtMean": bool(cells > 0 and abs(float(diff.mean())) < 0.01),
+    }
+
+
 def _massing_overrides(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The planned projects' massing effects, ready for :func:`_heat_terms`.
 
@@ -432,6 +471,11 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
         "baseline": stats.get("baseline") or {},
         "delta": stats.get("delta") or {},
         "ratios": stats.get("ratios") or {},
+        # Where the scenario moved the temperature field. Handed over so a model
+        # that mentions a project's shade or wind effect quotes the run's own
+        # figure and passes the grounding check, rather than inventing one or
+        # saying "no heat change" because the site mean cannot show it.
+        "localHeat": (stats.get("temperature") or {}).get("local") or {},
         "applied": [{"kind": a["kind"], "areaM2": a["areaM2"]} for a in applied],
         "skipped": [{"kind": s["kind"], "why": s["why"]} for s in skipped],
         "data": data_quality or {},
@@ -639,6 +683,11 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
                 "rendered as deviation from the site mean. Air temperature is "
                 f"estimated as surface minus {SURFACE_TO_AIR_OFFSET_C:.0f} C."
             ),
+            # Where the scenario moved the field. The site mean is pinned to the
+            # slider by construction, so this is the only place a project's shade
+            # and wind effect is visible.
+            "local": local_heat_effect(
+                scen_temp["anomalyC"], base_temp["anomalyC"], cell_area),
         },
         "baseline": {
             **base_ledger,

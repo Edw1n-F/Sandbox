@@ -26,7 +26,19 @@ fixed-footprint project and the machinery it rides on. A planned project is data
 (`backend/data/projects/<id>.json`) declaring its effects, seeded into a plan by
 `scripts/seed_projects.py`; toggling it puts that plan in `selectedPlanIds`, so
 the run scores it and the cumulative-coverage guard counts it with no special
-case anywhere. What is still missing is **a second project**.
+case anywhere. A second project is a data edit, not a code change: the scene
+record lists every project that has a model (`terrain.projects`, built from the
+same files), the viewer keeps one model per project, and the Projects panel
+builds a row per seeded plan. Proven by adding a throwaway second project and
+driving both independently in a browser, then removing it. What is still missing
+is the **second real project** itself.
+
+A project's run effect has two halves that behave differently. Its storage moves
+the water ledger like any intervention. Its massing moves the heat geometry, and
+that effect is **local**: the temperature field is re-anchored so its mean equals
+the scenario mean by construction, so the site-mean rows can never show it. The
+run therefore reports it separately (`stats.temperature.local`: cells changed,
+signed peak) and the panel shows it as `Δ surface temp (local)`.
 
 The building **style** switch (3D / 2.5D) is deliberately separate from the
 project toggles. It changes which layer the city is drawn from and nothing else:

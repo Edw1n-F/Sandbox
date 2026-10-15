@@ -96,6 +96,21 @@ def run_card(stats: dict[str, Any], rainfall_mm: float,
     if d_heat:
         cause_bits.append(f"{d_heat:+.3f} vs baseline.")
 
+    # The site-mean delta above cannot show a project's shade or wind effect: the
+    # field is re-anchored to the scenario mean, so it reads ~0 whatever a project
+    # does. When cells moved but the mean did not, say so, in the row itself, so
+    # a flat "no change" is never read as "no effect".
+    local = (stats.get("temperature") or {}).get("local") or {}
+    heat_ci = None if not d_heat else f"{d_heat:+.3f} vs baseline"
+    if local.get("cellsChanged"):
+        peak = float(local.get("peakDeltaC", 0.0))
+        n = int(local["cellsChanged"])
+        heat_ci = f"{peak:+.2f} °C at {n} cells"
+        cause_bits.append(
+            f"Local surface-temperature shift up to {peak:+.2f} °C over {n} cells; "
+            "the site mean is held to the slider."
+        )
+
     todo = (
         "Run again with a project enabled to compare interventions."
         if not (improved or worsened)
@@ -107,8 +122,7 @@ def run_card(stats: dict[str, Any], rainfall_mm: float,
                  ci=None if abs(d_unstored) < 1.0 else f"{_m3(d_unstored)} vs baseline"),
         StatItem(l="Wet area", v=f"{wet:.1f} ha",
                  ci=None if not d_wet else f"{d_wet:+.1f} ha vs baseline"),
-        StatItem(l="Heat index", v=f"{heat:.3f}",
-                 ci=None if not d_heat else f"{d_heat:+.3f} vs baseline"),
+        StatItem(l="Heat index", v=f"{heat:.3f}", ci=heat_ci),
     ]
     if isinstance(temperature_c, (int, float)):
         stats_items.append(StatItem(l="Surface temperature", v=f"{temperature_c:.1f} °C"))
