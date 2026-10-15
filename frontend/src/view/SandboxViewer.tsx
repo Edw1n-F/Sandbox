@@ -42,6 +42,7 @@ import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions, type InterventionLayerHandle } from './interventionLayer'
+import { addProposals, type ProposalLayerHandle } from './proposalLayer'
 import { deleteIntervention } from '@/api/planApi'
 import { publishHeading } from './cameraHeading'
 import { demElevationRange, sampleDemHeight, whenDemReady } from './demProvider'
@@ -225,6 +226,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const bbox = useSceneStore((s) => s.scene?.bbox ?? null)
   const terrainMeta = useSceneStore((s) => s.terrain)
   const interventions = usePlanStore((s) => s.interventions)
+  const proposals = usePlanStore((s) => s.proposals)
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
@@ -860,6 +862,37 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       handle?.dispose()
     }
   }, [showInterventions, interventions])
+
+  // ---- proposal draft preview (unconfirmed) -------------------------------
+  //
+  // DESIGN §2.4: while the confirm gate is open, each proposal is drawn as a
+  // translucent, dashed draft block from `planStore.proposals`. On Apply or
+  // Dismiss the store clears the list and this effect's cleanup disposes the
+  // layer, so a dismissed draft disappears from the scene.
+  //
+  // Keyed on the array identity, which `setProposals`/`clearProposals` replace,
+  // for the same reason the interventions effect is: an effect keyed on a
+  // rebuild would tear the layer down on every unrelated re-render.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    if (!isLive(viewer) || proposals.length === 0) return
+
+    let disposed = false
+    let handle: ProposalLayerHandle | undefined
+    void addProposals(viewer, proposals).then((h) => {
+      // The gate may have been resolved while the GeoJSON was in flight.
+      if (disposed) {
+        h.dispose()
+        return
+      }
+      handle = h
+    })
+
+    return () => {
+      disposed = true
+      handle?.dispose()
+    }
+  }, [proposals])
 
   // ---- Planned-project GLB models -----------------------------------------
   // One effect for every project the scene lists, not one per hardcoded id. The

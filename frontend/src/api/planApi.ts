@@ -27,6 +27,66 @@ export async function deleteIntervention(
 ): Promise<void> {
   await http.delete(`/plans/${planId}/interventions/${interventionId}`)
 }
+/** The **served** size of a proposal (design §2.2). */
+export interface ProposalSize {
+  /** Rasterised cell count of the served geometry, holes subtracted. */
+  cells: number
+  /** Shoelace area of the served geometry, hectares. */
+  areaHa: number
+  /** `cells / 17,316`. */
+  coverageFraction: number
+}
+
+/**
+ * The model's raw centre + size ask, echoed verbatim (design §2.2).
+ *
+ * Provenance only: the served `geometry` is what the server produced from this
+ * after snapping and clipping, and it is never rendered or scored from here.
+ */
+export interface ProposalRequested {
+  centre?: { lon: number; lat: number } | null
+  sizeCells?: number | null
+  /** The ask is echoed verbatim, so unnamed keys survive. */
+  [key: string]: unknown
+}
+
+/** One parameter the run reads for a kind, with its honesty label (design §2.2). */
+export interface ParameterEntry {
+  value: number
+  unit: string
+  status: string
+  source: string
+}
+
+/** The constraint report carried by every proposal (design §2.2). */
+export interface ProposalConstraints {
+  buildingsClear: boolean
+  buildingOverlapCells: number
+  buildingIds: string[]
+  overlapCells: number
+  overlapsWith: string[]
+  clippedCells: number
+  clippedFraction: number
+  withinSingleCap: boolean
+  withinCumulativeCap: boolean
+  /** `class_change` | `cn_only` | `none`. */
+  effect: string
+  effectNote: string
+}
+
+/** One refused proposal, in `AiPlanResult.rejected` (design §2.2). */
+export interface ProposalRejection {
+  interventionType: string
+  siteId: string | null
+  requested: ProposalRequested | null
+  /** Closed set: BUILDING_OVERLAP | OVERLAPS_STAGED | OVER_SINGLE_CAP | ... */
+  reasonCode: string
+  buildingOverlapCells: number
+  overlapCells: number
+  status: string
+  warning: string
+}
+
 /** One AI-proposed feature, not yet persisted (plan v2 §5 confirm gate). */
 export interface InterventionProposal {
   geometry: unknown
@@ -37,6 +97,13 @@ export interface InterventionProposal {
   siteId: string | null
   rationale: string | null
   basis: string | null
+  /** Additive (design §2.2): the size, ask, constraints and parameters. */
+  size?: ProposalSize
+  requested?: ProposalRequested | null
+  constraints?: ProposalConstraints
+  parameters?: Record<string, ParameterEntry>
+  status?: string
+  warning?: string
 }
 
 /** What `POST /api/scenes/{sceneId}/ai-plan` produced, and how. */
@@ -49,6 +116,8 @@ export interface AiPlanResult {
   message: string | null
   /** Non-empty when the request used `apply: false`. */
   proposals?: InterventionProposal[]
+  /** Refusals that did not survive the constraint engine (design §2.2). */
+  rejected?: ProposalRejection[]
   candidateCounts?: Record<string, number>
   fallbackNote?: string | null
 }

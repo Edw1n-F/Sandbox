@@ -1112,8 +1112,8 @@ MIN_STORAGE_DEPTH_M = 0.05
 MAX_STORAGE_DEPTH_M = 10.0
 
 
-def _polygon_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int]]:
-    """Cells whose centre falls inside a polygon ring.
+def _ring_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int]]:
+    """Cells whose centre falls inside one ring.
 
     Scanline over the ring's bounding box rather than a point-in-polygon test per
     cell: the boxes are small (a few hundred cells) and this keeps the whole
@@ -1169,6 +1169,36 @@ def _polygon_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int
             if inside(lon, lat):
                 out.append((r, c))
     return out
+
+
+def _polygon_cells(
+    grids: Grids, coordinates: Any
+) -> list[tuple[int, int]]:
+    """Cells inside a GeoJSON polygon: the outer ring, minus its holes.
+
+    ``coordinates`` is the polygon's coordinate list ``[outer, *holes]``. A
+    bare ring is still accepted -- every caller written before contours
+    carried holes passes one -- and is treated as a hole-free polygon.
+
+    Holes are subtracted, not unioned. A basin with an island inside it does
+    not convert the island: a contour that says "these cells, and not that
+    one" must be honoured by the rasteriser, or the polygon is a drawing and
+    not a geometry. Even-odd is the same arithmetic the outline uses, so the
+    two agree by construction rather than by convention.
+    """
+    if not isinstance(coordinates, (list, tuple)) or not coordinates:
+        return []
+    first = coordinates[0]
+    rings = (
+        list(coordinates)
+        if isinstance(first, (list, tuple)) and first
+        and isinstance(first[0], (list, tuple))
+        else [coordinates]
+    )
+    cells = set(_ring_cells(grids, rings[0]))
+    for hole in rings[1:]:
+        cells -= set(_ring_cells(grids, hole))
+    return sorted(cells)
 
 
 def ledger_for_scenario(
@@ -1367,12 +1397,15 @@ def apply_interventions(
                 skipped.append({"id": fid, "kind": kind, "why": effect["why"]})
             continue
 
-        ring = ((feature.get("geometry") or {}).get("coordinates") or [[]])[0]
-        if not isinstance(ring, list):
+        # The full coordinate list, holes included: a contour polygon says
+        # "these cells, and not the island inside", and reading only the
+        # outer ring would convert the island too.
+        coordinates = (feature.get("geometry") or {}).get("coordinates") or [[]]
+        if not isinstance(coordinates, list) or not coordinates:
             skipped.append({"id": fid, "kind": kind,
                             "why": "malformed geometry: coordinates are not a ring"})
             continue
-        cells = _polygon_cells(grids, ring)
+        cells = _polygon_cells(grids, coordinates)
         if not cells:
             skipped.append({"id": fid, "kind": kind,
                             "why": "the polygon covers no 5 m cell"})

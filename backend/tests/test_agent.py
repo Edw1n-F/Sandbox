@@ -378,12 +378,19 @@ def test_template_card_defaults_intent_to_question() -> None:
     assert _no_run_card().intent == "question"
     assert _no_run_card().intent_hint is None
 
-    # answer() has no LLM configured in the test environment, so it falls back
-    # to template_card. The card the chat endpoint actually emits must carry
-    # the safe default.
+    # answer() has no LLM configured in the test environment. Before the routing
+    # fix every turn fell back to template_card, so "add a water reservoir in the
+    # north" arrived as intent="question": the frontend's intent auto-route never
+    # fired and a proposal-shaped instruction came back as a result card -- the
+    # user's reported complaint. The deterministic classifier now raises it,
+    # while the safe default still holds for questions.
     card = answer("add a water reservoir in the north", {})
-    assert card.intent == "question", card.intent
-    assert card.intent_hint is None, card.intent_hint
+    assert card.intent == "intervention", card.intent
+    assert card.intent_hint == "add a water reservoir in the north", card.intent_hint
+
+    question = answer("what changed?", {})
+    assert question.intent == "question", question.intent
+    assert question.intent_hint is None, question.intent_hint
 
 
 def test_card_accepts_an_llm_supplied_intent() -> None:

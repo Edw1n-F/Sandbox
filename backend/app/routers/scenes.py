@@ -71,6 +71,178 @@ def list_plans(scene_id: str) -> PlanListRead:
     return scene_service.list_plans(scene_id)
 
 
+@router.get("/scenes/{scene_id}/suggestions")
+def get_suggestions(scene_id: str, rainfall_mm: float = 450.0,
+                    max_per_axis: int = 3) -> dict:
+    """GET /api/scenes/{sceneId}/suggestions -- the loop's suggest step.
+
+    Ranked candidate sites, one axis at a time, with the per-cell arithmetic
+    that produced each estimate. Deterministic by construction: no model, no
+    clock, no randomness, so the same query twice returns the same ranking.
+
+    ``rainfall_mm`` is accepted so a suggestion can be read against the run the
+    user is actually looking at; it changes the estimates and never the
+    ordering of the pools.
+    """
+    from app.db import read_doc, scene_path
+    from app.services import suggest
+
+    if read_doc(scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+    return suggest.suggest(rainfall_mm=rainfall_mm,
+                           max_per_axis=max(1, min(int(max_per_axis), 10)))
+
+
+@router.get("/scenes/{scene_id}/project-catalog")
+def get_project_catalog(scene_id: str) -> dict:
+    """GET /api/scenes/{sceneId}/project-catalog -- the fixed project catalog.
+
+    The projects the intervention loop offers, with the footprints already
+    fixed and the provenance already attached. The frontend renders these
+    instead of templating natural-language sentences, so toggling a phase
+    twice produces the same geometry twice.
+
+    Scene-scoped only for consistency with every other route the frontend
+    calls: the catalog describes the study area, and the scene is what pins
+    this request to one. A scene that does not exist is a 404, like anywhere
+    else -- the catalog does not conjure a place to put projects in.
+    """
+    from app.db import read_doc, scene_path
+    from app.services import project_catalog
+
+    if read_doc(scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+    try:
+        return project_catalog.load_catalog()
+    except project_catalog.CatalogError as exc:
+        # 503, not 500: the service is fine, its data is not. The message says
+        # which script regenerates it.
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail=str(exc)) from exc
+
+
+@router.post("/scenes/{scene_id}/pins")
+def pin_intervention(scene_id: str, payload: dict) -> dict:
+    """POST /api/scenes/{sceneId}/pins -- pin one feature into the staged scenario.
+
+    The body is one plan intervention -- geometry, intervention type, params,
+    style -- exactly as the suggestion and catalog services emit them. It is
+    accepted as a plain ``dict`` deliberately: the shape is enforced by
+    ``pins.pin`` through the same ``InterventionIn`` schema every other
+    intervention passes, so a pin cannot introduce a shape the run would then
+    silently ignore, and a malformed body surfaces that schema's own message
+    under 422 rather than a FastAPI body-parse error.
+
+    Pinning is idempotent by fingerprint (kind, geometry, parameters): the same
+    physical feature twice returns the row already there with
+    ``alreadyPinned: true`` instead of a second polygon, which would double its
+    coverage in the guard while changing nothing on the grid. Unpin keeps the
+    row and marks it ``pinned: false``; the next run simply does not compose it.
+    """
+    from app.db import read_doc, scene_path
+    from app.services.pins import PinError, pin
+
+    if read_doc(scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+    try:
+        return pin(scene_id, payload)
+    except PinError as exc:
+        # 422, not 500: the request was well-formed, the machine cannot honour
+        # it, and the client needs to know which part.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/scenes/{scene_id}/pins/{feature_id}/unpin")
+def unpin_intervention(scene_id: str, feature_id: str) -> dict:
+    """POST /api/scenes/{sceneId}/pins/{featureId}/unpin -- take one out.
+
+    Idempotent by row: unpinning an already-unpinned feature repeats the same
+    ``pinned: false`` write and returns the same acknowledgement. An unpin for a
+    feature that is not staged in this scene is a 404 -- the thing being removed
+    is not there -- and never a silent success.
+    """
+    from app.db import read_doc, scene_path
+    from app.services.pins import PinError, unpin
+
+    if read_doc(scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+    try:
+        return unpin(scene_id, feature_id)
+    except PinError as exc:
+        # Both PinError messages here ("nothing is staged", "no staged feature
+        # <id>") say the feature is not staged for this scene: a 404, not a
+        # well-formed request the machine refuses.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=str(exc)) from exc
+
+
+@router.get("/scenes/{scene_id}/pins")
+def list_pins(scene_id: str) -> dict:
+    """GET /api/scenes/{sceneId}/pins -- the staged scenario, rows included.
+
+    Every row of the staged plan, pinned or not: a user who just unpinned
+    something needs it on screen to pin it back. Each row carries the
+    intervention verbatim (geometry byte-for-byte from what the panel quoted),
+    its ``pinned`` flag, and the provenance the row was pinned with -- absent
+    as ``null`` for sources that carry none, never invented here.
+
+    ``status``/``warning`` state what the data is: nothing staged, all rows
+    unpinned (so the next run scores nothing pinned), or N of M rows entering
+    the next run. The footprints are raster reads at 5 m assembled by the
+    suggestion/catalog services, not surveyed sites -- the same disclosure the
+    panels show.
+    """
+    from app.db import read_doc, scene_path
+    from app.services.pins import staged_features, staged_plan_id
+
+    if read_doc(scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+
+    plan_id = staged_plan_id(scene_id)
+    rows = staged_features(scene_id)
+    pinned_count = sum(1 for row in rows if row.get("pinned"))
+
+    if plan_id is None:
+        status_name = "NOTHING_STAGED"
+        warning = ("Nothing is pinned for this scene yet. Pin a suggestion or "
+                   "a catalog phase and the next run scores it.")
+    elif pinned_count == 0:
+        status_name = "ALL_UNPINNED"
+        warning = ("Every staged feature is unpinned, so the next run scores "
+                   "none of them; pin a row to put it back.")
+    else:
+        status_name = "STAGED"
+        warning = (f"{pinned_count} of {len(rows)} staged rows enter the next "
+                   "run. Pinned footprints are the candidates' geometry "
+                   "verbatim -- raster reads at 5 m, not surveyed sites.")
+
+    features = []
+    for row in rows:
+        params = row.get("params") or {}
+        features.append({
+            "id": row.get("id"),
+            "interventionType": row.get("intervention_type"),
+            "geometry": row.get("geometry"),
+            "params": params,
+            "style": row.get("style") or {},
+            "pinned": bool(row.get("pinned")),
+            "provenance": params.get("provenance"),
+        })
+
+    return {
+        "sceneId": scene_id,
+        "status": status_name,
+        "warning": warning,
+        "planId": plan_id,
+        "features": features,
+    }
+
+
 @router.post(
     "/scenes/{scene_id}/plans", status_code=status.HTTP_201_CREATED
 )
@@ -225,6 +397,7 @@ def intervention_features(plan_id: str | None) -> list[dict]:
         # A wire feature wraps the payload in geometry/properties; the ledger wants
         # intervention_type and geometry at the top level, like the stored row.
         props = item.get("properties") or {}
+        params = item.get("params") or props.get("params") or {}
         # The wire is camelCase (`interventionType`); the stored row is
         # snake_case. Both are accepted because both shapes exist in this
         # codebase and guessing one of them wrong returns "unknown" for every
@@ -232,11 +405,13 @@ def intervention_features(plan_id: str | None) -> list[dict]:
         kind = (item.get("interventionType") or item.get("intervention_type")
                 or props.get("interventionType") or props.get("intervention_type")
                 or item.get("kind") or props.get("kind"))
+        pinned = params.get("pinned", item.get("pinned", props.get("pinned", True)))
         out.append({
             "id": item.get("id") or props.get("id"),
             "intervention_type": kind,
             "geometry": item.get("geometry"),
-            "params": item.get("params") or props.get("params") or {},
+            "params": params,
+            "pinned": bool(pinned),
         })
     return out
 
@@ -253,11 +428,18 @@ def intervention_features_many(plan_ids: list[str]) -> list[dict]:
     applying the same polygon twice would double its coverage in the guard while
     changing nothing on the grid -- a silent way to trip the cumulative cap with
     one physical feature.
+
+    Rows marked ``pinned: false`` are dropped: an unpinned row is a feature the
+    user deliberately took out of this run, and scoring it anyway would make
+    "unpin" a no-op that the run does not honour. Anything without the flag --
+    every plan created before pinning existed -- is composed as before.
     """
     seen: set[str] = set()
     merged: list[dict] = []
     for plan_id in plan_ids:
         for feature in intervention_features(plan_id):
+            if feature.get("pinned") is False:
+                continue
             key = str(feature.get("id"))
             if feature.get("id") and key in seen:
                 continue

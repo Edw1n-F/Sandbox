@@ -41,7 +41,9 @@ import {
   type StreamEvent,
 } from '@/api/chatApi'
 import { applyAiPlan, createAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
+import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
+import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
 
 interface Step {
@@ -56,6 +58,12 @@ interface ProposalPayload {
   instruction: string
   provider: string
   proposals: InterventionProposal[]
+  /**
+   * Refusals from the constraint engine (DESIGN §2.2). They travel with the
+   * payload, not as an error: a refused placement is shown, never dropped.
+   * Typed through `AiPlanResult` so it cannot drift from the wire contract.
+   */
+  rejected: NonNullable<AiPlanResult['rejected']>
   groundingNotes: string[]
   candidateCounts: Record<string, number>
   resolved?: 'applied' | 'dismissed'
@@ -86,12 +94,6 @@ const SUGGESTIONS = [
 
 let nextId = 1
 const mkId = () => `m${nextId++}`
-
-/** Does this read as an intervention instruction rather than a question? */
-function looksLikeIntervention(text: string): boolean {
-  if (/\?$/.test(text.trim())) return false
-  return /\b(add|place|plant|fill|remove|rotate|resize|raise|lower|move|scale|build)\b/i.test(text)
-}
 
 /**
  * Pull a string field out of a possibly-unfinished JSON document.
@@ -263,6 +265,114 @@ function CardView({ card }: { card: AnswerCard }) {
 }
 
 /**
+ * The size / constraints / parameters of one proposal, read by field (§2.2).
+ *
+ * A proposal is presented with its evidence and its limits, not as a bare type:
+ * the size it actually covers, whether it touches a building or an already-staged
+ * feature, how much the server clipped away, whether it is inside the caps, and
+ * what the ledger will make of it. The warning line is always shown, so a
+ * screening estimate never reads as a design.
+ */
+function ProposalDetail({ proposal }: { proposal: InterventionProposal }) {
+  const size = proposal.size
+  const constraints = proposal.constraints
+  const parameters = proposal.parameters ? Object.entries(proposal.parameters) : []
+  return (
+    <Box sx={{ mt: 0.25 }}>
+      {size && (
+        <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+          size: {size.cells} cells · {size.areaHa} ha · {(size.coverageFraction * 100).toFixed(2)}% of area
+        </Typography>
+      )}
+      {constraints && (
+        <Box sx={{ mt: 0.25 }}>
+          <Typography
+            className="hud-mono"
+            sx={{ fontSize: 9.5, color: constraints.buildingsClear ? '#5cff9d' : '#ff6b6b', lineHeight: 1.4 }}
+          >
+            buildings: {constraints.buildingsClear ? 'clear' : `overlaps ${constraints.buildingOverlapCells} cell(s)`}
+            {constraints.buildingIds.length > 0 ? ` (${constraints.buildingIds.join(', ')})` : ''}
+          </Typography>
+          <Typography
+            className="hud-mono"
+            sx={{ fontSize: 9.5, color: constraints.overlapCells === 0 ? 'text.secondary' : '#ff9d2e', lineHeight: 1.4 }}
+          >
+            overlap: {constraints.overlapCells} cell(s)
+            {constraints.overlapsWith.length > 0 ? ` with ${constraints.overlapsWith.join(', ')}` : ''}
+          </Typography>
+          {constraints.clippedCells > 0 && (
+            <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+              clipped: {constraints.clippedCells} cell(s) ({(constraints.clippedFraction * 100).toFixed(1)}%)
+            </Typography>
+          )}
+          <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+            caps: single {constraints.withinSingleCap ? 'ok' : 'over'} · cumulative {constraints.withinCumulativeCap ? 'ok' : 'over'}
+          </Typography>
+          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, mt: 0.25 }}>
+            effect: {constraints.effect}{constraints.effectNote ? ` — ${constraints.effectNote}` : ''}
+          </Typography>
+        </Box>
+      )}
+      {parameters.map(([name, entry]) => (
+        <Typography key={name} className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+          {name}: {entry.value} {entry.unit} · {entry.status} · {entry.source}
+        </Typography>
+      ))}
+      {proposal.status && (
+        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25 }}>
+          status: {proposal.status}
+        </Typography>
+      )}
+      {proposal.warning && (
+        <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45 }}>
+          {proposal.warning}
+        </Typography>
+      )}
+    </Box>
+  )
+}
+
+/**
+ * The proposals the constraint engine refused, with the reason named (§2.2, D5).
+ *
+ * A refusal is a first-class object, not an error: a silently shorter list is
+ * indistinguishable from a model that returned less, so a refused placement is
+ * always visible with its `reasonCode` and its plain-words `warning`.
+ */
+function RefusalList({ rejected }: { rejected: NonNullable<AiPlanResult['rejected']> }) {
+  if (rejected.length === 0) return null
+  return (
+    <Box
+      sx={{
+        mt: 0.75,
+        p: 0.75,
+        borderRadius: '4px',
+        border: '1px solid',
+        borderColor: 'rgba(255,107,107,0.4)',
+        bgcolor: 'rgba(255,107,107,0.07)',
+      }}
+    >
+      <Typography className="hud-label" sx={{ fontSize: 9, color: '#ff6b6b' }}>
+        NOT PLACED ({rejected.length})
+      </Typography>
+      {rejected.map((r, i) => (
+        <Box key={`${r.siteId ?? r.interventionType}-${i}`} sx={{ mt: 0.5 }}>
+          <Typography sx={{ fontSize: 10.5, lineHeight: 1.35 }}>
+            {r.interventionType}
+            {r.siteId ? ` · ${r.siteId}` : ''} — {r.reasonCode}
+          </Typography>
+          {r.warning && (
+            <Typography sx={{ fontSize: 10, color: 'text.secondary', lineHeight: 1.4 }}>
+              {r.warning}
+            </Typography>
+          )}
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+/**
  * Confirm gate panel (plan v2 §5): a checklist of proposals + Apply/Dismiss.
  *
  * The payload sits on the message. Once resolved the message is marked and the
@@ -322,7 +432,9 @@ function ProposalReview({
         candidateCounts: payload.candidateCounts,
       })
       if (r.planId) {
-        const { usePlanStore } = await import('@/state/planStore')
+        // The draft is now a persisted plan: drop the preview so the viewer
+        // swaps the dashed draft blocks for the real ones (DESIGN §2.4).
+        usePlanStore.getState().clearProposals()
         await usePlanStore.getState().refreshPlans(sceneId)
         await usePlanStore.getState().selectPlan(r.planId)
         onResolved(
@@ -375,11 +487,13 @@ function ProposalReview({
                   basis: {p.basis}
                 </Typography>
               )}
+              <ProposalDetail proposal={p} />
             </Box>
           }
           sx={{ alignItems: 'flex-start', ml: 0, mr: 0 }}
         />
       ))}
+      <RefusalList rejected={payload.rejected} />
       {error && (
         <Typography sx={{ fontSize: 10.5, color: '#ff6b6b' }}>{error}</Typography>
       )}
@@ -397,7 +511,11 @@ function ProposalReview({
           size="small"
           variant="outlined"
           disabled={busy}
-          onClick={() => onResolved('dismissed')}
+          onClick={() => {
+            // A dismissed draft must disappear from the scene (DESIGN §2.4).
+            usePlanStore.getState().clearProposals()
+            onResolved('dismissed')
+          }}
           sx={{ fontSize: 11 }}
         >
           Dismiss
@@ -537,7 +655,8 @@ export default function ChatPanel() {
           allowedTypes: allowedTypes.length > 0 ? allowedTypes : undefined,
         })
         const proposals = r.proposals ?? []
-        if (proposals.length === 0) {
+        const rejected = r.rejected ?? []
+        if (proposals.length === 0 && rejected.length === 0) {
           setMessages((prev) => [
             ...prev,
             {
@@ -550,6 +669,9 @@ export default function ChatPanel() {
           ])
           return
         }
+        // Hold the draft in the store so the viewer can draw the translucent,
+        // dashed preview blocks (DESIGN §2.4). It is cleared on Apply/Dismiss.
+        usePlanStore.getState().setProposals(proposals)
         const prefix =
           source === 'intent'
             ? `Routed to the design loop: ${instruction}. Proposed ${proposals.length} intervention${proposals.length === 1 ? '' : 's'} via ${r.provider}.`
@@ -564,6 +686,7 @@ export default function ChatPanel() {
               instruction,
               provider: r.provider,
               proposals,
+              rejected,
               groundingNotes: r.groundingNotes ?? [],
               candidateCounts: r.candidateCounts ?? {},
             },
@@ -671,15 +794,17 @@ export default function ChatPanel() {
     setInput('')
     setBusy(true)
 
-    // Plan v2 §4: two-track routing.
-    //   1. If the input obviously reads as an intervention (12-verb regex),
-    //      skip the chat round trip and open the confirm gate directly. The
-    //      intent field inside a chat answer would decide the same way, but
-    //      doing a full SSE first costs 2-5 s of latency the user feels.
-    //   2. Otherwise ask the agent. If the LLM's card then carries
-    //      intent="intervention" the `answer` handler reaches the same
+    // Plan v2 §4 / DESIGN §2.5: two-track routing.
+    //   1. If the input obviously reads as an intervention, skip the chat round
+    //      trip and open the confirm gate directly. The fast path reads the
+    //      shared vocabulary (`INTENT_VOCABULARY`, pinned to the server's), so it
+    //      no longer silently drops `dig`/`create`/`grow` (cause R2). Doing a
+    //      full SSE first costs 2-5 s of latency the user feels.
+    //   2. Otherwise ask the agent. The server runs the same classifier on the
+    //      card, so `intent="intervention"` now arrives even with no model
+    //      configured (cause R1); the `answer` handler below reaches the same
     //      `openProposalGate` the fast path uses, so behaviour converges.
-    if (looksLikeIntervention(trimmed)) {
+    if (looksLikeIntervention(trimmed, INTENT_VOCABULARY)) {
       try {
         await openProposalGate(trimmed, 'regex')
       } finally {

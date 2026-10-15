@@ -29,6 +29,8 @@ import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
 import StatsPanel from './components/StatsPanel'
+import SuggestionsPanel from './components/SuggestionsPanel'
+import StagedScenarioLink from './components/StagedScenarioLink'
 import ViewButtons from './components/ViewButtons'
 import { usePlanStore } from './state/planStore'
 import { useSceneStore } from './state/sceneStore'
@@ -149,6 +151,10 @@ export default function App() {
           }}>
             <SlidersPanel />
             <ProjectCatalog />
+            {/* The loop's suggest beat, and the silent bridge that puts what
+                it pins into the run's plan selection. */}
+            <SuggestionsPanel />
+            <StagedScenarioLink />
             <StatsPanel />
           </Box>
         </Box>

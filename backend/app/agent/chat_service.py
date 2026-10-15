@@ -23,6 +23,7 @@ from typing import Any, Iterator
 
 from app.agent import confidence, grounding, llm
 from app.agent.answer import ANSWER_SCHEMA, AnswerCard, GroundingReport, template_card
+from app.agent.intent import classify_turn
 from app.agent.prompts import SYSTEM, json_system, user_turn
 
 __all__ = ["answer", "build_facts", "stream_events"]
@@ -198,15 +199,19 @@ def answer(question: str, facts: dict[str, Any],
            history: list[dict[str, str]] | None = None) -> AnswerCard:
     """One answer, no streaming. Used by the plain POST endpoint and by tests."""
     if not facts:
-        return _no_run_card()
+        return classify_turn(question, _no_run_card())
     try:
         draft = _draft(facts, question, history)
     except llm.ProviderUnavailable:
-        return template_card(facts)
+        # The template fallback must be classified too, or the non-streaming
+        # endpoint and /chat/stream disagree on the same instruction: the stream
+        # path classifies, this one did not, so "add a water reservoir in the
+        # north" arrived as a result card here and a proposal there.
+        return classify_turn(question, template_card(facts))
     except llm.LLMError:
-        return template_card(facts)
+        return classify_turn(question, template_card(facts))
     if not draft:
-        return template_card(facts)
+        return classify_turn(question, template_card(facts))
     card = _card_from(draft, facts, revised=False)
     # One revision: name the offending numbers and ask again.
     if card.grounding and not card.grounding.ok:
@@ -219,7 +224,10 @@ def answer(question: str, facts: dict[str, Any],
             second = None
         if second:
             card = _card_from(second, facts, revised=True)
-    return _cap_residual(card, facts)
+    # Deterministic routing (DESIGN §2.5): the classifier runs after the card is
+    # built and may only raise the intent, so a proposal-shaped instruction
+    # routes to the gate even when no model answered.
+    return _cap_residual(classify_turn(question, card), facts)
 
 
 def stream_events(question: str, facts: dict[str, Any],
@@ -245,7 +253,10 @@ def stream_events(question: str, facts: dict[str, Any],
     yield from step(0, *STEPS[0], lambda: f"{len(facts.get('scenario', {}))} scenario measures")
 
     if not facts:
-        card = _no_run_card()
+        # The no-run branch is the one that matters today (DESIGN R1): with no
+        # model key the card is code-assembled, and only `classify_turn` can lift
+        # a proposal-shaped instruction out of the default "question".
+        card = classify_turn(question, _no_run_card())
         yield {"event": "answer", "answer": card.model_dump()}
         yield {"event": "done", "status": "done", "ms": int((time.time() - started) * 1000)}
         return
@@ -345,5 +356,10 @@ def stream_events(question: str, facts: dict[str, Any],
     yield {"event": "step_finished", "index": 2, "title": ground_title, "desc": ground_desc,
            "tool": ground_tool, "ms": int((time.time() - t_ground) * 1000), "result": ground_result}
 
+    # Deterministic routing, wired once for every path that reaches here --
+    # the model draft, the template card and the unstreamed retry alike. It can
+    # only raise the intent, never lower it, so the model's own classification
+    # still counts when the parser recognises nothing.
+    card = classify_turn(question, card)
     yield {"event": "answer", "answer": card.model_dump()}
     yield {"event": "done", "status": "done", "ms": int((time.time() - started) * 1000)}

@@ -17,7 +17,11 @@ from app.schemas.scene import (
     PlanType,
     WireModel,
 )
-from app.schemas.intervention import InterventionIn
+from app.schemas.intervention import (
+    InterventionIn,
+    InterventionProposal,
+    ProposalRejection,
+)
 
 
 class PlanBase(WireModel):
@@ -131,6 +135,11 @@ class AIPlanResponse(WireModel):
     is the proposed count, and `proposals` carries the un-persisted draft list
     the client echoes back to `/ai-plan/apply`. When `apply=true` the response
     matches the legacy shape (`proposals` empty, `plan_id` populated).
+
+    `rejected` is additive (design §2.2): the refusals that did not survive the
+    constraint engine, one entry each, with a closed `reasonCode` and a
+    non-empty `warning`. A silently shorter `proposals` list is indistinguishable
+    from a provider that returned less, so a refusal is carried, never dropped.
     """
 
     plan_id: str | None = None
@@ -139,7 +148,8 @@ class AIPlanResponse(WireModel):
     types: list[str] = Field(default_factory=list)
     grounding_notes: list[str] = Field(default_factory=list)
     message: str | None = None
-    proposals: list["_InterventionProposal"] = Field(default_factory=list)
+    proposals: list[InterventionProposal] = Field(default_factory=list)
+    rejected: list[ProposalRejection] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
     fallback_note: str | None = None
     model_config = {
@@ -160,7 +170,7 @@ class AIPlanApplyRequest(WireModel):
 
     instruction: str = Field(min_length=1, max_length=2000)
     provider: str = Field(default="auto", pattern="^(auto|llm|heuristic)$")
-    proposals: list["_InterventionProposal"] = Field(default_factory=list)
+    proposals: list[InterventionProposal] = Field(default_factory=list)
     grounding_notes: list[str] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
     model_config = {
@@ -171,10 +181,15 @@ class AIPlanApplyRequest(WireModel):
     }
 
 
-# Late import to avoid a cycle: `intervention.InterventionProposal` depends on
-# `scene.WireModel`, which `plan.py` already pulls in. Re-exported under a
-# private alias so the forward refs above resolve by name.
-from app.schemas.intervention import InterventionProposal as _InterventionProposal  # noqa: E402
-
+# The proposal fields above name `InterventionProposal` directly, imported at the
+# top of this module beside `InterventionIn`. A private alias bound *after* the
+# classes, with a `model_rebuild()` to resolve the forward ref, was the earlier
+# shape here and it was import-order dependent: when the app was imported as a
+# whole the model could be left incomplete, and Pydantic then resolved the name
+# lazily in whatever namespace happened to be calling -- which raised
+# `PydanticUndefinedAnnotation: name '_InterventionProposal' is not defined` on
+# the first `/ai-plan/apply` request
+# (`tests/test_contract.py::test_ai_plan_apply_persists_proposals`). There is no
+# cycle to dodge: `intervention.py` imports only `scene.py`, and this module
+# already imports `InterventionIn` from it at the top.
 AIPlanResponse.model_rebuild()
-AIPlanApplyRequest.model_rebuild()

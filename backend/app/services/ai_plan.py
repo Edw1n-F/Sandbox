@@ -86,6 +86,17 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
 
 from app.config import settings  # noqa: E402
 
+# The contour geometry the candidate sites are drawn with. Imported, never
+# re-derived: a second implementation of "the shape of the cells I found"
+# would be a second chance to disagree with the ledger's own rasteriser
+# about which cells an intervention actually covers.
+from app.services.intervention_geometry import (  # noqa: E402
+    connected_components,
+    contour_ring,
+    polygon_area_ha,
+    ring_centroid,
+)
+
 # English aliases, because the brief and the model are both English-speaking.
 EN_ALIASES: dict[str, str] = {
     "green space": "green_space",
@@ -105,6 +116,18 @@ EN_ALIASES: dict[str, str] = {
     "road": "road",
     "street": "road",
     "railing": "road",
+    # Synonyms the routing test found missing (16 Oct). They live here, in the one
+    # vocabulary both `parse_intent` and `agent/intent.py::_match_noun` read,
+    # rather than in the classifier -- two vocabularies would drift, and the
+    # classifier's noun list is derived from this dict by design. "basin" bare
+    # (not "retention basin") and "wetland" were the two that read as ambiguous,
+    # so a proposal-shaped turn came back as a result card.
+    "green corridor": "green_space",
+    "tree corridor": "green_space",
+    "permeable plaza": "permeable_paving",
+    "basin": "water_reservoir",
+    "floodable park": "flood_storage",
+    "wetland": "flood_storage",
     "wind": "wind",
     "windbreak": "wind",
     "ventilation": "wind",
@@ -192,21 +215,35 @@ def load_grounding() -> Grounding:
             [r(west), r(north)], [r(west), r(south)],
         ]
 
-    def site(ring, kind, evidence, metrics):
+    def site(cells, kind, evidence, metrics):
+        """One candidate site: the contour of its own cells, with the evidence.
+
+        The geometry is the component's **true mask**, contoured by
+        ``app/services/intervention_geometry.py`` -- not the axis-aligned
+        bounding box this function shipped first. The box claimed the empty
+        corners of an irregular basin as intervention area, which overstates
+        the site and trips the coverage guard on the wrong evidence. The area
+        is the contour's own shoelace area and the centroid its own area
+        centroid, for the same reason.
+        """
+        contour = contour_ring(
+            cells, bounds=ov.bounds, rows=ov.rows, cols=ov.cols)
+        if contour is None:  # pragma: no cover - components are non-empty here
+            return None
+        geometry, enclosed, of_component = contour
         return {
             "kind": kind,
-            "geometry": {"type": "Polygon", "coordinates": [ring]},
-            "centroid": [
-                round((ring[0][0] + ring[2][0]) / 2, 6),
-                round((ring[0][1] + ring[2][1]) / 2, 6),
-            ],
-            "areaHa": round(
-                (max(p[0] for p in ring) - min(p[0] for p in ring))
-                * 111_320.0 * math.cos(math.radians((lat_min + lat_max) / 2))
-                * (max(p[1] for p in ring) - min(p[1] for p in ring))
-                * 110_574.0 / 10_000.0, 1),
+            "geometry": geometry,
+            "centroid": ring_centroid(geometry["coordinates"][0]),
+            # Holes included: a site is what would actually be converted, and
+            # quoting the outline alone would claim the gaps as converted too.
+            "areaHa": polygon_area_ha(geometry["coordinates"], lat_min, lat_max),
             "evidence": evidence,
-            "metrics": metrics,
+            "metrics": {
+                **metrics,
+                "contourCells": enclosed,
+                "contourOfComponent": of_component,
+            },
         }
 
     def densest_block(mask_arr, bbox, weight=None, size=15):
@@ -219,6 +256,14 @@ def load_grounding() -> Grounding:
         Rendering that bbox as a polygon paints the whole scene blue. A fixed
         size window on the densest spot gives the model a bounded, readable
         site that still sits where the evidence is strongest.
+
+        **No longer called by the pools** (merge of 16 Oct 2026): the siting
+        path now contours each component's *true cell mask*
+        (``intervention_geometry.contour_ring``), which fixes the same
+        whole-scene-bbox problem without claiming cells that are not in the
+        component and without discarding its shape. Kept because it is the
+        right tool the moment a fixed-size window is genuinely wanted; the
+        siting rule it implemented is recorded in this docstring.
         """
         min_r, min_c, max_r, max_c = bbox
         rows, cols = mask_arr.shape
@@ -246,28 +291,67 @@ def load_grounding() -> Grounding:
                     best_r, best_c, best_score = r0, c0, score
         return best_r, best_c, best_r + size - 1, best_c + size - 1
 
+    # --- existing massing is not available to be built on -------------------
+    # Every pool below is a set of *candidate sites*, and a site that sits on a
+    # roof is not a site. Without this subtraction a reservoir or paving site
+    # could be offered on top of a surveyed building and then rejected by the
+    # constraint guard -- so the proposal list would be empty, a worse failure
+    # than the one being fixed. The surveyed footprints are subtracted from all
+    # three masks here, through the one building authority
+    # (``scripts/_overlay_common.building_footprint_mask``, the same mask the
+    # placement generator uses), rather than re-deriving footprints from the
+    # GeoJSON a second time.
+    try:
+        from _overlay_common import building_footprint_mask
+        occupied = building_footprint_mask(ov)
+    except ImportError:  # pragma: no cover - scripts/ off sys.path
+        occupied = None
+
+    if occupied is None:
+        # None is "no city model is present", which is not the same as "there
+        # are no buildings". Subtracting nothing is the only honest option, and
+        # the note says so rather than letting a site on a roof look like a site
+        # on the ground.
+        g.notes.append(
+            "no city model: existing buildings NOT excluded from candidate "
+            "sites, so a proposed site may sit under a building")
+    else:
+        g.notes.append(
+            f"existing buildings excluded from candidate sites "
+            f"({int(occupied.sum())} cells)")
+
+    def free_of_buildings(mask):
+        """A pool mask minus the surveyed footprints, unchanged when none exist.
+
+        Returns a new array (``&``, never ``&=``), so a caller can never mutate
+        the overlay's own class grid by accident.
+        """
+        return mask if occupied is None else (mask & ~occupied)
+
     # --- reservoirs: the deepest connected basins of the wet grid ----------
     depth_file = settings.rasters_dir / "wetgrid_hsk.npy"
     if depth_file.exists():
         depth = np.load(depth_file).astype(np.float64)
         if depth.shape == (ov.rows, ov.cols):
-            mask = depth >= 0.35
-            for min_r, min_c, max_r, max_c, size in _components(mask, 40)[:3]:
-                # The component's raw bbox can span the whole scene (verified:
-                # 5205 wet cells, bbox fill 30%). Lock onto a 15x15 window at
-                # the deepest spot inside the component instead.
-                br0, bc0, br1, bc1 = densest_block(
-                    mask, (min_r, min_c, max_r, max_c), weight=depth, size=15,
-                )
-                sub = depth[br0:br1 + 1, bc0:bc1 + 1]
+            mask = free_of_buildings(depth >= 0.35)
+            # The true cell mask, contoured -- not a 15x15 window at the
+            # deepest spot (main's approach at the merge) and not the bounding
+            # box (the original). A window is a box: it claims cells that are
+            # not in the basin, and it discards the basin's own shape, which is
+            # what the catalog and the suggester both site on.
+            for comp in _components_cells(mask, 40, connectivity=4)[:3]:
+                min_r, min_c = comp["min_r"], comp["min_c"]
+                max_r, max_c = comp["max_r"], comp["max_c"]
+                sub = depth[min_r:max_r + 1, min_c:max_c + 1]
                 g.reservoir_sites.append(site(
-                    extent_ring(br0, bc0, br1, bc1),
+                    comp["cells"],
                     "water_reservoir",
-                    "deepest connected basin in the computed wet grid",
+                    "deepest connected basin in the computed wet grid, "
+                    "contoured to its true cell mask",
                     {
                         "maxDepthM": round(float(sub.max()), 2),
-                        "wetCells": size,
-                        "wetAreaHa": round(size * cell_w * cell_h / 10_000.0, 1),
+                        "wetCells": comp["size"],
+                        "wetAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1),
                     },
                 ))
         else:
@@ -279,29 +363,27 @@ def load_grounding() -> Grounding:
         g.notes.append("no wetgrid_hsk.npy; run scripts/make_wetgrid.py")
 
     # --- green space: largest contiguous vegetated blocks -------------------
-    green_mask = ov.class_mask("green")
-    for min_r, min_c, max_r, max_c, size in _components(green_mask, 120)[:3]:
-        br0, bc0, br1, bc1 = densest_block(
-            green_mask, (min_r, min_c, max_r, max_c), size=15,
-        )
+    # Bound to a local variable and freed of buildings first, so the component
+    # labelling below sees only ground a site could actually occupy.
+    green_mask = free_of_buildings(ov.class_mask("green"))
+    for comp in _components_cells(green_mask, 120, connectivity=4)[:3]:
         g.green_sites.append(site(
-            extent_ring(br0, bc0, br1, bc1), "green_space",
-            "largest contiguous vegetated block (ESA WorldCover class 'green')",
-            {"greenCells": size,
-             "greenAreaHa": round(size * cell_w * cell_h / 10_000.0, 1)},
+            comp["cells"], "green_space",
+            "largest contiguous vegetated block (ESA WorldCover class 'green'), "
+            "contoured to its true cell mask",
+            {"greenCells": comp["size"],
+             "greenAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
         ))
 
     # --- permeable paving: the biggest contiguous impervious blocks ---------
-    paved_mask = ov.class_mask("paved")
-    for min_r, min_c, max_r, max_c, size in _components(paved_mask, 150)[:3]:
-        br0, bc0, br1, bc1 = densest_block(
-            paved_mask, (min_r, min_c, max_r, max_c), size=15,
-        )
+    paved_mask = free_of_buildings(ov.class_mask("paved"))
+    for comp in _components_cells(paved_mask, 150, connectivity=4)[:3]:
         g.paving_sites.append(site(
-            extent_ring(br0, bc0, br1, bc1), "permeable_paving",
-            "largest contiguous impervious block (ESA WorldCover class 'paved')",
-            {"pavedCells": size,
-             "pavedAreaHa": round(size * cell_w * cell_h / 10_000.0, 1)},
+            comp["cells"], "permeable_paving",
+            "largest contiguous impervious block (ESA WorldCover class 'paved'), "
+            "contoured to its true cell mask",
+            {"pavedCells": comp["size"],
+             "pavedAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
         ))
 
     g.notes.append(f"terrain={ov.terrain_source}, landcover={ov.landcover_source}")
@@ -310,36 +392,22 @@ def load_grounding() -> Grounding:
 
 def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
     """8-connected components -> (min_r, min_c, max_r, max_c, size), largest first."""
-    import numpy as np
+    return [
+        (c["min_r"], c["min_c"], c["max_r"], c["max_c"], c["size"])
+        for c in _components_cells(mask, min_size)
+    ]
 
-    seen = np.zeros_like(mask, dtype=bool)
-    out: list[tuple[int, int, int, int, int]] = []
-    rows, cols = mask.shape
-    for r0 in range(rows):
-        for c0 in range(cols):
-            if not mask[r0, c0] or seen[r0, c0]:
-                continue
-            stack = [(r0, c0)]
-            seen[r0, c0] = True
-            cells = []
-            while stack:
-                r, c = stack.pop()
-                cells.append((r, c))
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        rr, cc = r + dr, c + dc
-                        if 0 <= rr < rows and 0 <= cc < cols and mask[rr, cc] and not seen[rr, cc]:
-                            seen[rr, cc] = True
-                            stack.append((rr, cc))
-            if len(cells) >= min_size:
-                arr = np.array(cells)
-                out.append((
-                    int(arr[:, 0].min()), int(arr[:, 1].min()),
-                    int(arr[:, 0].max()), int(arr[:, 1].max()),
-                    len(cells),
-                ))
-    out.sort(key=lambda t: -t[4])
-    return out
+
+def _components_cells(mask, min_size: int,
+                      connectivity: int = 8) -> list[dict[str, Any]]:
+    """Connected components with their cell lists kept, largest first.
+
+    Thin alias for ``intervention_geometry.connected_components``: one fill,
+    one definition of "component" for grounding, siting and the catalog
+    generator alike.
+    """
+    return connected_components(mask, min_size, connectivity=connectivity)
+
 
 
 # --------------------------------------------------------------------------- #
@@ -836,6 +904,11 @@ def _feature(
 STYLE_FOR_KIND: dict[str, dict[str, Any]] = {
     "water_reservoir": {"color": "#1f6feb", "opacity": 0.55, "extrusionHeight": 14.0},
     "green_space": {"color": "#2ea043", "opacity": 0.45, "extrusionHeight": 6.0},
+    # A floodable park stays flat and low: it is landscaped ground that ponds,
+    # not a tank, and extruding it 14 m would read as a building.
+    "flood_storage": {"color": "#3fb950", "opacity": 0.35, "extrusionHeight": 1.5},
+    # The extrusion heights below are main's stage-1 work: permeable paving,
+    # drainage and road are drawn as 2.5D slabs so the legend can read them.
     "permeable_paving": {"color": "#8957e5", "opacity": 0.45, "extrusionHeight": 2.0},
     "drainage": {"color": "#e3b341", "opacity": 0.95, "extrusionHeight": 3.0},
     "road": {"color": "#6e7681", "opacity": 0.8, "extrusionHeight": 2.0},
@@ -1774,9 +1847,16 @@ def route_tools(instruction: str) -> tuple[list[dict], str]:
     check, the separation happens here and the model is never asked to route.
     That is strictly safer than either a prompt rule or a permissive
     ``tool_choice``, and it costs one regex.
+
+    **``assess_building_fit`` is no longer offered** (PRD §1.2). Forcing it was
+    a dead end: ``_parse_tool_use`` handles only ``select_intervention_sites``
+    and ``modify_massing``, so a fit call was silently discarded and the model
+    spent a turn on it while the user waited. The endpoint and its tests remain
+    -- it is still reachable directly -- but a recommendation request now routes
+    to the catalogue, whose answer the parser can actually deliver.
+    :func:`parse_fit_intent` still reads the intent; it is simply no longer a
+    routing target.
     """
-    if parse_fit_intent(instruction):
-        return [FIT_TOOL], FIT_TOOL["name"]
     if parse_massing_intent(instruction):
         return [MASSING_TOOL], MASSING_TOOL["name"]
     return [CHOOSE_TOOL], CHOOSE_TOOL["name"]
@@ -2115,6 +2195,26 @@ def apply_proposals(
     if not features:
         raise PlanGenerationError("no features to apply")
 
+    # Persist only what a *stored* intervention has. The proposal wire shape is
+    # additive (design §2.2): it carries `size`, `requested`, `constraints`,
+    # `parameters`, `status` and `warning` for the UI, and `InterventionIn` --
+    # which PlanCreate validates every item through -- forbids unknown keys, so
+    # passing a proposal dict straight through rejects the whole plan with an
+    # `extra_forbidden` error. Projecting onto the five stored fields keeps this
+    # a thin wrapper rather than a second validation pipeline; nothing the
+    # record needs is lost, because the display fields the UI reads live in
+    # `params` (the materialiser puts rationale/siteId/basis there).
+    stored = [
+        {
+            "geometry": f["geometry"],
+            "intervention_type": f["intervention_type"],
+            "source": f.get("source", "ai"),
+            "params": f.get("params") or {},
+            "style": f.get("style") or {},
+        }
+        for f in features
+    ]
+
     payload = PlanCreate.model_validate({
         "planType": "comprehensive",
         "label": f"AI: {instruction[:60]}",
@@ -2129,7 +2229,7 @@ def apply_proposals(
                 "tied to a raster in params.basis; none is a design."
             ),
         },
-        "interventions": features,
+        "interventions": stored,
     })
     created = scene_service.create_plan(scene_id, payload)
     return {

@@ -96,7 +96,7 @@
       },
       "AIPlanResponse": {
         "additionalProperties": false,
-        "description": "What the AI module produced, and how.\n\n`provider` is echoed because \"which model actually generated this\" is the\nfirst question anyone will ask, and the answer must not require reading the\nstore.\n\nWhen `apply=false` (plan v2 §5 confirm gate), `plan_id` is None, `features`\nis the proposed count, and `proposals` carries the un-persisted draft list\nthe client echoes back to `/ai-plan/apply`. When `apply=true` the response\nmatches the legacy shape (`proposals` empty, `plan_id` populated).",
+        "description": "What the AI module produced, and how.\n\n`provider` is echoed because \"which model actually generated this\" is the\nfirst question anyone will ask, and the answer must not require reading the\nstore.\n\nWhen `apply=false` (plan v2 §5 confirm gate), `plan_id` is None, `features`\nis the proposed count, and `proposals` carries the un-persisted draft list\nthe client echoes back to `/ai-plan/apply`. When `apply=true` the response\nmatches the legacy shape (`proposals` empty, `plan_id` populated).\n\n`rejected` is additive (design §2.2): the refusals that did not survive the\nconstraint engine, one entry each, with a closed `reasonCode` and a\nnon-empty `warning`. A silently shorter `proposals` list is indistinguishable\nfrom a provider that returned less, so a refusal is carried, never dropped.",
         "properties": {
           "candidateCounts": {
             "additionalProperties": {
@@ -161,6 +161,13 @@
             "title": "Provider",
             "type": "string"
           },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalRejection"
+            },
+            "title": "Rejected",
+            "type": "array"
+          },
           "types": {
             "items": {
               "type": "string"
@@ -198,7 +205,6 @@
           "run": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -333,7 +339,6 @@
         "description": "One feature inside the GeoJSON FeatureCollection (§3.3.2).",
         "properties": {
           "geometry": {
-            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -389,7 +394,6 @@
         "description": "A feature as supplied on create/update (§3.3.3).\n\n``status``/``id``/timestamps are absent by design -- the service owns them.",
         "properties": {
           "geometry": {
-            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -400,7 +404,6 @@
             "type": "string"
           },
           "params": {
-            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -414,7 +417,6 @@
             "type": "string"
           },
           "style": {
-            "additionalProperties": true,
             "title": "Style",
             "type": "object"
           }
@@ -428,7 +430,7 @@
       },
       "InterventionProperties": {
         "additionalProperties": false,
-        "description": "``properties`` of a returned feature.\n\n§3.3.2's example shows only ``interventionType`` and ``style``; ``id``,\n``status``, ``source`` and ``params`` are additive so the frontend can key,\nfilter and style without a second request.",
+        "description": "``properties`` of a returned feature.\n\n§3.3.2's example shows only ``interventionType`` and ``style``; ``id``,\n``status``, ``source`` and ``params`` are additive so the frontend can key,\nfilter and style without a second request.\n\n``pinned`` is additive for the same reason, and it is carried here because\nthe pin state lives at the *top level* of the stored row (see\n``app/services/pins.py``) and every reader of a plan goes through this\ncollection -- dropping it left the run-composition fallback chain in\n``routers/scenes.py::intervention_features`` landing on its ``True``\ndefault, so an unpinned row kept being scored. The default stays ``True``:\nrows created before pinning existed carry no flag, and they must compose\nexactly as they did then.",
         "properties": {
           "id": {
             "anyOf": [
@@ -446,9 +448,13 @@
             "type": "string"
           },
           "params": {
-            "additionalProperties": true,
             "title": "Params",
             "type": "object"
+          },
+          "pinned": {
+            "default": true,
+            "title": "Pinned",
+            "type": "boolean"
           },
           "source": {
             "default": "manual",
@@ -469,7 +475,6 @@
             "type": "string"
           },
           "style": {
-            "additionalProperties": true,
             "title": "Style",
             "type": "object"
           }
@@ -482,7 +487,7 @@
       },
       "InterventionProposal": {
         "additionalProperties": false,
-        "description": "One AI-proposed feature, **not yet persisted** (plan v2 §5).\n\nThe confirm gate (§5.1) presents these to the user; the client echoes the\naccepted subset back to `POST /api/scenes/{sceneId}/ai-plan/apply` which\nwrites them through the normal plan-creation path.\n\nExposes `site_id`/`rationale`/`basis` as first-class fields so the UI can\nrender them without rummaging in `params`. Each is derived at construction\nfrom the feature's `params` to keep a single source of truth: if `params`\nis round-tripped untouched the derived view and the stored view stay in\nsync. Values can be overridden on the wire, but a client that does so is\ntelling the server to trust its judgement -- the service only reads these\nas rendering hints, never as grounding.",
+        "description": "One AI-proposed feature, **not yet persisted** (plan v2 §5).\n\nThe confirm gate (§5.1) presents these to the user; the client echoes the\naccepted subset back to `POST /api/scenes/{sceneId}/ai-plan/apply` which\nwrites them through the normal plan-creation path.\n\nExposes `site_id`/`rationale`/`basis` as first-class fields so the UI can\nrender them without rummaging in `params`. Each is derived at construction\nfrom the feature's `params` to keep a single source of truth: if `params`\nis round-tripped untouched the derived view and the stored view stay in\nsync. Values can be overridden on the wire, but a client that does so is\ntelling the server to trust its judgement -- the service only reads these\nas rendering hints, never as grounding.\n\nThe four blocks below are the additive part of the design §2.2: the size\nthe proposal actually covers, the raw ask it came from, the constraints it\nwas checked against, and the parameters the run will read. ``status`` here\nis the **proposal** honesty label (UPPER_SNAKE), distinct from the stored\nintervention's ``draft``/``validated`` status.",
         "properties": {
           "basis": {
             "anyOf": [
@@ -495,8 +500,10 @@
             ],
             "title": "Basis"
           },
+          "constraints": {
+            "$ref": "#/components/schemas/ProposalConstraints"
+          },
           "geometry": {
-            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -506,8 +513,14 @@
             "title": "Interventiontype",
             "type": "string"
           },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ParameterEntry"
+            },
+            "title": "Parameters",
+            "type": "object"
+          },
           "params": {
-            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -522,6 +535,16 @@
             ],
             "title": "Rationale"
           },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposalRequested"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "siteId": {
             "anyOf": [
               {
@@ -533,6 +556,9 @@
             ],
             "title": "Siteid"
           },
+          "size": {
+            "$ref": "#/components/schemas/ProposalSize"
+          },
           "source": {
             "default": "manual",
             "enum": [
@@ -542,10 +568,19 @@
             "title": "Source",
             "type": "string"
           },
+          "status": {
+            "default": "PROPOSAL_ACCEPTED",
+            "title": "Status",
+            "type": "string"
+          },
           "style": {
-            "additionalProperties": true,
             "title": "Style",
             "type": "object"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
           }
         },
         "required": [
@@ -681,6 +716,36 @@
         "title": "LLMConfigUpdate",
         "type": "object"
       },
+      "ParameterEntry": {
+        "additionalProperties": false,
+        "description": "One parameter the run reads for a kind, with its honesty label (§2.2).\n\n``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``\nnames where the number came from, so a proposal never carries a parameter\nthat cannot say what it is.",
+        "properties": {
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "ASSUMPTION",
+            "title": "Status",
+            "type": "string"
+          },
+          "unit": {
+            "default": "",
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ParameterEntry",
+        "type": "object"
+      },
       "PlanCreate": {
         "additionalProperties": false,
         "description": "POST /api/scenes/{sceneId}/plans body (§3.3.3).\n\nOptionally carries initial interventions; they are written in the same\ntransaction as the plan so a plan can never exist half-populated.",
@@ -716,7 +781,6 @@
             "title": "Nlinstruction"
           },
           "params": {
-            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -795,7 +859,6 @@
             "title": "Nlinstruction"
           },
           "params": {
-            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -887,7 +950,6 @@
           "params": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1012,6 +1074,187 @@
         "title": "ProjectModel",
         "type": "object"
       },
+      "ProposalConstraints": {
+        "additionalProperties": false,
+        "description": "The constraint report carried by every proposal (§2.2).\n\nAll eleven fields have defaults: a rejection travels in\n``AIPlanResponse.rejected[]`` and a client that omits this block still\nparses.",
+        "properties": {
+          "buildingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Buildingids",
+            "type": "array"
+          },
+          "buildingOverlapCells": {
+            "default": 0,
+            "title": "Buildingoverlapcells",
+            "type": "integer"
+          },
+          "buildingsClear": {
+            "default": true,
+            "title": "Buildingsclear",
+            "type": "boolean"
+          },
+          "clippedCells": {
+            "default": 0,
+            "title": "Clippedcells",
+            "type": "integer"
+          },
+          "clippedFraction": {
+            "default": 0.0,
+            "title": "Clippedfraction",
+            "type": "number"
+          },
+          "effect": {
+            "default": "class_change",
+            "title": "Effect",
+            "type": "string"
+          },
+          "effectNote": {
+            "default": "",
+            "title": "Effectnote",
+            "type": "string"
+          },
+          "overlapCells": {
+            "default": 0,
+            "title": "Overlapcells",
+            "type": "integer"
+          },
+          "overlapsWith": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overlapswith",
+            "type": "array"
+          },
+          "withinCumulativeCap": {
+            "default": true,
+            "title": "Withincumulativecap",
+            "type": "boolean"
+          },
+          "withinSingleCap": {
+            "default": true,
+            "title": "Withinsinglecap",
+            "type": "boolean"
+          }
+        },
+        "title": "ProposalConstraints",
+        "type": "object"
+      },
+      "ProposalRejection": {
+        "additionalProperties": false,
+        "description": "One refused proposal, in ``AIPlanResponse.rejected[]`` (§2.2).\n\nA refusal is a first-class object, not an error: it carries the closed\n``reasonCode`` so the UI can group refusals without parsing English, and a\nnon-empty ``warning`` that names the predicate in words.",
+        "properties": {
+          "buildingOverlapCells": {
+            "default": 0,
+            "title": "Buildingoverlapcells",
+            "type": "integer"
+          },
+          "interventionType": {
+            "title": "Interventiontype",
+            "type": "string"
+          },
+          "overlapCells": {
+            "default": 0,
+            "title": "Overlapcells",
+            "type": "integer"
+          },
+          "reasonCode": {
+            "title": "Reasoncode",
+            "type": "string"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposalRequested"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "status": {
+            "default": "PROPOSAL_REJECTED",
+            "title": "Status",
+            "type": "string"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interventionType",
+          "reasonCode"
+        ],
+        "title": "ProposalRejection",
+        "type": "object"
+      },
+      "ProposalRequested": {
+        "additionalProperties": true,
+        "description": "The model's raw centre + size ask, echoed verbatim (§2.2).\n\n``extra=\"allow\"`` on purpose: this block is provenance, so a key the model\nsent that this schema does not name is preserved rather than dropped. It is\nnever used to derive geometry after validation -- ``geometry`` is what the\nserver produced from it.",
+        "properties": {
+          "centre": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Centre"
+          },
+          "sizeCells": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizecells"
+          }
+        },
+        "title": "ProposalRequested",
+        "type": "object"
+      },
+      "ProposalSize": {
+        "additionalProperties": false,
+        "description": "The **served** size of a proposal (§2.2).\n\n``cells`` is the rasterised cell count of the served geometry (holes\nsubtracted), ``areaHa`` the shoelace area of that geometry, and\n``coverageFraction`` its share of the 17,316-cell study area.",
+        "properties": {
+          "areaHa": {
+            "default": 0.0,
+            "title": "Areaha",
+            "type": "number"
+          },
+          "cells": {
+            "default": 0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "coverageFraction": {
+            "default": 0.0,
+            "title": "Coveragefraction",
+            "type": "number"
+          }
+        },
+        "title": "ProposalSize",
+        "type": "object"
+      },
       "RunRequest": {
         "additionalProperties": false,
         "description": "POST /api/scenes/{sceneId}/run body -- one live simulation run.\n\nThe per-run inputs ADR-024 refused to persist onto the scene: they belong\nto a run, not to the object every plan hangs off. ``plan_id`` selects the\nscenario; ``None`` is a baseline run (today's land cover, no\ninterventions).\n\n``plan_ids`` is the cumulative selection: every active project's plan, whose\ninterventions are merged into one scenario. It exists because the brief's\nwhole point is *cumulative* effect -- \"rather than only assessing each\nproject individually\" -- and a single-plan run cannot express that. When\nboth are sent ``plan_ids`` wins and ``plan_id`` is treated as its first\nentry, so a single-project client and a cumulative one share one code path.",
@@ -1064,7 +1307,6 @@
           "bbox": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1074,7 +1316,6 @@
             "title": "Bbox"
           },
           "center": {
-            "additionalProperties": true,
             "title": "Center",
             "type": "object"
           },
@@ -1152,7 +1393,6 @@
           "bbox": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1175,7 +1415,6 @@
           "buildingsMeta": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1196,7 +1435,6 @@
             "title": "Buildingsurl"
           },
           "center": {
-            "additionalProperties": true,
             "title": "Center",
             "type": "object"
           },
@@ -1288,7 +1526,6 @@
           "bbox": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1300,7 +1537,6 @@
           "center": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1374,7 +1610,6 @@
           "bbox": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1397,7 +1632,6 @@
           "buildingsMeta": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1420,7 +1654,6 @@
           "center": {
             "anyOf": [
               {
-                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2189,7 +2422,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Building Fit Api Scenes  Scene Id  Buildings  Building Id  Fit Get",
                   "type": "object"
                 }
@@ -2244,7 +2476,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Chat Api Scenes  Scene Id  Chat Post",
                   "type": "object"
                 }
@@ -2376,7 +2607,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Design Metrics Api Scenes  Scene Id  Design Metrics Get",
                   "type": "object"
                 }
@@ -2533,7 +2763,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Drainage Hourly Api Scenes  Scene Id  Drainage Hourly Get",
                   "type": "object"
                 }
@@ -2610,7 +2839,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Drainage Routed Api Scenes  Scene Id  Drainage Routed Get",
                   "type": "object"
                 }
@@ -2691,7 +2919,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Heat Field Api Scenes  Scene Id  Heat Field Get",
                   "type": "object"
                 }
@@ -2768,7 +2995,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Ledger Api Scenes  Scene Id  Ledger Get",
                   "type": "object"
                 }
@@ -2788,6 +3014,156 @@
           }
         },
         "summary": "Get Ledger",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/pins": {
+      "get": {
+        "description": "GET /api/scenes/{sceneId}/pins -- the staged scenario, rows included.\n\nEvery row of the staged plan, pinned or not: a user who just unpinned\nsomething needs it on screen to pin it back. Each row carries the\nintervention verbatim (geometry byte-for-byte from what the panel quoted),\nits ``pinned`` flag, and the provenance the row was pinned with -- absent\nas ``null`` for sources that carry none, never invented here.\n\n``status``/``warning`` state what the data is: nothing staged, all rows\nunpinned (so the next run scores nothing pinned), or N of M rows entering\nthe next run. The footprints are raster reads at 5 m assembled by the\nsuggestion/catalog services, not surveyed sites -- the same disclosure the\npanels show.",
+        "operationId": "list_pins_api_scenes__scene_id__pins_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response List Pins Api Scenes  Scene Id  Pins Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Pins",
+        "tags": [
+          "scenes"
+        ]
+      },
+      "post": {
+        "description": "POST /api/scenes/{sceneId}/pins -- pin one feature into the staged scenario.\n\nThe body is one plan intervention -- geometry, intervention type, params,\nstyle -- exactly as the suggestion and catalog services emit them. It is\naccepted as a plain ``dict`` deliberately: the shape is enforced by\n``pins.pin`` through the same ``InterventionIn`` schema every other\nintervention passes, so a pin cannot introduce a shape the run would then\nsilently ignore, and a malformed body surfaces that schema's own message\nunder 422 rather than a FastAPI body-parse error.\n\nPinning is idempotent by fingerprint (kind, geometry, parameters): the same\nphysical feature twice returns the row already there with\n``alreadyPinned: true`` instead of a second polygon, which would double its\ncoverage in the guard while changing nothing on the grid. Unpin keeps the\nrow and marks it ``pinned: false``; the next run simply does not compose it.",
+        "operationId": "pin_intervention_api_scenes__scene_id__pins_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "title": "Payload",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Pin Intervention Api Scenes  Scene Id  Pins Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pin Intervention",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/pins/{feature_id}/unpin": {
+      "post": {
+        "description": "POST /api/scenes/{sceneId}/pins/{featureId}/unpin -- take one out.\n\nIdempotent by row: unpinning an already-unpinned feature repeats the same\n``pinned: false`` write and returns the same acknowledgement. An unpin for a\nfeature that is not staged in this scene is a 404 -- the thing being removed\nis not there -- and never a silent success.",
+        "operationId": "unpin_intervention_api_scenes__scene_id__pins__feature_id__unpin_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "feature_id",
+            "required": true,
+            "schema": {
+              "title": "Feature Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Unpin Intervention Api Scenes  Scene Id  Pins  Feature Id  Unpin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unpin Intervention",
         "tags": [
           "scenes"
         ]
@@ -2885,6 +3261,50 @@
         ]
       }
     },
+    "/api/scenes/{scene_id}/project-catalog": {
+      "get": {
+        "description": "GET /api/scenes/{sceneId}/project-catalog -- the fixed project catalog.\n\nThe projects the intervention loop offers, with the footprints already\nfixed and the provenance already attached. The frontend renders these\ninstead of templating natural-language sentences, so toggling a phase\ntwice produces the same geometry twice.\n\nScene-scoped only for consistency with every other route the frontend\ncalls: the catalog describes the study area, and the scene is what pins\nthis request to one. A scene that does not exist is a 404, like anywhere\nelse -- the catalog does not conjure a place to put projects in.",
+        "operationId": "get_project_catalog_api_scenes__scene_id__project_catalog_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Project Catalog Api Scenes  Scene Id  Project Catalog Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Project Catalog",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
     "/api/scenes/{scene_id}/run": {
       "post": {
         "description": "POST /api/scenes/{sceneId}/run -- one live simulation run.\n\nThe run loop the sliders were always meant to drive (ADR-024 kept them\nlocal-only until this existed): apply the chosen plan's interventions to\nthe land-class grid, re-run the project's own SCS-CN generation/retention\narithmetic at the requested rainfall, re-solve the level-pool fill, and\nre-render both overlays. The response carries fresh overlay URLs (cache\nbusted by run id), the baseline-vs-scenario ledger, and a plain-language\nexplanation -- an LLM paragraph when a provider is configured, a labelled\ndeterministic template otherwise.\n\n``planId: null`` is a baseline run: today's land cover, no interventions.\nSend ``planIds`` to compose several projects into one cumulative scenario --\nthe brief's headline goal. The heavy terrain conditioning and the\nsky-view/shade rasters are cached (they change with the offline scripts and\nthe massing respectively, never with a slider), so a run is seconds, not\nminutes.\n\nScreening-level, always: the response's ``status``/``warning`` say so, and\nso do the sidecars written beside the PNGs in ``data/rasters/run/``.",
@@ -2915,7 +3335,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Post Run Api Scenes  Scene Id  Run Post",
                   "type": "object"
                 }
@@ -2959,7 +3378,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -2972,7 +3390,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Post Scenario Compare Api Scenes  Scene Id  Scenario Compare Post",
                   "type": "object"
                 }
@@ -3016,7 +3433,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -3029,7 +3445,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Post Scenario Evaluate Api Scenes  Scene Id  Scenario Evaluate Post",
                   "type": "object"
                 }
@@ -3090,7 +3505,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Published Scenarios Api Scenes  Scene Id  Scenarios Get",
                   "type": "object"
                 }
@@ -3151,7 +3565,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Sea Level Scenarios Api Scenes  Scene Id  Sea Level Get",
                   "type": "object"
                 }
@@ -3171,6 +3584,70 @@
           }
         },
         "summary": "Get Sea Level Scenarios",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/suggestions": {
+      "get": {
+        "description": "GET /api/scenes/{sceneId}/suggestions -- the loop's suggest step.\n\nRanked candidate sites, one axis at a time, with the per-cell arithmetic\nthat produced each estimate. Deterministic by construction: no model, no\nclock, no randomness, so the same query twice returns the same ranking.\n\n``rainfall_mm`` is accepted so a suggestion can be read against the run the\nuser is actually looking at; it changes the estimates and never the\nordering of the pools.",
+        "operationId": "get_suggestions_api_scenes__scene_id__suggestions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rainfall_mm",
+            "required": false,
+            "schema": {
+              "default": 450.0,
+              "title": "Rainfall Mm",
+              "type": "number"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_per_axis",
+            "required": false,
+            "schema": {
+              "default": 3,
+              "title": "Max Per Axis",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Get Suggestions Api Scenes  Scene Id  Suggestions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Suggestions",
         "tags": [
           "scenes"
         ]
@@ -3238,7 +3715,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Ventilation Api Scenes  Scene Id  Ventilation Get",
                   "type": "object"
                 }
@@ -3299,7 +3775,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Ventilation Corridors Api Scenes  Scene Id  Ventilation Corridors Get",
                   "type": "object"
                 }
@@ -3333,7 +3808,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }

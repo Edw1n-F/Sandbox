@@ -16,7 +16,12 @@ export interface Polygon {
   coordinates: number[][][]
 }
 
-export type Geometry = Point | { type: 'LineString'; coordinates: number[][] }
+export type Geometry =
+  | Point
+  | { type: 'LineString'; coordinates: number[][] }
+  // A catalog footprint's holes are real: an island inside a basin is not part
+  // of the basin, so the ring list is longer than one.
+  | { type: 'Polygon'; coordinates: number[][][] }
 
 export interface DefaultCamera {
   longitude?: number | null

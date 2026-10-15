@@ -1,0 +1,58 @@
+sequenceDiagram
+    autonumber
+    actor U as Planner
+    participant CP as ChatPanel (React)
+    participant API as chat/stream (SSE)
+    participant CS as agent.chat_service
+    participant INT as agent.intent
+    participant SC as routers/scenes (ai-plan)
+    participant AP as ai_plan
+    participant PC as proposal_constraints
+    participant PL as view/proposalLayer
+    participant ST as planStore
+    participant RUN as run_service
+
+    U->>CP: "dig a retention basin in the north"
+    Note over CP: fast path (widened vocabulary) may skip the SSE
+    CP->>API: POST /chat/stream {question}
+    API->>CS: stream_events(question, run)
+    CS->>CS: provider call -> draft card (may be template, no key)
+    CS->>INT: classify_turn(question, card)
+    INT->>AP: parse_intervention_intent() via EN_ALIASES + _match_region
+    INT-->>CS: intent="intervention", intent_hint="add a water reservoir in the north"
+    CS-->>CP: answer event (card, intent_source="parser")
+    CP->>CP: intent==="intervention" -> openProposalGate(intent_hint)
+    CP->>SC: POST /scenes/{id}/ai-plan {apply:false}
+    SC->>AP: generate_proposals(scene_id, instruction)
+    AP->>AP: load_grounding() -> pools MINUS building_footprint_mask
+    AP->>AP: provider.propose() -> selections (site_id, optional placement)
+    loop each selection, in provider order
+        AP->>PC: validate_proposal(grids, candidate, occupied, claimed)
+        PC->>PC: cells = _polygon_cells(geometry)
+        PC->>PC: buildings: cells & occupied == {} ?
+        PC->>PC: overlap: cells & claimed == {} ?
+        PC->>PC: size: 40 <= |cells| <= 4329 and |claimed|cells| <= 6926 ?
+        alt illegal
+            PC-->>AP: {status: PROPOSAL_REJECTED, reasonCode, warning}
+            AP->>AP: rejected.append(...)
+        else legal
+            PC-->>AP: {status: PROPOSAL_ACCEPTED, constraints, size}
+            AP->>AP: claimed |= cells
+        end
+    end
+    AP-->>SC: {features, rejected, provider, groundingNotes}
+    SC-->>CP: AIPlanResponse {proposals, rejected}
+    CP->>ST: setProposals(proposals)
+    ST->>PL: addProposals(viewer, proposals)
+    PL-->>U: draft 2.5D blocks (dashed, translucent) + refusal list
+    U->>CP: tick 2 of 3, press Apply
+    CP->>SC: POST /scenes/{id}/ai-plan/apply {proposals: accepted}
+    SC->>AP: apply_proposals(...)
+    AP->>AP: scene_service.create_plan (source="ai", status="draft")
+    SC-->>CP: {planId, features, types}
+    CP->>ST: clearProposals(); refreshPlans(); selectPlan(planId)
+    ST->>PL: (preview disposed)
+    Note over ST: addInterventions draws the real 2.5D blocks at full extrusion
+    U->>RUN: POST /scenes/{id}/run {planId}
+    RUN->>RUN: apply_interventions -> SCS-CN -> level pool -> routed cascade
+    RUN-->>U: per-axis deltas + overlays + sanityChecks + constraints echo
