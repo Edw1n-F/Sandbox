@@ -50,7 +50,7 @@ python scripts/seed_scene.py                 # prints the sceneId
 python scripts/make_wetgrid.py --rainfall 450
 python scripts/make_heatmap.py
 python scripts/ai_plan.py "add two water reservoirs"   # NL -> draft plan (GenAI)
-python -m uvicorn app.main:app --reload --port 8001   # :8001 -- vite.config.ts proxies here
+python -m uvicorn app.main:app --reload --port 8000   # :8000 -- vite.config.ts proxies here
 python -m app.export_openapi                 # regenerate contracts/openapi.json after any route/schema change
 
 # Most suites are standalone scripts, not pytest files: `pytest tests/` alone collects
