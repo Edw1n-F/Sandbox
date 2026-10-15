@@ -221,6 +221,79 @@ def main() -> int:
     check("and it changes no water",
           abs(run_noop["stats"]["delta"]["unstoredM3"]) < 1.0)
 
+    # ---- 5b. a planned project reaches BOTH axes ---------------------------
+    # The station is the first project whose effects are declared in data
+    # (data/projects/mtr-station.json) rather than generated. Two things about it
+    # are easy to break silently and are pinned here:
+    #
+    #   * its storage effect must move the water ledger, and
+    #   * its massing must move the heat geometry, which is what makes the run
+    #     score the project rather than merely draw it.
+    #
+    # The heat part is asserted on the *raster* the run renders, not on
+    # `surfaceMeanC`: the temperature field is re-anchored so its mean equals the
+    # scenario mean by construction, so a site-mean comparison would read
+    # "unchanged" no matter how large the project's local effect is. An assertion
+    # on the mean would therefore pass while the feature did nothing.
+    station_ring = [[cx - span, cy - span], [cx + span, cy - span],
+                    [cx + span, cy + span], [cx - span, cy + span],
+                    [cx - span, cy - span]]
+    station = [
+        {"id": "test-station-tank", "intervention_type": "underground_tank",
+         "geometry": {"type": "Polygon", "coordinates": [station_ring]},
+         "params": {"storageDepthM": 2.0, "basis": "test"}},
+        {"id": "test-station-massing", "intervention_type": "station_massing",
+         "geometry": {"type": "Polygon", "coordinates": [station_ring]},
+         "params": {"heightM": 22.1, "basis": "test"}},
+    ]
+    run_station = run_service.run_scenario(SCENE_ID, ARTEFACT_MM, 30.0, "test-plan",
+                                           station)
+    applied_kinds = {a["kind"] for a in run_station["interventionsApplied"]}
+    check("a project's massing is reported as applied, not skipped",
+          "station_massing" in applied_kinds,
+          str(sorted(applied_kinds)))
+    check("and both of the project's effects are scored",
+          applied_kinds == {"station_massing", "underground_tank"},
+          str(sorted(applied_kinds)))
+    check("so its storage moves the water ledger",
+          run_station["stats"]["delta"]["unstoredM3"] < -1.0,
+          f"{run_station['stats']['delta']['unstoredM3']:,.0f} m3")
+
+    # The massing swap changes the geometry rasters the run renders from. Computed
+    # directly because `run_scenario` does not return them, and the point is the
+    # geometry, not a summary the panel happens to show.
+    from app.services import temperature_field as _tf  # noqa: PLC0415
+    _lst, _ = run_service.load_observed_lst(grids.elevation_5m.shape[0],
+                                            grids.elevation_5m.shape[1])
+    _land = run_service._land_index(grids, grids.land_class)
+    _over = run_service._massing_overrides(station)
+    _t0 = run_service._heat_terms(grids, SCENE_ID)
+    _t1 = run_service._heat_terms(grids, SCENE_ID, _over)
+    check("the project's massing changes the heat geometry",
+          _t1 is not None and int((_t1["svf"] != _t0["svf"]).sum()) > 0,
+          f"{int((_t1['svf'] != _t0['svf']).sum())} cells changed sky-view")
+    _scene_field = _tf.temperature_field(
+        land_index=_land, svf=_t1["svf"], shaded=_t1["shaded"], fad=_t1["fad"],
+        lst_base=_lst, scenario_mean_c=30.0)["anomalyC"]
+    _base_field = _tf.temperature_field(
+        land_index=_land, svf=_t0["svf"], shaded=_t0["shaded"], fad=_t0["fad"],
+        lst_base=_lst, scenario_mean_c=30.0)["anomalyC"]
+    _delta = _scene_field - _base_field
+    check("so the rendered heat field moves where the project stands",
+          float(abs(_delta).max()) > 0.05,
+          f"max {abs(_delta).max():.3f} C over {int((abs(_delta) > 0.05).sum())} cells")
+    check("and the change is local, not a site-wide shift",
+          float(abs(_delta).mean()) < 0.05,
+          f"mean {abs(_delta).mean():.5f} C")
+
+    # The cache is keyed on the override set, so a station run must not poison a
+    # later station-free run. Serving the wrong terms would be invisible in the
+    # response and wrong in the picture.
+    _again = run_service._heat_terms(grids, SCENE_ID)
+    check("a project run does not poison the cached station-free terms",
+          int((_again["svf"] != _t0["svf"]).sum()) == 0,
+          f"{int((_again['svf'] != _t0['svf']).sum())} cells differ from the station-free terms")
+
     # ---- 6. the overlays are real files, cache-busted, per-run -------------
     #
     # Per-run names (not a fixed `wetgrid.png`) because a fixed name let two

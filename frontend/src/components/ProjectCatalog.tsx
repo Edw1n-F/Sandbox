@@ -34,6 +34,7 @@
  * not a surveyed site, and the panel says so.
  */
 import Box from '@mui/material/Box'
+import CircularProgress from '@mui/material/CircularProgress'
 import Collapse from '@mui/material/Collapse'
 import IconButton from '@mui/material/IconButton'
 import Stack from '@mui/material/Stack'
@@ -56,6 +57,109 @@ const AXIS_COLOR: Record<string, string> = {
   drainage: '#1f6feb',
   heat: '#2ea043',
   runoff: '#8957e5',
+}
+
+/**
+ * A planned project that exists as real geometry rather than as a generated
+ * proposal: the MTR station and its GLB.
+ *
+ * It joins the run the same way a catalog phase does -- by its plan id going into
+ * `selectedPlanIds` -- so its storage effect and its massing effect are scored,
+ * and the "Run N projects" count includes it. What it deliberately does NOT do is
+ * call `selectPlan`/`resyncViewer` the way a catalog phase does: the station's
+ * plan carries a tank polygon, and selecting the plan for the viewer would draw
+ * that polygon as a translucent slab over the station model it describes.
+ *
+ * ## Why the plan is looked up rather than hardcoded
+ *
+ * The plan id is a uuid minted at seed time, so it cannot be a constant here. The
+ * seeder tags the plan with `params.projectId`, which is the stable handle; this
+ * finds it among the scene's plans.
+ */
+const STATION_PROJECT_ID = 'mtr-station'
+
+function FixedProjectRow() {
+  const plans = usePlanStore((s) => s.plans)
+  const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
+  const setSelectedPlanIds = usePlanStore((s) => s.setSelectedPlanIds)
+  const planProjectLoading = useSceneStore((s) => s.planProjectLoading)
+
+  const plan = plans.find((p) => (p.params as { projectId?: string } | undefined)?.projectId === STATION_PROJECT_ID)
+  const on = Boolean(plan && selectedPlanIds.includes(plan.planId))
+
+  const toggle = () => {
+    if (!plan || planProjectLoading) return
+    setSelectedPlanIds(
+      on
+        ? selectedPlanIds.filter((id) => id !== plan.planId)
+        : [...selectedPlanIds, plan.planId],
+    )
+  }
+
+  return (
+    <Box sx={{ mb: 1, border: '1px solid', borderColor: on ? 'rgba(92,255,157,0.5)' : 'divider', borderRadius: 2, overflow: 'hidden' }}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        onClick={toggle}
+        sx={{
+          px: 1.25, py: 0.75,
+          cursor: plan && !planProjectLoading ? 'pointer' : 'not-allowed',
+          bgcolor: on ? 'rgba(92,255,157,0.12)' : 'transparent',
+          '&:hover': { bgcolor: on ? 'rgba(92,255,157,0.18)' : 'rgba(92,255,157,0.06)' },
+        }}
+      >
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Typography className="hud-mono" variant="body2" sx={{ fontWeight: 600, fontSize: 12.5 }}>
+            HSK MTR station
+          </Typography>
+          {on && (
+            <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#5cff9d', boxShadow: '0 0 6px #5cff9d' }} />
+          )}
+        </Stack>
+        {planProjectLoading
+          ? <CircularProgress size={10} sx={{ color: '#5cff9d' }} />
+          : <SwitchPill on={on} />}
+      </Stack>
+      <Box sx={{ px: 1.25, pb: 0.9, pt: 0.1 }}>
+        <Typography variant="caption" color="text.secondary" display="block">
+          {plan
+            ? 'Fixed footprint, scored in runs: 22.1 m massing and assumed storage. Not a generated proposal.'
+            : 'Not seeded on this scene. Run backend/scripts/seed_projects.py.'}
+        </Typography>
+      </Box>
+    </Box>
+  )
+}
+
+/** The little on/off pill. One definition, used by both row kinds. */
+function SwitchPill({ on }: { on: boolean }) {
+  return (
+    <Box
+      sx={{
+        width: 14,
+        height: 8,
+        borderRadius: 8,
+        bgcolor: on ? '#5cff9d' : 'rgba(160,190,175,0.25)',
+        position: 'relative',
+        transition: 'all 0.2s',
+      }}
+    >
+      <Box
+        sx={{
+          position: 'absolute',
+          top: 1,
+          width: 6,
+          height: 6,
+          borderRadius: '50%',
+          bgcolor: on ? '#04120a' : '#dce8e2',
+          left: on ? 7 : 1,
+          transition: 'left 0.2s',
+        }}
+      />
+    </Box>
+  )
 }
 
 export default function ProjectCatalog() {
@@ -186,6 +290,11 @@ export default function ProjectCatalog() {
         Toggle projects to score them <strong>together</strong>. Runs combine every
         active project, up to 40% of the study area.
       </Typography>
+      {/* main's fixed, data-driven project (the MTR station, from
+          backend/data/projects/mtr-station.json). It sits above the catalog
+          because it is the one project whose footprint and effects are
+          declared rather than derived. */}
+      <FixedProjectRow />
 
       {error && (
         <Typography variant="caption" color="error" display="block" sx={{ mb: 1 }}>
@@ -319,29 +428,7 @@ export default function ProjectCatalog() {
                             {totalHa(phase).toFixed(1)} ha
                           </Typography>
                         </Stack>
-                        <Box
-                          sx={{
-                            width: 14,
-                            height: 8,
-                            borderRadius: 8,
-                            bgcolor: on ? '#5cff9d' : 'rgba(160,190,175,0.25)',
-                            position: 'relative',
-                            transition: 'all 0.2s',
-                          }}
-                        >
-                          <Box
-                            sx={{
-                              position: 'absolute',
-                              top: 1,
-                              width: 6,
-                              height: 6,
-                              borderRadius: '50%',
-                              bgcolor: on ? '#04120a' : '#dce8e2',
-                              left: on ? 7 : 1,
-                              transition: 'left 0.2s',
-                            }}
-                          />
-                        </Box>
+                        <SwitchPill on={on} />
                       </Stack>
                     )
                   })}

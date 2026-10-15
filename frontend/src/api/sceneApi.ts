@@ -29,7 +29,24 @@ export async function getTerrain(sceneId: string): Promise<TerrainMeta> {
  * server-side into one scenario. The brief's goal is comparing combined
  * projects ("rather than only assessing each project individually"), and one
  * `planId` cannot express that.
+ *
+ * ## Why this request overrides the shared timeout
+ *
+ * The run's water and heat numbers are computed in about a second, but the
+ * response also carries the model-written result card, and the server does not
+ * return until that call finishes or gives up. A slow provider therefore makes a
+ * run that *already succeeded* look like a failure: measured on a free tier at
+ * 60-83 s, against the shared client's 60 s, so the browser aborted the request
+ * and the user saw a timeout.
+ *
+ * The server now bounds the card call (`llm.CARD_DEADLINE_S`, 45 s) and falls
+ * back to the code-assembled template rather than failing, which is what makes
+ * the run deterministic. This ceiling is the second half of that: it has to sit
+ * above the server's own budget, or the client kills the response before the
+ * server has finished deciding what to send back.
  */
+const RUN_TIMEOUT_MS = 90_000
+
 export async function runSimulation(
   sceneId: string,
   body: {
@@ -40,7 +57,9 @@ export async function runSimulation(
     planIds?: string[]
   },
 ): Promise<RunResult> {
-  const { data } = await http.post<RunResult>(`/scenes/${sceneId}/run`, body)
+  const { data } = await http.post<RunResult>(`/scenes/${sceneId}/run`, body, {
+    timeout: RUN_TIMEOUT_MS,
+  })
   return data
 }
 

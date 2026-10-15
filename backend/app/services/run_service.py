@@ -213,21 +213,43 @@ def _grids() -> Grids:
     return _GRIDS_CACHE["grids"]
 
 
-def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
-    """Sky-view factor and shaded fraction for the current massing, cached.
+def _heat_terms(grids: Grids, scene_id: str,
+                overrides: list[dict[str, Any]] | None = None
+                ) -> dict[str, np.ndarray] | None:
+    """Sky-view factor, shade, wind shelter and height for a massing, cached.
 
     These depend on the building geometry, not on the scenario: a retention
     basin or a rainfall change does not move a tower. Recomputing them per run
     would make every slider drag cost the most expensive rasters in the
     project, so they are cached and invalidated only when the city-model file
-    changes. ``None`` means no city model -- the land-class index alone, said
-    plainly in the sidecar.
+    changes *or* the planned-project massing does. ``None`` means no city model
+    -- the land-class index alone, said plainly in the sidecar.
+
+    ``overrides`` are the planned projects' massing effects for this run: each
+    ``{"ring": [[lon, lat], ...], "heightM": h}``. A project that replaces part
+    of today's city needs its own terms, because shade, sky view and wind
+    shelter are all read off the footprints -- scoring its land-class change
+    alone would leave its heat effect invisible.
+
+    The cache key carries the overrides, so a run with no project still hits the
+    cache it always hit, and a station run never serves the station-free terms.
     """
     model = scene_service.buildings_path(scene_id)
     mtime = None
     if model and Path(model).exists():
         mtime = Path(model).stat().st_mtime
-    if _HEAT_TERMS_CACHE.get("mtime") == mtime and "terms" in _HEAT_TERMS_CACHE:
+
+    # A stable key for the override set. Rings are rounded to ~0.1 m so a float
+    # jitter in a stored polygon does not silently miss the cache; the height is
+    # rounded to 0.01 m for the same reason.
+    signature = tuple(sorted(
+        (tuple((round(float(x), 6), round(float(y), 6))
+               for x, y in (o.get("ring") or [])),
+         round(float(o.get("heightM") or 0.0), 2))
+        for o in (overrides or [])
+    ))
+    key = (mtime, signature)
+    if _HEAT_TERMS_CACHE.get("key") == key and "terms" in _HEAT_TERMS_CACHE:
         return _HEAT_TERMS_CACHE["terms"]
 
     from app.services.design_metrics import (
@@ -235,18 +257,36 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
         SITE_LON_DEG,
         HEAT_SUMMER_DAY_OF_YEAR,
         footprints_from_geojson,
+        footprint_from_ring,
         rasterise_height,
         shade_mask,
         sky_view_factor_raster,
         cell_fad,
     )
+    from app.services.ai_plan import _point_in_ring
 
     terms: dict[str, np.ndarray] | None = None
     if mtime is not None:
         features = json.loads(Path(model).read_text()).get("features", [])
-        if features:
+        fps = footprints_from_geojson(features)
+
+        # ---- planned-project massing -------------------------------------
+        # Remove the existing envelopes the project sits on, then add the
+        # project's own block. A project footprint that overlaps nothing simply
+        # adds; one that covers six buildings replaces them, which is what makes
+        # its shade and wind exposure its own rather than the city's.
+        for o in (overrides or []):
+            ring = o.get("ring") or []
+            height = float(o.get("heightM") or 0.0)
+            if height <= 0 or len(ring) < 3:
+                continue
+            fps = [f for f in fps if not _point_in_ring(f.lon, f.lat, ring)]
+            block = footprint_from_ring(ring, height)
+            if block is not None:
+                fps.append(block)
+
+        if fps:
             cell_m = float(grids.cell_area_m2) ** 0.5
-            fps = footprints_from_geojson(features)
             height = rasterise_height(fps, grids)
             terms = {
                 "svf": sky_view_factor_raster(height, cell_m),
@@ -267,8 +307,37 @@ def _heat_terms(grids: Grids, scene_id: str) -> dict[str, np.ndarray] | None:
                 "height": height,
             }
     _HEAT_TERMS_CACHE.clear()
-    _HEAT_TERMS_CACHE.update({"mtime": mtime, "terms": terms})
+    _HEAT_TERMS_CACHE.update({"key": key, "terms": terms})
     return terms
+
+
+def _massing_overrides(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The planned projects' massing effects, ready for :func:`_heat_terms`.
+
+    Reads every ``station_massing``-style feature out of the run's intervention
+    list and returns its ring and height. Paired with
+    :data:`INTERVENTION_EFFECTS`, whose ``station_massing`` entry has no grid
+    effect on purpose: the same feature moves nothing on the land-class grid and
+    everything on the geometry rasters, and the two must not be confused.
+    """
+    out: list[dict[str, Any]] = []
+    for feature in features or []:
+        kind = str(feature.get("intervention_type")
+                   or feature.get("interventionType") or "")
+        if kind != "station_massing":
+            continue
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates") or []
+        # A Polygon arrives as a list of rings; take the outer one, the same
+        # convention `footprint_from_ring` and the ledger already use.
+        ring = coords[0] if coords and isinstance(coords[0], (list, tuple)) else coords
+        params = feature.get("params") or {}
+        try:
+            height = float(params.get("heightM", params.get("height_m")))
+        except (TypeError, ValueError):
+            continue
+        out.append({"ring": ring, "heightM": height})
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -375,6 +444,11 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
                 "Explain the run that has just completed.", checkable))],
             schema=ANSWER_SCHEMA,
             max_tokens=1500,
+            # Bounded, because the numbers above are already computed and the
+            # caller is waiting on this call before it can see them. A card that
+            # takes longer than the deadline is not an error -- it falls through
+            # to the code-assembled template below, labelled like any other.
+            deadline_s=llm.CARD_DEADLINE_S,
         )
         # `complete_json` walks the model chain past empty replies and can still
         # return one: a reasoning model that spends its whole budget on the hidden
@@ -521,14 +595,22 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     # ---- temperature field ---------------------------------------------------
     # The slider sets the scenario mean surface temperature (C). The observed LST
     # scene supplies the base; the geometry terms (land + shade + sky view + wind
-    # shelter) express each cell's deviation from the mean. Scenario and baseline
-    # share the same observed base and geometry, so the delta is the intervention's
-    # own effect on surface temperature.
+    # shelter) express each cell's deviation from the mean.
+    #
+    # Baseline and scenario deliberately use DIFFERENT massing terms when a
+    # planned project is active. A baseline is "today", so it keeps today's city;
+    # the scenario has the project built in its place. Sharing one term set -- as
+    # this did before projects could carry a massing effect -- would cancel the
+    # project's shade and wind exposure out of the delta, because both sides
+    # would subtract the same geometry. That is the whole point of scoring a
+    # project, so the two are computed separately.
+    overrides = _massing_overrides(features)
     terms = _heat_terms(grids, scene_id)
+    scen_terms = _heat_terms(grids, scene_id, overrides) if overrides else terms
     lst_base, lst_meta = load_observed_lst(grids.elevation_5m.shape[0],
                                            grids.elevation_5m.shape[1])
     scenario_mean_c = float(temperature_c)
-    scen_temp = _temperature_fields(grids, trial, terms, lst_base, scenario_mean_c)
+    scen_temp = _temperature_fields(grids, trial, scen_terms, lst_base, scenario_mean_c)
     base_temp = _temperature_fields(grids, grids.land_class, terms, lst_base,
                                     scenario_mean_c)
 

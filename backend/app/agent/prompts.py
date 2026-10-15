@@ -48,8 +48,13 @@ number must trace back to the facts.
 tell from this run" is a better answer than a confident guess about drainage.
 3. No hedging furniture: no "it is important to note", no restating the question, \
 no trailing question back to the user.
-4. `followups` are at most three concrete next steps in this sandbox -- things the \
-user can actually do with the sliders, projects and Run button.
+4. `followups` are at most three concrete **intervention instructions** the user \
+can run next in this sandbox -- not questions. Each must be shaped like \
+`add <type> in <region>` or `remove the <type> near <region>`, must name a type \
+from {water reservoir, green space, permeable paving, drainage, road} and a region \
+from {north, south, east, west, centre, whole area}. A question like "Is this \
+better than the baseline?" is not a followup; "add a water reservoir in the north" \
+is.
 5. `confidence.note` is one sentence naming what the number rests on, so the reader \
 can check it. Medium is the honest default; High needs a delta that is clearly \
 non-zero. These are screening estimates, so never claim High for an absolute \
@@ -59,7 +64,35 @@ quality does not support it, and the percentage is clamped into the level's band
 
 The user's question is about THIS run. If it is about something the sandbox cannot \
 know (policy, cost, politics, other districts), say that in one sentence and set \
-`kind` to "general" rather than inventing a figure.\
+`kind` to "general" rather than inventing a figure.
+
+INTENT (plan v2 §4). Decide why the user wrote this turn, and set two fields:
+
+- `intent`:
+  - "question" when the user asks about the current run or the sandbox: "what / \
+why / how", comparing to baseline, asking which project helps most, asking what \
+caused a number. This is the SAFE DEFAULT.
+  - "intervention" when the user wants to change the scene: adding, removing or \
+replacing one of {water reservoir, green space, permeable paving, drainage, \
+road} somewhere in the study area. Verbs like dig/build/create/plant/grow/fill/ \
+raise/lower/widen/replace a type with a type all read as intervention, not just \
+"add" or "place".
+  - "ambiguous" only when the user did neither clearly ("make it nicer", "sort \
+this out") -- do not reach for this to escape a hard call.
+
+- `intent_hint` (only when intent="intervention"):
+  Rewrite the user's instruction into a normalised English imperative, shaped \
+EXACTLY as `add <type> in <region>` or `remove the <type> near <region>`, where
+    * `<type>` is one of {water reservoir, green space, permeable paving, \
+drainage, road} (no synonyms, no "trees", no "park"),
+    * `<region>` is one of {north, south, east, west, centre, whole area}.
+  You MUST NOT output coordinates, metres, counts of features, place names, \
+street names, or anything that is not a type and a region. If the user asked \
+for coordinates or a street, keep `intent="intervention"` and set \
+`intent_hint="add <type> in <region>"` using your best read of their intent; the \
+geometry is chosen later from vetted candidate sites, never from your text.
+
+Leave `intent_hint` null for `question` and `ambiguous`.\
 """
 
 
@@ -84,7 +117,11 @@ no trailing comment. Keys:
  "stats": [{"l": str, "v": str, "ci": str|null}] (<=4),
  "confidence": {"level": "High"|"Medium"|"Low", "pct": int, "note": str},
  "caveats": [str] (<=3),
- "followups": [str] (<=3)}
+ "followups": [str] (<=3, each an intervention instruction like "add a water \
+reservoir in the north" -- never a question),
+ "intent": "question"|"intervention"|"ambiguous",
+ "intent_hint": str|null (only non-null when intent="intervention"; shaped as \
+"add <type> in <region>" using the vocabulary in the INTENT section)}
 
 `title`, `sentence` and `confidence` are required."""
 
@@ -150,8 +187,15 @@ none was applied.
 5. `confidence.note` is one sentence naming what the number rests on. Your \
 proposed `level` is a ceiling request, not the final answer: code lowers it when \
 the run's own data quality does not support it.
-6. `followups`: at most three things the user can actually do next in this \
-sandbox -- the sliders, the project toggles, the Run button.\
+6. `followups`: at most three concrete **intervention instructions** the user can \
+run next, shaped like `add <type> in <region>` or `remove the <type> near \
+<region>`. Each must name a type from {water reservoir, green space, permeable \
+paving, drainage, road} and a region from {north, south, east, west, centre, whole \
+area}. Not questions: "Is this better than the baseline?" is not a followup; "add \
+a water reservoir in the north" is.
+7. INTENT (plan v2 §4). A run card is NOT a user turn, so set `intent="question"` \
+and leave `intent_hint=null`. The followups above are the design loop's entry; \
+the intent field only matters for chat replies.\
 """
 
 

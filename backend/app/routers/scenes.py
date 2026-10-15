@@ -13,11 +13,13 @@ from fastapi import APIRouter, HTTPException, Response, status
 
 from app.schemas.intervention import InterventionCreateResponse
 from app.schemas.plan import (
+    AIPlanApplyRequest,
     AIPlanRequest,
     AIPlanResponse,
     PlanCreate,
     PlanListRead,
 )
+from app.schemas.intervention import InterventionProposal
 from app.schemas.scene import (
     RunRequest,
     SceneCreate,
@@ -253,34 +255,118 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
     """POST /api/scenes/{sceneId}/ai-plan -- natural language to a draft plan.
 
     The GenAI entry point. The instruction is turned into intervention features
-    grounded in the area's own terrain, land cover and flood model, then stored
-    through the same path as a hand-drawn feature: `source="ai"`, every feature
-    `status="draft"` (ADR-030), rendered by the same intervention layer.
+    grounded in the area's own terrain, land cover and flood model, then (when
+    `apply=true`) stored through the same path as a hand-drawn feature:
+    `source="ai"`, every feature `status="draft"` (ADR-030), rendered by the
+    same intervention layer.
+
+    When `apply=false` (plan v2 §5 confirm gate), proposals are returned
+    **without** being written to the store. The client renders a checklist and
+    sends the accepted subset back to `/ai-plan/apply`.
 
     It never invents geometry. If the analysis has not been run there is nothing
     legitimate to site on, and the endpoint says so rather than guessing.
     """
-    from app.services.ai_plan import PlanGenerationError, generate_plan
+    from app.services.ai_plan import (
+        PlanGenerationError,
+        apply_proposals,
+        generate_proposals,
+    )
 
     try:
-        result = generate_plan(
+        proposed = generate_proposals(
             scene_id,
             payload.instruction,
             prefer=payload.provider,
             max_features=payload.max_features,
+            allowed_types=payload.allowed_types,
         )
     except PlanGenerationError as exc:
         # 422 rather than 500: the request was well-formed, the machine simply
         # cannot honour it, and the client needs to know which.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    features = proposed["features"]
+    if not payload.apply:
+        proposals = [InterventionProposal.from_feature(f) for f in features]
+        return AIPlanResponse.model_validate({
+            "planId": None,
+            "features": len(proposals),
+            "provider": proposed["provider"],
+            "types": sorted({f["intervention_type"] for f in features}),
+            "groundingNotes": proposed.get("groundingNotes", []),
+            "message": proposed.get("message"),
+            "proposals": [p.model_dump(by_alias=True) for p in proposals],
+            "candidateCounts": proposed.get("candidateCounts", {}),
+            "fallbackNote": proposed.get("fallbackNote"),
+        })
+
+    if not features:
+        return AIPlanResponse.model_validate({
+            "planId": None,
+            "features": 0,
+            "provider": proposed["provider"],
+            "groundingNotes": proposed.get("groundingNotes", []),
+            "message": proposed.get("message"),
+        })
+
+    try:
+        applied = apply_proposals(
+            scene_id,
+            payload.instruction,
+            features,
+            proposed["provider"],
+            proposed.get("groundingNotes", []),
+            proposed.get("candidateCounts", {}),
+        )
+    except PlanGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     return AIPlanResponse.model_validate({
-        "planId": result.get("planId"),
-        "features": result.get("features", 0),
-        "provider": result["provider"],
-        "types": result.get("types", []),
-        "groundingNotes": result.get("groundingNotes", []),
-        "message": result.get("message"),
+        "planId": applied.get("planId"),
+        "features": applied.get("features", 0),
+        "provider": applied["provider"],
+        "types": applied.get("types", []),
+        "groundingNotes": applied.get("groundingNotes", []),
+        "fallbackNote": proposed.get("fallbackNote"),
+    })
+
+
+@router.post("/scenes/{scene_id}/ai-plan/apply")
+def apply_ai_plan(scene_id: str, payload: AIPlanApplyRequest) -> AIPlanResponse:
+    """POST /api/scenes/{sceneId}/ai-plan/apply -- persist a confirmed subset.
+
+    Second half of the confirm gate (plan v2 §5). Features travel through the
+    same `scene_service.create_plan` path as a hand-drawn plan, so the stored
+    record is indistinguishable from one made through the legacy single-shot
+    endpoint.
+    """
+    from app.services.ai_plan import PlanGenerationError, apply_proposals
+
+    # Strip the derived display fields: they are read from `params` by the UI,
+    # and `InterventionIn` (which PlanCreate validates each item through) is
+    # `extra="forbid"`, so leaving them in rejects the whole payload.
+    features = [
+        p.model_dump(exclude={"site_id", "rationale", "basis"}) for p in payload.proposals
+    ]
+    try:
+        applied = apply_proposals(
+            scene_id,
+            payload.instruction,
+            features,
+            payload.provider,
+            payload.grounding_notes,
+            payload.candidate_counts,
+        )
+    except PlanGenerationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return AIPlanResponse.model_validate({
+        "planId": applied.get("planId"),
+        "features": applied.get("features", 0),
+        "provider": applied["provider"],
+        "types": applied.get("types", []),
+        "groundingNotes": applied.get("groundingNotes", []),
     })
 
 

@@ -73,6 +73,14 @@ class PlanNotFound(ResourceNotFound):
         self.plan_id = plan_id
 
 
+class InterventionNotFound(ResourceNotFound):
+    code = "INTERVENTION_NOT_FOUND"
+
+    def __init__(self, intervention_id: str) -> None:
+        super().__init__("intervention not found", self.code)
+        self.intervention_id = intervention_id
+
+
 # --------------------------------------------------------------------------- #
 # Internal helpers
 # --------------------------------------------------------------------------- #
@@ -373,6 +381,28 @@ def list_interventions(plan_id: str) -> InterventionFeatureCollection:
     return InterventionFeatureCollection(features=features)
 
 
+def delete_intervention(plan_id: str, intervention_id: str) -> None:
+    """DELETE /api/plans/{planId}/interventions/{interventionId}.
+
+    Hard delete (plan v2 §6.2 Decision 2): no soft-delete, no undo. Keeps the
+    plan doc's embedded `interventions` list in sync with the standalone
+    intervention file so `list_interventions` and the raster/run paths agree.
+    """
+    doc = db.read_doc(db.plan_path(plan_id))
+    if doc is None:
+        raise PlanNotFound(plan_id)
+
+    items = doc.get("interventions", [])
+    remaining = [item for item in items if item.get("id") != intervention_id]
+    if len(remaining) == len(items):
+        raise InterventionNotFound(intervention_id)
+
+    doc["interventions"] = remaining
+    doc["updated_at"] = _now()
+    db.write_doc(db.plan_path(plan_id), doc)
+    db.delete_doc(db.intervention_path(intervention_id))
+
+
 # --------------------------------------------------------------------------- #
 # Terrain
 # --------------------------------------------------------------------------- #
@@ -402,6 +432,16 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
         waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
         infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
+        plan_project_url=(
+            settings.public_model_url("mtr_station.glb")
+            if (settings.model_dir / "mtr_station.glb").exists()
+            else None
+        ),
+        plan_project_footprint_url=(
+            settings.public_url("plan_project_footprint.json")
+            if (settings.data_dir / "plan_project_footprint.json").exists()
+            else None
+        ),
     )
 
 

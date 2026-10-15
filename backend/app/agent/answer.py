@@ -80,6 +80,21 @@ class AnswerCard(BaseModel):
         "model", description="Whether a model wrote this or code assembled it."
     )
     grounding: GroundingReport | None = Field(None, description="Number check; None for template cards.")
+    # Plan v2 §4: the LLM classifies whether the user wants to change the scene
+    # or to ask about it, so the frontend no longer guesses from a 12-verb regex.
+    # `question` is the safe default; a parser/template response leaves it there
+    # and the client falls back to the legacy heuristic.
+    intent: Literal["question", "intervention", "ambiguous"] = Field(
+        "question",
+        description="What the user wants: 'question' explains the run, 'intervention' "
+                    "changes the scene (triggers ai-plan on the client), 'ambiguous' asks "
+                    "the user to disambiguate.",
+    )
+    intent_hint: str | None = Field(
+        None,
+        description="When intent='intervention', the model's normalised English "
+                    "instruction (type + region only) fed to ai-plan. None otherwise.",
+    )
 
 
 #: The JSON schema handed to the provider. Mirrors the model above, minus the
@@ -119,6 +134,12 @@ ANSWER_SCHEMA: dict[str, Any] = {
         },
         "caveats": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 200}},
         "followups": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 120}},
+        # Plan v2 §4: let the model tell us whether this turn is a question or
+        # an intervention request. Optional on the wire (JSON contract tolerates
+        # legacy responses missing the key) and defaulted to "question" in the
+        # pydantic model, so a parser/template answer costs the client nothing.
+        "intent": {"type": "string", "enum": ["question", "intervention", "ambiguous"]},
+        "intent_hint": {"type": "string", "maxLength": 120},
     },
     "required": ["title", "sentence", "confidence"],
 }

@@ -77,6 +77,8 @@ export interface TerrainMeta {
   terrain3DUrl?: string | null
   waterbodyUrl?: string | null
   infrastructureUrl?: string | null
+  planProjectUrl?: string | null
+  planProjectFootprintUrl?: string | null
 }
 
 export type PlanType =
@@ -158,6 +160,15 @@ export interface LayerVisibility {  imagery: boolean
   waterbody: boolean
   /** Infrastructure structures from 6-NW-12D INFRASTRUCTURE glTF. */
   infrastructure: boolean
+  /**
+   * Draw buildings as 2.5D white massing instead of the textured 3D Tiles.
+   *
+   * A depiction choice, nothing more: it swaps which layer the city is drawn
+   * from and never decides whether a planned project is present. Those are
+   * separate questions, and fusing them is what made the station appear as a
+   * side effect of changing how buildings look.
+   */
+  massing25d: boolean
 }
 
 /**

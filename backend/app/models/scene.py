@@ -34,6 +34,8 @@ class SceneRow(TypedDict):
     terrain_format: NotRequired[str | None]
     terrain_source: NotRequired[str | None]
 
+    plan_project_url: NotRequired[str | None]
+
     created_at: str
     updated_at: str
 

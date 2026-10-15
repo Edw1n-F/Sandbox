@@ -364,6 +364,55 @@ def test_a_card_with_no_run_in_scope_says_that_and_not_no_model_configured() -> 
     assert events[-2]["answer"]["kind"] == "general", events[-2]
 
 
+def test_template_card_defaults_intent_to_question() -> None:
+    """Plan v2 §4: a card the model did not write still has to answer
+    `What is this?` — and the safe default is `question`, so the frontend's
+    intent auto-route never fires on a parser/template response. The intent
+    field was added for the LLM path and must leave the heuristic path alone.
+    """
+    from app.agent.answer import template_card
+    from app.agent.chat_service import _no_run_card, answer
+
+    assert template_card({}).intent == "question"
+    assert template_card({}).intent_hint is None
+    assert _no_run_card().intent == "question"
+    assert _no_run_card().intent_hint is None
+
+    # answer() has no LLM configured in the test environment, so it falls back
+    # to template_card. The card the chat endpoint actually emits must carry
+    # the safe default.
+    card = answer("add a water reservoir in the north", {})
+    assert card.intent == "question", card.intent
+    assert card.intent_hint is None, card.intent_hint
+
+
+def test_card_accepts_an_llm_supplied_intent() -> None:
+    """When the model does write the card, pydantic parses the two new fields
+    verbatim. A bad enum value is rejected; the safe default kicks in only when
+    the key is absent, which was the whole point of making it optional.
+    """
+    from app.agent.answer import AnswerCard
+
+    draft = {
+        "title": "t",
+        "sentence": "s",
+        "confidence": {"level": "Medium", "pct": 50, "note": "n"},
+        "intent": "intervention",
+        "intent_hint": "add a water reservoir in the north",
+    }
+    card = AnswerCard.model_validate(draft)
+    assert card.intent == "intervention"
+    assert card.intent_hint == "add a water reservoir in the north"
+
+    # Legacy drafts (no intent key) default back to "question".
+    legacy = {
+        "title": "t",
+        "sentence": "s",
+        "confidence": {"level": "Medium", "pct": 50, "note": "n"},
+    }
+    assert AnswerCard.model_validate(legacy).intent == "question"
+
+
 # --------------------------------------------------------------------------- #
 
 def _run() -> int:

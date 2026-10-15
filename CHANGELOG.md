@@ -2,6 +2,161 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-15 — a planned project is data, and the building-style switch is not a project toggle
+
+### Fixed — one flag was doing three jobs
+
+`layers.planProject` gated the station GLB, the 2.5D massing overlay, and the
+hiding of the textured 3D Tiles. The single "Plan Project" button flipped all
+three, so selecting the station was a side effect of changing how buildings were
+drawn, and there was no way to ask for 2.5D buildings without the station. It is
+now two independent things:
+
+- **A building-style switch** (`massing25d`, a 3D / 2.5D `ToggleButtonGroup` in
+  the layer stack). It decides which layer the city is drawn from and nothing
+  else.
+- **A project row** in the Projects panel, whose toggle edits the run's
+  `selectedPlanIds`.
+
+### Added — a planned project declares its own effects
+
+A project is a data file, `backend/data/projects/<id>.json`, naming its
+footprint, its model and the effects toggling it on should have.
+`scripts/seed_projects.py` seeds each into a fixed-id plan through the same
+`create_plan` the API uses, tagging it with `params.projectId`. Selecting it puts
+that plan in `plan_ids`, so the run scores it, the "Run N projects" count
+includes it and the cumulative-coverage guard bounds it -- with no special case
+in the run path at all. Swapping in a real user's figures means editing the JSON
+and re-seeding.
+
+The first instance is the HSK MTR station, with two effects:
+
+- `underground_tank`, 2 m of assumed storage over the 1,357 m² footprint. The
+  depth is the model's own service-reservoir working depth, and it is labelled
+  "project-supplied placeholder" in its `basis` rather than presented as design
+  data.
+- `station_massing`, a new kind carrying the block height. It has no land-class
+  effect -- like `massing_height`, its whole consequence is in the geometry
+  rasters -- so `run_service._heat_terms` now rebuilds them from a modified
+  footprint list: the existing envelopes the project overlaps are removed and the
+  project's own block added. Measured on the real grids: the sky-view factor
+  moves over 2,366 cells and the rendered heat anomaly moves up to **0.35 °C over
+  795 cells**. The water ledger drops **33 m³** unstored at 50 mm.
+
+Two things this needed that are easy to get wrong:
+
+- **Baseline and scenario now use different massing terms** when a project is
+  active. They shared one set before, which was right when nothing could change
+  the geometry -- but with a massing effect, sharing would subtract the same
+  geometry from both sides and cancel the project's shade and wind exposure out
+  of the delta entirely. The baseline stays "today"; the scenario gets the
+  project's own terms.
+- **The heat-terms cache is keyed on the override set**, so a run with no project
+  still hits the cache it always hit and a project run cannot serve (or poison)
+  the station-free terms. `test_run` pins both directions.
+
+`station_massing` also gains a `geometry_only` marker so it is reported in
+`interventionsApplied` rather than `interventionsSkipped`. It has no land-class
+consequence because every consequence it has is in the massing rasters; listing
+it as skipped would hide a shade and wind change that genuinely happened. The
+unconsumed no-grid kinds (`massing_height`, `drainage_alignment`) stay skipped,
+because for those it is the truth.
+
+### Fixed — a bug this change introduced and then caught
+
+The first version compared the selection against the project id (`'mtr-station'`)
+directly. The selection holds plan **uuids** -- `create_plan` mints one -- so the
+station showed as selected in the panel and nothing moved on the map. Resolved
+through the plan list by `params.projectId`, which is the handle the seeder
+writes. Added to `verify-3d` so it cannot come back.
+
+### Verification
+
+`test_run` 41/41 (5 new checks, including that the change is local rather than a
+site-wide shift, and that the cache is not poisoned); every other backend suite
+passes. Frontend `tsc`, `eslint`, vitest 85/85. Browser: `verify-3d` 17 -> **27
+checks**, all green, holding the four behaviours apart -- 2.5D draws the massing
+and hides no boxes; selecting the station shows the model, hides the 6 boxes it
+stands on and joins the run; turning it off restores both; switching back to 3D
+restores the tileset. `verify-ux` 21/21, `verify-chat` 17/17, `verify-nav` 29/29.
+
+### Note — the heat effect is local, not a site-mean shift
+
+Worth stating because the panel invites the wrong reading: the temperature field
+is re-anchored so its mean equals the scenario mean by construction, so
+`surfaceMeanC` reads the slider and can never show a project's effect. What a
+project changes is the *distribution* -- the shaded fraction, sky view and wind
+blockage of the cells it stands on. At 1,357 m² against a 43.5 ha study area that
+is a real but small change, and the honest place to see it is the heat overlay,
+not the mean. A future project that matters more would need a larger footprint,
+not a bigger assumption.
+
+## 2026-10-15 — main goes green: lint warnings, a stale contract, the port sweep, and two hanging suites
+
+Both failures pre-date this entry and were already on `origin/main`; neither came
+from the camera work in the entry below.
+
+### Fixed — three `console.info` calls failed the lint gate
+
+`eslint . --max-warnings 0` permits only `warn` and `error`. The Plan Project GLB
+effect logged its load, its sampled terrain height and its success through
+`console.info`, so three warnings turned the whole frontend job red. They now use
+`console.warn`, which is already what the neighbouring 2.5D-overlay log uses, so
+the planProject diagnostics stay visible and consistent. No behaviour changed.
+
+### Fixed — `contracts/openapi.json` was stale
+
+`test_openapi_contract.py` failed with "contracts/openapi.json is stale". The
+committed contract was missing `"additionalProperties": true` on every bare
+`{"type": "object"}` schema — 40 lines across the run/geometry/params/style
+objects, which is what Pydantic 2.13.5 now emits. Regenerating was the whole fix;
+nothing was hand-edited. The drift was present at `9a1d960` (the planProject
+merge) and absent at `bbd6963`, so it arrived with the planProject branch.
+
+### Fixed — the verify suites named the old backend port
+
+`902ba21` retargeted the Vite proxy and CLAUDE.md from 8001 to 8000 and both are
+consistent. Six references in the browser suites' prose were missed: the
+docstrings in `_verify-common.mjs`, `verify-3d.mjs`, `verify-chat.mjs`,
+`verify-nav.mjs` and `verify-ux.mjs`, plus `requireServers`'s failure text. The
+suites themselves were never broken — they reach the backend through the Vite
+proxy at :5173 and follow `vite.config.ts` — but a suite exiting 2 told you to
+start the API on the wrong port. All six now say 8000.
+
+### Fixed — `verify-chat` and `verify-3d` hung on the model call behind `POST /run`
+
+Both suites looked like they hung while running the browser checks. They were
+waiting on the network.
+
+`run_service._llm_explanation` asks a model to write the run's result card and
+falls back to a labelled template when the call fails — but the HTTP response
+does not return until the call finishes or times out, and `llm.TIMEOUT_S` is
+90 s, multiplied by a fallback chain. Measured on this machine: **0.7 s** with no
+provider configured, **33 s** on a good call to the configured provider, **119 s**
+when it timed out. `verify-chat`'s `route.fetch()` carries a 30 s default of its
+own, so it died with "route.fetch: Timeout 30000ms exceeded" — a message that
+reads like a bug in the suite rather than a slow model.
+
+- **`verify-chat`** now stubs `/run` as well as the chat stream, from a new
+  committed fixture, so it depends on no model at all. That is what its own
+  header always claimed; the chat stream was already mocked, so no assertion
+  covered the model.
+- **`verify-3d`** had no such claim — it asserts the overlays reach the canvas,
+  which needs a real run result. It now stubs `/run` from the same fixture and
+  reads the per-run overlay URLs off the entities, which is what it measures
+  anyway. The run path itself stays covered server-side by `test_run.py`.
+
+`scripts/fixtures/run-result.json` is a real captured response from a 50 mm
+baseline run on this scene, with `runId` and the overlay URLs pinned so the
+receipt assertions are stable. Using the actual response rather than a hand-built
+object matters: `StatsPanel` reads `stats.delta.unstoredM3` and a dozen siblings,
+and a fixture missing one crashes the panel into its error boundary instead of
+failing the check that cares — which is exactly what a first attempt did.
+
+Measured, before → after: `verify-chat` never completed → 17/17 in 26 s;
+`verify-3d` 13/17 in 172 s → 17/17 in 76 s. `verify-ux` 21/21 and `verify-nav`
+29/29 are unchanged and unaffected.
+
 ## 2026-10-14 — rotate, tilt and zoom are three independent axes
 
 ### Fixed — tilting past the pitch limit rotated the view
@@ -135,6 +290,104 @@ month — move every dated section older than the current month into
 `docs/changelog/YYYY-MM.md` and leave a one-line index entry here
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
+
+## 2026-10-15 — Plan Project overlay: GLB + 2.5D massing + overlap hiding
+
+### Added — a toggle that swaps the scene into planning-document view
+
+A **Plan Project** toggle in the layer panel renders a government planning case
+(the MTR Hung Shui Kiu station, `backend/model/mtr_station.glb`) on top of
+HSK/HT. When it is on, three things happen together:
+
+1. The textured Open3Dhk 3D Tiles buildings layer is hidden.
+2. The 396 footprints in `buildings_hsk.json` are extruded as white, black-outlined
+   massing — a CityGML LOD1 look that makes the real planning project read against
+   a clean, un-textured context.
+3. The handful of 2.5D boxes whose footprints intersect the GLB's own footprint
+   are hidden, so the station is not drawn through existing massing.
+
+Toggling off destroys the 2.5D entities and restores the 3D Tiles to the user's
+prior `realBuildings` state. The two layers are mutually exclusive by design:
+the 2.5D overlay exists **because** the textured mesh fights the GLB visually.
+
+### Why this is one entry, not two
+
+`fdc1a4c` landed the GLB + toggle on 2026-10-14 and never wrote a CHANGELOG
+entry. The 2.5D companion is the other half of the same feature and was built
+today; collapsing them into one date-of-closure entry is the single-home-per-fact
+rule, not a rewriting of history. The GLB-only commit is in `git log`.
+
+### How the GLB footprint is derived
+
+The GLB has no stored bbox, so **`backend/scripts/compute_plan_project_footprint.py`**
+reads its 902,806 vertices with `trimesh`, applies the same ENU-axis remap and
+`scale=50` the frontend uses (glTF Y-up → ENU as `(x, -z, y)`, matching
+`tiles_to_buildings.py:55`), projects to lon/lat with a flat-earth
+approximation (error <1 cm at 22.44 °N, ±400 m), takes the `scipy` convex hull
+of the XY projection, and writes `backend/data/plan_project_footprint.json`
+as a 32-vertex `Feature<Polygon>`. The script is idempotent; it must be re-run
+whenever the GLB, its placement or `MTR_SCALE` change.
+
+The scene service exposes it as `terrainMeta.planProjectFootprintUrl`
+(`/static/plan_project_footprint.json`), gated on file presence — a missing
+sidecar leaves the field `null` and the 2.5D effect no-ops cleanly rather than
+loading a half-feature.
+
+### Why Entity + PolygonHierarchy, not Primitive
+
+396 polygons toggle in <5 ms, and the Entity API supports per-building
+`show = false` out of the box, which the overlap-hiding step needs. A single
+`GroundPrimitive`-based approach would push ground-clamping onto Cesium, but
+`GroundPrimitive` does not support `extrudedHeight` — the ceiling-vs-floor
+trade-off is wrong for massing.
+
+### What bit us during the build
+
+**Cesium's `PolygonGraphics` silently ignores `heightReference` once
+`extrudedHeight` is set.** The 2.5D boxes shipped at ellipsoid zero with the
+terrain at 3-17 m, so every building appeared to sink into the ground. Fix:
+sample the DEM at every outer-ring vertex, take the minimum (uphill corner
+touches ground, downhill corner buried shallow rather than floating),
+assign `height = base` and `extrudedHeight = base + height_m` as absolute
+elevations.
+
+**Two features' footprints extended past the DEM bbox.** `bldg-0394` and
+`bldg-0395` sit just south of the scene's south edge (lat 22.4310 vs DEM
+south 22.431). `sampleDemHeight` returned `null` for every vertex, the base
+fallback tripped to 0, and both buildings sank into the terrain. Added
+`sampleDemHeightClamped` in `demProvider.ts` — same sampler, but clamps the
+query point into the raster bbox first. HSK/HT edges are flat, so the
+nearest-edge height is within 1-2 m of truth and visually indistinguishable.
+
+**One feature is a MultiPolygon, not a Polygon.** `bldg-0104` broke the
+`coordinates[0]` assumption and read a nested ring as if each item were a
+`[lon, lat]`. `createFootprintLayer` now walks `outerRings()` for both
+geometry types and creates one Entity per outer ring (`bldg-0104#0`,
+`bldg-0104#1`); `setHiddenIds` strips the `#N` suffix so the hidden set
+still keys on the original feature id. The GeoJSON wire type in
+`SandboxViewer.tsx` is now `FeatureCollection<Polygon | MultiPolygon, ...>`.
+
+### Measured on 2026-10-15
+
+- 396 features in `buildings_hsk.json` → **390 drawn**, **6 hidden** by the
+  GLB footprint (`bldg-0001, 0002, 0004, 0005, 0006, 0369`).
+- `bldg-0104` renders as 2 separate entities summing to 1 feature.
+- `bldg-0394` and `bldg-0395` ride the DEM-south edge via clamped sampling.
+- Toggle round-trip adds no leaked entities (`viewer.entities.values.length`
+  returns to its pre-toggle baseline).
+
+### Files
+
+- Added: `backend/scripts/compute_plan_project_footprint.py`,
+  `backend/data/plan_project_footprint.json`,
+  `frontend/src/view/footprintLayer.ts`
+- Changed: `backend/app/schemas/scene.py` (append `plan_project_footprint_url`),
+  `backend/app/services/scene_service.py` (inject URL),
+  `backend/requirements.txt` (declare `trimesh`),
+  `contracts/openapi.json` (regenerated),
+  `frontend/package.json` (add `@turf/boolean-intersects`),
+  `frontend/src/api/types.ts`, `frontend/src/view/demProvider.ts`
+  (export `sampleDemHeightClamped`), `frontend/src/view/SandboxViewer.tsx`
 
 ## 2026-10-14 — navigation: trackpad sensitivity, a compass, tilt buttons and a cheat-sheet
 

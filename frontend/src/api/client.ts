@@ -86,5 +86,17 @@ http.interceptors.response.use(
 
 /** Narrow an unknown catch value to something a React error boundary can show. */
 export function errorMessage(error: unknown): string {
-  return error instanceof ApiError ? error.message : String(error)
+  if (!(error instanceof ApiError)) return String(error)
+  // A 422 says "request validation failed" at the top level; the field that
+  // actually failed is in `details`. Hiding that was the thing that made a
+  // schema drift (stale backend, missing field) read as a mysterious generic
+  // error instead of "the server does not accept `apply` yet".
+  if (Array.isArray(error.details) && error.details.length > 0) {
+    const first = error.details[0] as { loc?: unknown[]; msg?: string } | undefined
+    if (first && typeof first.msg === 'string') {
+      const loc = Array.isArray(first.loc) ? first.loc.filter((p) => p !== 'body').join('.') : ''
+      return loc ? `${error.message} — ${loc}: ${first.msg}` : `${error.message} — ${first.msg}`
+    }
+  }
+  return error.message
 }

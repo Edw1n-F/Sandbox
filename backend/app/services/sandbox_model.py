@@ -1079,6 +1079,15 @@ INTERVENTION_EFFECTS: dict[str, dict[str, Any]] = {
     "massing_height": {"to": None,
                        "why": "a 3D operation on existing buildings; it changes "
                               "shade and exposure, not land cover"},
+    # A planned project's own massing. Like `massing_height` it moves shade and
+    # wind exposure rather than land cover, so it has no grid effect here -- the
+    # geometry swap it implies is applied to the heat terms by `run_service`
+    # (`_heat_terms`), which is the only place footprints become rasters. It is
+    # listed so the ledger reports it as *applied* with that reason, instead of
+    # letting an unrecognised kind read as an oversight.
+    "station_massing": {"to": None, "geometry_only": True,
+                        "why": "a planned building's massing: it changes shade "
+                               "and wind exposure, not land cover"},
 }
 
 # The largest share of the study area one intervention may rework. Beyond this it
@@ -1369,7 +1378,23 @@ def apply_interventions(
                                    "intervention type"})
             continue
         if effect.get("to") is None and "cn" not in effect:
-            skipped.append({"id": fid, "kind": kind, "why": effect["why"]})
+            # A `geometry_only` effect is applied, not skipped: it has no
+            # land-class consequence because every consequence it has is in the
+            # massing rasters, which `run_service._heat_terms` rebuilds. Reporting
+            # it as skipped would hide a shade and wind change that genuinely
+            # happened, which is the failure this list exists to prevent. The
+            # other no-grid effects (`massing_height`, `drainage_alignment`) stay
+            # in `skipped`: nothing consumed them, so "skipped" is the truth.
+            if effect.get("geometry_only"):
+                applied.append({
+                    "id": fid, "kind": kind, "cellsChanged": 0, "areaM2": 0.0,
+                    "why": effect["why"],
+                    "basis": params.get("basis"),
+                    "note": "scored through the massing rasters, not the "
+                            "land-class grid",
+                })
+            else:
+                skipped.append({"id": fid, "kind": kind, "why": effect["why"]})
             continue
 
         # The full coordinate list, holes included: a contour polygon says

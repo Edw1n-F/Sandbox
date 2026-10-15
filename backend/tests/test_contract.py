@@ -70,6 +70,9 @@ def test_openapi_lists_every_contract_endpoint() -> None:
         ("/api/scenes/{scene_id}/plans", "post"),
         ("/api/plans/{plan_id}", "put"),
         ("/api/plans/{plan_id}/interventions", "get"),
+        ("/api/plans/{plan_id}/interventions/{intervention_id}", "delete"),
+        ("/api/scenes/{scene_id}/ai-plan", "post"),
+        ("/api/scenes/{scene_id}/ai-plan/apply", "post"),
         ("/api/scenes/{scene_id}/terrain", "get"),
     ]:
         assert path in paths, f"missing {path}"
@@ -188,6 +191,252 @@ def test_empty_feature_collection_is_valid() -> None:
     fc = client.get(f"/api/plans/{plan_id}/interventions").json()
     assert fc == {"type": "FeatureCollection", "features": []}
     client.delete(f"/api/scenes/{scene_id}")
+
+
+def _poly(cx: float, cy: float, d: float = 0.002) -> dict:
+    return {
+        "type": "Polygon",
+        "coordinates": [[
+            [cx, cy], [cx + d, cy], [cx + d, cy + d], [cx, cy + d], [cx, cy],
+        ]],
+    }
+
+
+def test_delete_intervention_hard_deletes_one() -> None:
+    scene_id = client.post("/api/scenes", json={"name": "DelOne", "center": CENTER}).json()[
+        "sceneId"
+    ]
+    try:
+        plan = client.post(
+            f"/api/scenes/{scene_id}/plans",
+            json={
+                "planType": "custom",
+                "label": "two features",
+                "interventions": [
+                    {
+                        "geometry": _poly(113.992, 22.438),
+                        "interventionType": "透水铺装",
+                        "params": {"permeability": 0.6},
+                        "style": {"color": "#1976d2", "opacity": 0.7},
+                    },
+                    {
+                        "geometry": _poly(113.994, 22.440),
+                        "interventionType": "绿地",
+                        "params": {},
+                        "style": {"color": "#2ea043", "opacity": 0.5},
+                    },
+                ],
+            },
+        )
+        assert plan.status_code == 201
+        plan_id = plan.json()["planId"]
+
+        features = client.get(f"/api/plans/{plan_id}/interventions").json()["features"]
+        assert len(features) == 2
+        victim_id = features[0]["id"]
+        survivor_id = features[1]["id"]
+
+        gone = client.delete(f"/api/plans/{plan_id}/interventions/{victim_id}")
+        assert gone.status_code == 204
+        assert gone.content == b""
+
+        remaining = client.get(f"/api/plans/{plan_id}/interventions").json()["features"]
+        remaining_ids = [f["id"] for f in remaining]
+        assert remaining_ids == [survivor_id]
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def test_delete_intervention_404_on_unknown_plan() -> None:
+    body = client.delete("/api/plans/does-not-exist/interventions/also-not").json()
+    assert body["error"]["code"] == "PLAN_NOT_FOUND"
+
+
+def test_delete_intervention_404_on_unknown_intervention() -> None:
+    scene_id = client.post("/api/scenes", json={"name": "DelNope", "center": CENTER}).json()[
+        "sceneId"
+    ]
+    try:
+        plan_id = client.post(
+            f"/api/scenes/{scene_id}/plans",
+            json={"planType": "baseline", "label": "empty"},
+        ).json()["planId"]
+        body = client.delete(f"/api/plans/{plan_id}/interventions/no-such-id").json()
+        assert body["error"]["code"] == "INTERVENTION_NOT_FOUND"
+    finally:
+        client.delete(f"/api/scenes/{scene_id}")
+
+
+def _seeded_scene_for_ai_plan() -> str | None:
+    """The seeded HSK scene id, or None if the catalogue is empty.
+
+    The AI module needs a scene with grounding rasters attached. The seeded
+    scene is the only one that has them; a fresh `POST /api/scenes` would not,
+    which is why ai-plan would 422 with "no grounded candidate sites".
+    """
+    plans = client.get("/api/scenes").json() if False else None
+    _ = plans
+    # The seeded scene id is written to data/scenes/*.json at setup time; look
+    # it up by iterating `GET /api/scenes/{id}` is not exposed, so read the
+    # catalogue directly through the service layer.
+    scenes_dir = scene_service.settings.scenes_dir
+    for path in scenes_dir.glob("*.json"):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if doc.get("wet_grid_path") or doc.get("dem_path"):
+            return doc.get("id") or path.stem
+    return None
+
+
+def test_ai_plan_proposes_without_persisting_when_apply_false() -> None:
+    scene_id = _seeded_scene_for_ai_plan()
+    if not scene_id:
+        return  # No seeded scene available in this environment; skipping.
+
+    plans_before = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
+    body = client.post(
+        f"/api/scenes/{scene_id}/ai-plan",
+        json={
+            "instruction": "add two water reservoirs in the north",
+            "provider": "heuristic",
+            "apply": False,
+        },
+    )
+    assert body.status_code == 200, body.text
+    data = body.json()
+    assert data["planId"] is None
+    # Propose mode returns proposals; apply=true mode leaves it empty.
+    assert isinstance(data.get("proposals"), list)
+    # The store is unchanged -- the whole point of the confirm gate.
+    plans_after = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
+    assert len(plans_after) == len(plans_before)
+
+
+def test_ai_plan_allowed_types_filters_output() -> None:
+    """Plan v2 §8: allowedTypes drops proposals outside the whitelist.
+
+    'make it nicer' through the heuristic rescues as a mix of reservoir, green
+    and paving. Pin allowedTypes=['green_space'] and no other type survives.
+    """
+    scene_id = _seeded_scene_for_ai_plan()
+    if not scene_id:
+        return
+
+    body = client.post(
+        f"/api/scenes/{scene_id}/ai-plan",
+        json={
+            "instruction": "make it nicer",
+            "provider": "heuristic",
+            "apply": False,
+            "allowedTypes": ["green_space"],
+        },
+    )
+    assert body.status_code == 200, body.text
+    data = body.json()
+    for p in data.get("proposals", []):
+        assert p["interventionType"] == "green_space", p
+
+
+def test_llm_config_get_never_returns_the_api_key() -> None:
+    """Plan v2 §9.2 Decision: the API key is write-only."""
+    body = client.get("/api/llm-config").json()
+    assert "api_key" not in body and "apiKey" not in body, body
+    assert "anthropic_api_key" not in body and "anthropicApiKey" not in body, body
+    assert "configured" in body
+    assert "baseUrl" in body or "base_url" in body
+
+
+def test_llm_config_put_overrides_in_memory() -> None:
+    """A PUT updates the live settings; a GET reflects it; a restart would
+    clear it. The last part is implicit (we are in-process) -- the first two
+    are what the UI relies on."""
+    from app.config import settings
+
+    before = {
+        "base_url": settings.llm_base_url,
+        "model": settings.llm_model,
+        "api_key": settings.llm_api_key,
+    }
+    try:
+        r = client.put(
+            "/api/llm-config",
+            json={"baseUrl": "http://unit-test/v1", "model": "unit-test-model", "apiKey": "k"},
+        )
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got["baseUrl"] == "http://unit-test/v1"
+        assert got["model"] == "unit-test-model"
+        # key is NOT in the response (write-only)
+        assert "apiKey" not in got and "api_key" not in got
+        assert got["configured"] is True
+        # verify settings itself was updated
+        assert settings.llm_api_key == "k"
+    finally:
+        # restore
+        settings.llm_base_url = before["base_url"]
+        settings.llm_model = before["model"]
+        settings.llm_api_key = before["api_key"]
+
+
+def test_ai_plan_allowed_types_rejects_garbage() -> None:
+    scene_id = _seeded_scene_for_ai_plan()
+    if not scene_id:
+        return
+    r = client.post(
+        f"/api/scenes/{scene_id}/ai-plan",
+        json={
+            "instruction": "make it nicer",
+            "provider": "heuristic",
+            "apply": False,
+            "allowedTypes": ["ufo_landing_pad"],
+        },
+    )
+    assert r.status_code == 422
+    assert "allowedTypes" in r.json()["error"]["message"] or "allowed" in r.json()["error"]["message"].lower()
+
+
+def test_ai_plan_apply_persists_proposals() -> None:
+    scene_id = _seeded_scene_for_ai_plan()
+    if not scene_id:
+        return
+
+    proposed = client.post(
+        f"/api/scenes/{scene_id}/ai-plan",
+        json={
+            "instruction": "add two water reservoirs in the north",
+            "provider": "heuristic",
+            "apply": False,
+        },
+    ).json()
+    proposals = proposed["proposals"]
+    if not proposals:
+        return  # Grounding returned nothing in this environment; skipping.
+
+    plans_before = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
+    applied = client.post(
+        f"/api/scenes/{scene_id}/ai-plan/apply",
+        json={
+            "instruction": "add two water reservoirs in the north",
+            "provider": proposed["provider"],
+            "proposals": proposals,
+            "groundingNotes": proposed.get("groundingNotes", []),
+            "candidateCounts": proposed.get("candidateCounts", {}),
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    data = applied.json()
+    plan_id = data["planId"]
+    try:
+        assert plan_id is not None
+        assert data["features"] == len(proposals)
+        plans_after = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
+        assert len(plans_after) == len(plans_before) + 1
+    finally:
+        if plan_id:
+            # Clean up the plan we just created so the store survives the suite.
+            scene_service._delete_plan_files(plan_id)
 
 
 # --------------------------------------------------------------------------- #

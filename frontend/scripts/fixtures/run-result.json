@@ -1,0 +1,154 @@
+{
+  "explanation": "The run is unchanged from the baseline. At 50 mm of rain, 9.1 thousand m糧 of runoff is not stored. Wet area 0.8 ha. Blended heat index 0.949. Run again with a project enabled to compare interventions. Screening-level SCS-CN runoff routed to a flood extent; not engineering-grade. Assembled by code: the language model call failed (ValidationError).",
+  "explanationCard": {
+    "cause": "Wet area 0.8 ha. Blended heat index 0.949.",
+    "caveats": [
+      "Assembled by code: the language model call failed (ValidationError).",
+      "Screening SCS-CN and level-pool results for this scenario only, not engineering-grade."
+    ],
+    "confidence": {
+      "level": "Medium",
+      "note": "Assembled from the run's own numbers; the language model call failed (ValidationError).",
+      "pct": 60
+    },
+    "eyebrow": "Sandbox run",
+    "followups": [
+      "add a water reservoir in the north",
+      "add green space in the centre",
+      "add permeable paving across the whole area"
+    ],
+    "grounding": null,
+    "intent": "question",
+    "intent_hint": null,
+    "kind": "run",
+    "l1": "What the run shows",
+    "l2": "What to do",
+    "sentence": "At 50 mm of rain, 9.1 thousand m糧 of runoff is not stored.",
+    "source": "template",
+    "stats": [
+      {
+        "ci": null,
+        "l": "Unstored runoff",
+        "v": "9.1 thousand m糧"
+      },
+      {
+        "ci": null,
+        "l": "Wet area",
+        "v": "0.8 ha"
+      },
+      {
+        "ci": null,
+        "l": "Heat index",
+        "v": "0.949"
+      },
+      {
+        "ci": null,
+        "l": "Surface temperature",
+        "v": "30.0 簞C"
+      }
+    ],
+    "title": "The run is unchanged from the baseline",
+    "todo": "Run again with a project enabled to compare interventions."
+  },
+  "explanationNote": "the language model call failed (ValidationError)",
+  "explanationSource": "template",
+  "inputs": {
+    "planId": null,
+    "planIds": [],
+    "rainfallMm": 50.0,
+    "scenarioMeanC": 30.0,
+    "temperatureC": 30.0,
+    "tideState": "low"
+  },
+  "interventionsApplied": [],
+  "interventionsSkipped": [],
+  "overlays": {
+    "heatmapUrl": "/static/rasters/run/heatmap_5613801f.png?v=5613801f",
+    "wetGridUrl": "/static/rasters/run/wetgrid_5613801f.png?v=5613801f"
+  },
+  "runId": "5613801f",
+  "sanityChecks": [],
+  "sceneId": "51e03c37-5360-43b0-a094-fbaca38cd70b",
+  "sources": {
+    "landCover": "esa-worldcover",
+    "lst": "Landsat 8/9 C2 L2 ST_B10 (Planetary Computer)",
+    "terrain": "open3dhk-tiles"
+  },
+  "stats": {
+    "baseline": {
+      "airMeanC": 18.0,
+      "anomalyMaxC": 4.114,
+      "floodAreaHa": 0.07,
+      "greenAreaM2": 60946.30973227645,
+      "greenWaterAreaM2": 60946.30973227645,
+      "heatBlendedMean": 0.9487,
+      "heatMean": 0.9486972093582153,
+      "imperviousShare": 0.8541233541233542,
+      "pavedAreaM2": 371556.43896964914,
+      "runoffM3": 17379.406110898544,
+      "storageCapacityM3": 8700.298828125,
+      "surfaceMaxC": 34.114,
+      "surfaceMeanC": 30.0,
+      "unstoredM3": 9056.822989472443,
+      "wetAreaHa": 0.83
+    },
+    "delta": {
+      "floodAreaHa": 0.0,
+      "greenAreaM2": 0.0,
+      "greenWaterAreaM2": 0.0,
+      "heatBlendedMean": 0.0,
+      "heatMean": 0.0,
+      "imperviousShare": 0.0,
+      "pavedAreaM2": 0.0,
+      "runoffM3": 0.0,
+      "storageCapacityM3": 0.0,
+      "surfaceMaxC": 0.0,
+      "surfaceMeanC": 0.0,
+      "unstoredM3": 0.0,
+      "wetAreaHa": 0.0
+    },
+    "ratios": {
+      "greenDeltaOverBaseline": 0.0,
+      "pavedDeltaOverBaseline": 0.0,
+      "unstoredDeltaOverBaseline": 0.0,
+      "unstoredOverRunoff": 0.521124,
+      "unstoredOverRunoffBaseline": 0.521124
+    },
+    "scenario": {
+      "airMeanC": 18.0,
+      "anomalyMaxC": 4.114,
+      "floodAreaHa": 0.07,
+      "greenAreaM2": 60946.30973227645,
+      "greenWaterAreaM2": 60946.30973227645,
+      "heatBlendedMean": 0.9487,
+      "heatMean": 0.9486972093582153,
+      "imperviousShare": 0.8541233541233542,
+      "pavedAreaM2": 371556.43896964914,
+      "runoffM3": 17379.406110898544,
+      "storageCapacityM3": 8700.298828125,
+      "surfaceMaxC": 34.114,
+      "surfaceMeanC": 30.0,
+      "unstoredM3": 9056.822989472443,
+      "wetAreaHa": 0.83
+    },
+    "temperature": {
+      "note": "Surface temperature anchored to an observed Landsat LST scene; rendered as deviation from the site mean. Air temperature is estimated as surface minus 12 C.",
+      "observedMeanC": 41.258,
+      "quantity": "surface (skin) temperature",
+      "scenarioMeanC": 30.0,
+      "source": "Landsat 8/9 C2 L2 ST_B10 (Planetary Computer)",
+      "surfaceToAirOffsetC": 12.0,
+      "unit": "C"
+    },
+    "tide": {
+      "active": false,
+      "label": "Low tide",
+      "source": "Screening floor: outfalls free-drain at chart datum (mCD).",
+      "state": "low",
+      "tailwaterM": 0.0
+    }
+  },
+  "status": "SCREENING_LIVE_RUN_FLOOD_EXTENT",
+  "warning": "Screening-level flood extent: SCS Curve Number runoff routed down the D8 receiver chain, cells with >= 0.30 m standing water shown as flooded. Not engineering-grade, not a regulatory flood map.",
+  "worsens": false
+}

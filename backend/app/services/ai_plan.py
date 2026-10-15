@@ -234,12 +234,62 @@ def load_grounding() -> Grounding:
             },
         }
 
+    def densest_block(mask_arr, bbox, weight=None, size=15):
+        """Within a component's bbox, find a size×size sub-window with the
+        highest hit count (or sum of `weight`). The returned bbox is clamped
+        so the window never leaves the component's own extent.
+
+        Why this exists: the raw connected-component bbox for a sparse mask
+        can span most of the scene while the cells themselves only fill ~30%.
+        Rendering that bbox as a polygon paints the whole scene blue. A fixed
+        size window on the densest spot gives the model a bounded, readable
+        site that still sits where the evidence is strongest.
+
+        **No longer called by the pools** (merge of 16 Oct 2026): the siting
+        path now contours each component's *true cell mask*
+        (``intervention_geometry.contour_ring``), which fixes the same
+        whole-scene-bbox problem without claiming cells that are not in the
+        component and without discarding its shape. Kept because it is the
+        right tool the moment a fixed-size window is genuinely wanted; the
+        siting rule it implemented is recorded in this docstring.
+        """
+        min_r, min_c, max_r, max_c = bbox
+        rows, cols = mask_arr.shape
+        half = size // 2
+        if weight is None:
+            weight = mask_arr.astype(np.float64)
+        else:
+            weight = weight * mask_arr  # only count cells inside the mask
+
+        # cumulative sum trick: window score = integral over sub-rectangle.
+        best_r, best_c, best_score = min_r, min_c, -1.0
+        r0_lo, r0_hi = max(0, min_r), min(rows - size, max_r - size + 1)
+        c0_lo, c0_hi = max(0, min_c), min(cols - size, max_c - size + 1)
+        if r0_lo > r0_hi or c0_lo > c0_hi:
+            # Component smaller than the window; take the component's own bbox,
+            # clipped to a readable minimum of 5 cells on each side.
+            m = 2
+            r0 = max(0, (min_r + max_r) // 2 - m)
+            c0 = max(0, (min_c + max_c) // 2 - m)
+            return r0, c0, min(rows - 1, r0 + 2 * m), min(cols - 1, c0 + 2 * m)
+        for r0 in range(r0_lo, r0_hi + 1):
+            for c0 in range(c0_lo, c0_hi + 1):
+                score = float(weight[r0:r0 + size, c0:c0 + size].sum())
+                if score > best_score:
+                    best_r, best_c, best_score = r0, c0, score
+        return best_r, best_c, best_r + size - 1, best_c + size - 1
+
     # --- reservoirs: the deepest connected basins of the wet grid ----------
     depth_file = settings.rasters_dir / "wetgrid_hsk.npy"
     if depth_file.exists():
         depth = np.load(depth_file).astype(np.float64)
         if depth.shape == (ov.rows, ov.cols):
             mask = depth >= 0.35
+            # The true cell mask, contoured -- not a 15x15 window at the
+            # deepest spot (main's approach at the merge) and not the bounding
+            # box (the original). A window is a box: it claims cells that are
+            # not in the basin, and it discards the basin's own shape, which is
+            # what the catalog and the suggester both site on.
             for comp in _components_cells(mask, 40, connectivity=4)[:3]:
                 min_r, min_c = comp["min_r"], comp["min_c"]
                 max_r, max_c = comp["max_r"], comp["max_c"]
@@ -804,9 +854,11 @@ STYLE_FOR_KIND: dict[str, dict[str, Any]] = {
     # A floodable park stays flat and low: it is landscaped ground that ponds,
     # not a tank, and extruding it 14 m would read as a building.
     "flood_storage": {"color": "#3fb950", "opacity": 0.35, "extrusionHeight": 1.5},
-    "permeable_paving": {"color": "#8957e5", "opacity": 0.45},
-    "drainage": {"color": "#e3b341", "opacity": 0.95},
-    "road": {"color": "#6e7681", "opacity": 0.8},
+    # The extrusion heights below are main's stage-1 work: permeable paving,
+    # drainage and road are drawn as 2.5D slabs so the legend can read them.
+    "permeable_paving": {"color": "#8957e5", "opacity": 0.45, "extrusionHeight": 2.0},
+    "drainage": {"color": "#e3b341", "opacity": 0.95, "extrusionHeight": 3.0},
+    "road": {"color": "#6e7681", "opacity": 0.8, "extrusionHeight": 2.0},
 }
 
 # Which grounding pool each kind draws from.
@@ -1905,26 +1957,48 @@ def get_provider(prefer: str = "auto") -> Provider:
     raise PlanGenerationError(f"unknown provider {prefer!r}")
 
 
-def generate_plan(
+def generate_proposals(
     scene_id: str,
     instruction: str,
     prefer: str = "auto",
     max_features: int = 6,
+    allowed_types: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Turn a natural-language instruction into a draft plan on a scene.
+    """Produce feature proposals **without persisting** them (plan v2 §5).
 
-    This is the AI module's whole public surface. The output goes through the
-    *same* validation, storage and render path as a hand-drawn feature -- it is
-    GeoJSON, nothing more, which is what §3.3.2 requires.
+    Shares every grounding, fallback and parser rule with `generate_plan`:
+    the only difference is this returns the proposals, where `generate_plan`
+    writes them to the store. The confirm gate (§5) then lets the user accept
+    a subset via `apply_proposals`.
 
-    Returns a summary including the provider actually used, so the UI and the
-    pitch can say which produced the plan.
+    `allowed_types` (plan v2 §8 minimal template whitelist): if a non-empty
+    list, proposals outside it are dropped and the LLM is told up front which
+    types it may pick. `None` or `[]` disables the whitelist. Illegal names
+    in the list are silently ignored, so an outdated client cannot wedge the
+    endpoint.
+
+    Returns a dict with keys:
+      - `features`: list[dict] -- raw feature dicts (same shape as
+        `_feature()`), echoed back to `apply_proposals` to persist.
+      - `provider`, `groundingNotes`, `fallbackNote`, `message`: identical
+        to `generate_plan`'s meta so the client can display provenance.
+
+    `scene_id` is accepted but not written; it is kept in the signature so a
+    future implementation that pre-validates against the scene (e.g. "this
+    reservoir intersects a park") can without changing the wire.
     """
+    _ = scene_id  # scene is read only by apply_proposals today.
+    allowed_set: set[str] | None = None
+    if allowed_types:
+        # Clamp to the catalogue so a typo cannot silently empty the result.
+        allowed_set = {t for t in allowed_types if t in POOL_FOR_KIND}
+        if not allowed_set:
+            raise PlanGenerationError(
+                "allowedTypes contains no recognised intervention types "
+                f"(valid: {sorted(POOL_FOR_KIND)})"
+            )
     if not instruction or not instruction.strip():
         raise PlanGenerationError("instruction is empty")
-
-    from app.schemas.plan import PlanCreate
-    from app.services import scene_service
 
     provider = get_provider(prefer)
     grounding = load_grounding()
@@ -1935,10 +2009,23 @@ def generate_plan(
             "the area's own data. Refusing to invent geometry."
         )
 
+    # Whitelist prefix (plan v2 §8): the LLM and the heuristic parser both read
+    # `instruction` -- the heuristic greps for kind keywords, the LLM sees the
+    # full text -- so prepending a constraint here does *most* of the filtering
+    # without touching provider internals. The post-filter below is the
+    # tie-breaker: it drops any feature a provider slipped through anyway.
+    effective_instruction = instruction
+    if allowed_set:
+        effective_instruction = (
+            "ONLY propose from these types: "
+            + ", ".join(sorted(allowed_set))
+            + ". " + instruction
+        )
+
     used_provider = getattr(provider, "name", "unknown")
     provider_error = ""
     try:
-        features = provider.propose(instruction, grounding)[:max_features]
+        features = provider.propose(effective_instruction, grounding)[:max_features]
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         # A rate limit, an outage or a timeout is the provider failing, not the
         # request being wrong. HTTPError is a URLError; its code says which. An
@@ -1972,7 +2059,7 @@ def generate_plan(
     fallback_note = ""
     if not features and not isinstance(provider, HeuristicProvider):
         heuristic = HeuristicProvider()
-        rescued = heuristic.propose(instruction, grounding)[:max_features]
+        rescued = heuristic.propose(effective_instruction, grounding)[:max_features]
         if rescued:
             features = rescued
             fallback_note = (
@@ -1985,12 +2072,22 @@ def generate_plan(
             )
             used_provider = f"heuristic (after {used_provider} returned nothing)"
 
+    # Defensive filter: a provider that ignored the prefix still cannot leak
+    # non-whitelisted types. Silent, because the prefix already told the user
+    # what we asked for.
+    if allowed_set:
+        features = [f for f in features if f.get("intervention_type") in allowed_set]
+
     if not features:
         return {
-            "planId": None,
-            "features": 0,
+            "features": [],
             "provider": used_provider,
             "groundingNotes": grounding.notes,
+            "candidateCounts": {
+                "reservoir": len(grounding.reservoir_sites),
+                "green": len(grounding.green_sites),
+                "paving": len(grounding.paving_sites),
+            },
             "message": (
                 "Nothing could be placed: no provider returned a usable answer "
                 "for this instruction. Nothing was invented."
@@ -1999,21 +2096,54 @@ def generate_plan(
             ),
         }
 
-    # Every feature is validated by the same schema as a manual one, which is
-    # where ADR-030's draft rule is enforced.
+    return {
+        "features": features,
+        # used_provider, not provider: after a fallback these differ, and the
+        # response has to name whichever one actually produced the features.
+        "provider": used_provider,
+        "groundingNotes": grounding.notes,
+        "candidateCounts": {
+            "reservoir": len(grounding.reservoir_sites),
+            "green": len(grounding.green_sites),
+            "paving": len(grounding.paving_sites),
+        },
+        "fallbackNote": fallback_note or None,
+    }
+
+
+def apply_proposals(
+    scene_id: str,
+    instruction: str,
+    features: list[dict[str, Any]],
+    provider: str,
+    grounding_notes: list[str],
+    candidate_counts: dict[str, int],
+) -> dict[str, Any]:
+    """Persist a confirmed subset of proposals as a draft plan (plan v2 §5).
+
+    Features are what `generate_proposals` emitted (or the subset the UI
+    accepted at the confirm gate); their shape matches `_feature()`'s dict
+    so this function stays a thin wrapper over `scene_service.create_plan`
+    rather than a second validation pipeline.
+
+    Returns the standard create-plan response augmented with `types` so the
+    client can summarise what landed.
+    """
+    from app.schemas.plan import PlanCreate
+    from app.services import scene_service
+
+    if not features:
+        raise PlanGenerationError("no features to apply")
+
     payload = PlanCreate.model_validate({
         "planType": "comprehensive",
         "label": f"AI: {instruction[:60]}",
         "source": "ai",
         "nlInstruction": instruction,
         "params": {
-            "provider": getattr(provider, "name", "unknown"),
-            "groundingNotes": grounding.notes,
-            "candidateCounts": {
-                "reservoir": len(grounding.reservoir_sites),
-                "green": len(grounding.green_sites),
-                "paving": len(grounding.paving_sites),
-            },
+            "provider": provider,
+            "groundingNotes": grounding_notes,
+            "candidateCounts": candidate_counts,
             "disclaimer": (
                 "Machine-proposed, screening level, status=draft. Every site is "
                 "tied to a raster in params.basis; none is a design."
@@ -2025,10 +2155,45 @@ def generate_plan(
     return {
         "planId": created.plan_id,
         "features": created.intervention_count,
-        # used_provider, not provider: after a fallback these differ, and the
-        # response has to name whichever one actually produced the features.
-        "provider": used_provider,
+        "provider": provider,
         "types": sorted({f["intervention_type"] for f in features}),
-        "groundingNotes": grounding.notes,
-        "fallbackNote": fallback_note or None,
+        "groundingNotes": grounding_notes,
     }
+
+
+def generate_plan(
+    scene_id: str,
+    instruction: str,
+    prefer: str = "auto",
+    max_features: int = 6,
+    allowed_types: list[str] | None = None,
+) -> dict[str, Any]:
+    """Propose + persist, as one call (the legacy single-shot path).
+
+    Equivalent to `generate_proposals` followed by `apply_proposals`. Kept
+    for callers that bypass the confirm gate (currently none in production
+    code; tests pre-dating plan v2 still use it). New callers should go
+    through the two-step path so the user can accept a subset.
+    """
+    result = generate_proposals(scene_id, instruction, prefer, max_features,
+                                allowed_types=allowed_types)
+    features = result["features"]
+    if not features:
+        return {
+            "planId": None,
+            "features": 0,
+            "provider": result["provider"],
+            "groundingNotes": result["groundingNotes"],
+            "message": result.get("message"),
+        }
+
+    applied = apply_proposals(
+        scene_id,
+        instruction,
+        features,
+        result["provider"],
+        result["groundingNotes"],
+        result["candidateCounts"],
+    )
+    applied["fallbackNote"] = result.get("fallbackNote")
+    return applied

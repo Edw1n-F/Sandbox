@@ -7,7 +7,7 @@
  * user hits on the first bad day.
  *
  * Usage:
- *   node scripts/verify-ux.mjs            # needs :5173 and the backend on :8001
+ *   node scripts/verify-ux.mjs            # needs :5173 and the backend on :8000
  *   PLAYWRIGHT_PATH=/path/to/playwright node scripts/verify-ux.mjs
  */
 import { existsSync } from 'node:fs'

@@ -1,0 +1,23 @@
+{
+  "id": "mtr-station",
+  "name": "HSK MTR station",
+  "note": "Fixed project footprint. The storage depth is a project-supplied input, not surveyed station design data.",
+  "footprint": "plan_project_footprint.json",
+  "model": "mtr_station.glb",
+  "effects": [
+    {
+      "kind": "underground_tank",
+      "params": {
+        "storageDepthM": 2.0,
+        "basis": "project-supplied placeholder; the model's own service-reservoir working depth (STORAGE_DEPTH_M). Replace with the real figure when station design data is available."
+      }
+    },
+    {
+      "kind": "station_massing",
+      "params": {
+        "heightM": 22.1,
+        "basis": "measured from the station GLB's own extent (mtr_station.glb, scale 50)."
+      }
+    }
+  ]
+}

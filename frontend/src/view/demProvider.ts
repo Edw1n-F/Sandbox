@@ -173,6 +173,23 @@ export function sampleDemHeight(lon: number, lat: number): number | null {
 }
 
 /**
+ * Like `sampleDemHeight`, but clamps the point to the raster bbox before
+ * sampling. Returns the nearest-edge height for points outside the DEM.
+ *
+ * Useful when a footprint straddles or sits just past the DEM boundary (a
+ * handful of fused Overture/tile features extend past the scene bbox the DEM
+ * covers). Without this, every outer-ring sample is `null`, the caller's
+ * base-height fallback trips in, and the box is drawn at ellipsoid zero.
+ */
+export function sampleDemHeightClamped(lon: number, lat: number): number | null {
+  if (!raster) return null
+  const cl = Math.min(Math.max(lon, raster.west), raster.east)
+  const ct = Math.min(Math.max(lat, raster.south), raster.north)
+  const value = sampleAt(raster, cl, ct)
+  return Number.isFinite(value) ? value : null
+}
+
+/**
  * Resolves once a DEM raster is available to sample, never rejects.
  *
  * ## Why this exists

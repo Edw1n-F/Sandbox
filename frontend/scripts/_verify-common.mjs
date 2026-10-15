@@ -2,7 +2,7 @@
  * Shared plumbing for the two browser verification scripts.
  *
  * Neither script is part of `npm test`: they need the dev server on :5173, the
- * backend on :8001 (vite.config.ts proxies /api, /static and /health there) and a
+ * backend on :8000 (vite.config.ts proxies /api, /static and /health there) and a
  * Chromium that Playwright can launch. Folding them into `npm test` would let a
  * missing server read as a pass.
  *
@@ -56,7 +56,7 @@ export async function requireServers() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
     } catch (err) {
       console.error(`${name} is not reachable at ${url}: ${err.message}`)
-      console.error('Start the backend on :8001 and `npm run dev` on :5173 first.')
+      console.error('Start the backend on :8000 and `npm run dev` on :5173 first.')
       process.exit(2)
     }
   }

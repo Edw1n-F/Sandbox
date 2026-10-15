@@ -47,6 +47,7 @@ const reset = () => {
       realBuildings: true,
       waterbody: true,
       infrastructure: true,
+      massing25d: false,
     },
     viewMode: 'survey',
   })

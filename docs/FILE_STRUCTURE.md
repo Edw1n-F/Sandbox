@@ -49,6 +49,7 @@ and `src/view/` must not be imported from state.
 | `demProvider.ts` | terrain-RGB decode, **the ground sampler**, terrain provider |
 | `terrainLoader.ts` | imagery providers, bbox -> `Rectangle` |
 | `tilesetLayer.ts` | the real Open3Dhk 3D Tiles layers (buildings + terrain) |
+| `footprintLayer.ts` | the Plan Project 2.5D massing: 396 `buildings_hsk.json` footprints extruded as white + black-outline polygons, with per-id visibility for GLB overlap hiding |
 | `interventionLayer.ts` | intervention GeoJSON styling |
 | `onlineProps.ts` | the online glTF assets layer (Khronos samples) |
 | `hk1980Transform.ts` | HK1980 grid <-> lon/lat, for reading the Open3Dhk tiles |
@@ -95,10 +96,10 @@ trigger a viewer action without the Cesium instance being drilled into the tree.
 | File | Purpose |
 |---|---|
 | `_verify-common.mjs` | shared plumbing: Playwright resolution, server preflight, the checker, error capture, the tileset-aware `settleViewer` |
-| `verify-3d.mjs` | 17 checks: tileset load, camera framing, pan, the run reaching `POST /run`, both overlays drawn from the run's own id, canvas change, the flood/heat toggles |
+| `verify-3d.mjs` | 27 checks: tileset load, camera framing, pan, the run reaching `POST /run`, both overlays drawn from the run's own id, canvas change, the flood/heat toggles, and the 3D/2.5D building switch held apart from selecting a project. `/run` is stubbed from `scripts/fixtures/run-result.json`, so it does not wait on the model behind the run's result card |
 | `verify-ux.mjs` | 21 checks: first paint, loading affordance, failure paths (404 / unreachable / 5xx / malformed payload), phone layout, keyboard reach, slider names, reduced motion, slow network |
 | `verify-nav.mjs` | 29 checks on navigation: the help opens once and stays dismissed, the tilt buttons and the T / Home keys move the real camera, the compass turns with the view and faces north, typing in the chat does not move it, tilting past the pitch limit leaves the heading alone, rotating at the limit leaves the pitch alone, a zoom leaves both alone, two quick zoom presses add up, the anchor holds its screen position through a zoom after a pan, a vertical right-drag tilts without rotating and a horizontal one rotates without tilting, the mouse wheel zooms, and a trackpad-drag stream tilts instead |
-| `verify-chat.mjs` | 17 checks on the chat panel with the stream mocked (so no model is needed): the provenance receipt, the live region, the in-progress shimmer, a general answer carrying no receipt, and a stream cut before `done` |
+| `verify-chat.mjs` | 17 checks on the chat panel with the stream mocked and `/run` stubbed from the shared fixture (so no model is needed at all): the provenance receipt, the live region, the in-progress shimmer, a general answer carrying no receipt, and a stream cut before `done` |
 
 Both need the dev server on `:5173` **and** the backend on **`:8001`** (that is what
 `vite.config.ts` proxies `/api`, `/static` and `/health` to). They are not part of

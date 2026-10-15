@@ -20,11 +20,16 @@
  * `template`. That is stated in the card itself, not just here.
  */
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
+import Checkbox from '@mui/material/Checkbox'
 import Chip from '@mui/material/Chip'
+import FormControlLabel from '@mui/material/FormControlLabel'
 import IconButton from '@mui/material/IconButton'
+import Popover from '@mui/material/Popover'
 import Stack from '@mui/material/Stack'
 import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
+import LLMConfigPanel from './LLMConfigPanel'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 
@@ -35,7 +40,7 @@ import {
   type ChatTurn,
   type StreamEvent,
 } from '@/api/chatApi'
-import { createAiPlan } from '@/api/planApi'
+import { applyAiPlan, createAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import { useSceneStore } from '@/state/sceneStore'
 
@@ -47,6 +52,15 @@ interface Step {
   ms?: number
 }
 
+interface ProposalPayload {
+  instruction: string
+  provider: string
+  proposals: InterventionProposal[]
+  groundingNotes: string[]
+  candidateCounts: Record<string, number>
+  resolved?: 'applied' | 'dismissed'
+}
+
 interface Message {
   id: string
   role: 'ai' | 'user'
@@ -55,12 +69,19 @@ interface Message {
   /** What the card rests on, snapshotted when the question was asked. */
   receipt?: Receipt | null
   chips?: string[]
+  /** Confirm gate for ai-plan proposals (plan v2 §5). */
+  proposals?: ProposalPayload
 }
 
+/**
+ * Fallback chips (plan v2 §7): intervention instruction sentences, so clicking
+ * one goes through the ai-plan confirm gate rather than looping as another chat
+ * question. Only used when the backend did not supply its own followups.
+ */
 const SUGGESTIONS = [
-  'Is this better than the baseline?',
-  'What should I do next?',
-  'Add a retention basin north of the canal',
+  'add a water reservoir in the north',
+  'add green space in the centre',
+  'add permeable paving across the whole area',
 ]
 
 let nextId = 1
@@ -241,6 +262,151 @@ function CardView({ card }: { card: AnswerCard }) {
   )
 }
 
+/**
+ * Confirm gate panel (plan v2 §5): a checklist of proposals + Apply/Dismiss.
+ *
+ * The payload sits on the message. Once resolved the message is marked and the
+ * checklist swapped for a status line, so re-rendering the chat does not
+ * resurrect the controls -- a proposal state only exists in the user's head
+ * once they have chosen.
+ */
+function ProposalReview({
+  payload,
+  sceneId,
+  onResolved,
+}: {
+  payload: ProposalPayload
+  sceneId: string
+  onResolved: (outcome: 'applied' | 'dismissed', note?: string) => void
+}) {
+  const [checked, setChecked] = useState<boolean[]>(() =>
+    payload.proposals.map(() => true),
+  )
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  if (payload.resolved === 'applied') {
+    return (
+      <Typography
+        variant="caption"
+        sx={{ display: 'block', mt: 1, color: 'text.secondary' }}
+      >
+        Applied. Run again to see the effect.
+      </Typography>
+    )
+  }
+  if (payload.resolved === 'dismissed') {
+    return (
+      <Typography
+        variant="caption"
+        sx={{ display: 'block', mt: 1, color: 'text.secondary' }}
+      >
+        Dismissed. Nothing was persisted.
+      </Typography>
+    )
+  }
+
+  const anyChecked = checked.some(Boolean)
+
+  const apply = async () => {
+    const selected = payload.proposals.filter((_, i) => checked[i])
+    if (selected.length === 0) return
+    setBusy(true)
+    setError(null)
+    try {
+      const r = await applyAiPlan(sceneId, {
+        instruction: payload.instruction,
+        provider: payload.provider,
+        proposals: selected,
+        groundingNotes: payload.groundingNotes,
+        candidateCounts: payload.candidateCounts,
+      })
+      if (r.planId) {
+        const { usePlanStore } = await import('@/state/planStore')
+        await usePlanStore.getState().refreshPlans(sceneId)
+        await usePlanStore.getState().selectPlan(r.planId)
+        onResolved(
+          'applied',
+          `Applied ${r.features} intervention${r.features === 1 ? '' : 's'} (${(r.types ?? []).join(', ') || 'geometry'}). Status: draft. Run again to see the effect.`,
+        )
+      } else {
+        setError(r.message ?? 'The server returned no plan id.')
+      }
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack spacing={0.5} sx={{ mt: 1 }}>
+      {payload.proposals.map((p, i) => (
+        <FormControlLabel
+          key={`${p.siteId ?? p.interventionType}-${i}`}
+          control={
+            <Checkbox
+              size="small"
+              checked={checked[i]}
+              onChange={(_, v) =>
+                setChecked((prev) => prev.map((old, idx) => (idx === i ? v : old)))
+              }
+              sx={{ py: 0.25 }}
+            />
+          }
+          label={
+            <Box>
+              <Typography sx={{ fontSize: 11.5, lineHeight: 1.3 }}>
+                {p.interventionType}
+                {p.siteId ? ` · ${p.siteId}` : ''}
+              </Typography>
+              {p.rationale && (
+                <Typography
+                  sx={{ fontSize: 10.5, color: 'text.secondary', lineHeight: 1.3 }}
+                >
+                  {p.rationale}
+                </Typography>
+              )}
+              {p.basis && (
+                <Typography
+                  className="hud-mono"
+                  sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.3 }}
+                >
+                  basis: {p.basis}
+                </Typography>
+              )}
+            </Box>
+          }
+          sx={{ alignItems: 'flex-start', ml: 0, mr: 0 }}
+        />
+      ))}
+      {error && (
+        <Typography sx={{ fontSize: 10.5, color: '#ff6b6b' }}>{error}</Typography>
+      )}
+      <Stack direction="row" spacing={1} sx={{ mt: 0.5 }}>
+        <Button
+          size="small"
+          variant="contained"
+          disabled={!anyChecked || busy}
+          onClick={() => void apply()}
+          sx={{ fontSize: 11 }}
+        >
+          {busy ? 'Applying…' : `Apply ${checked.filter(Boolean).length}`}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={busy}
+          onClick={() => onResolved('dismissed')}
+          sx={{ fontSize: 11 }}
+        >
+          Dismiss
+        </Button>
+      </Stack>
+    </Stack>
+  )
+}
+
 /** The progress stepper: one row per step, ticked as it finishes. */
 function StepperView({ steps }: { steps: Step[] }) {
   return (
@@ -291,6 +457,8 @@ export default function ChatPanel() {
     },
   ])
   const [input, setInput] = useState('')
+  /** Plan v2 §8 whitelist: empty = no restriction, keys match ai_plan.POOL_FOR_KIND. */
+  const [allowedTypes, setAllowedTypes] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
   const [steps, setSteps] = useState<Step[]>([])
   // What a screen reader is told. The thread itself is not a live region: it would
@@ -298,6 +466,7 @@ export default function ChatPanel() {
   const [announcement, setAnnouncement] = useState('')
   const [draft, setDraft] = useState<{ title: string | null; sentence: string | null } | null>(null)
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
+  const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null)
   const lastRunId = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -323,6 +492,10 @@ export default function ChatPanel() {
     // chat produces. The paragraph is the fallback for a client that predates
     // this, or for a response missing the field.
     const runCard = runResult.explanationCard as AnswerCard | undefined
+    // Prefer the card's own followups (plan v2 §7: the backend already shapes
+    // these as intervention instructions). Fall back to the constant for a
+    // response that predates the followup contract.
+    const runChips = runCard?.followups?.length ? runCard.followups : SUGGESTIONS
     setMessages((prev) => [
       ...prev,
       runCard
@@ -331,14 +504,14 @@ export default function ChatPanel() {
             role: 'ai' as const,
             card: runCard,
             receipt: buildReceipt(runResult),
-            chips: SUGGESTIONS,
+            chips: runChips,
           }
         : {
             id: mkId(),
             role: 'ai' as const,
             text: runResult.explanation,
             receipt: buildReceipt(runResult),
-            chips: SUGGESTIONS,
+            chips: runChips,
           },
     ])
   }, [runResult, running])
@@ -347,6 +520,64 @@ export default function ChatPanel() {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [messages, steps, draft])
+
+  /**
+   * Call ai-plan in propose mode and append a confirm-gate message. Shared by
+   * two entry points (plan v2 §4 intent auto-route and the legacy
+   * `looksLikeIntervention` fast path) so the behaviours cannot drift.
+   *
+   * `source` says which path brought us here, used only for the chat log line.
+   */
+  const openProposalGate = useCallback(
+    async (instruction: string, source: 'regex' | 'intent') => {
+      if (!sceneId) return
+      try {
+        const r: AiPlanResult = await createAiPlan(sceneId, instruction, {
+          apply: false,
+          allowedTypes: allowedTypes.length > 0 ? allowedTypes : undefined,
+        })
+        const proposals = r.proposals ?? []
+        if (proposals.length === 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: mkId(),
+              role: 'ai',
+              text:
+                r.message ||
+                'I couldn’t propose anything for that instruction. Try naming a type (retention basin, trees, green space, water reservoir) and a location.',
+            },
+          ])
+          return
+        }
+        const prefix =
+          source === 'intent'
+            ? `Routed to the design loop: ${instruction}. Proposed ${proposals.length} intervention${proposals.length === 1 ? '' : 's'} via ${r.provider}.`
+            : `Proposed ${proposals.length} intervention${proposals.length === 1 ? '' : 's'} via ${r.provider}. Review and apply the ones to keep.`
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: mkId(),
+            role: 'ai',
+            text: prefix,
+            proposals: {
+              instruction,
+              provider: r.provider,
+              proposals,
+              groundingNotes: r.groundingNotes ?? [],
+              candidateCounts: r.candidateCounts ?? {},
+            },
+          },
+        ])
+      } catch (err) {
+        setMessages((prev) => [
+          ...prev,
+          { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` },
+        ])
+      }
+    },
+    [sceneId, allowedTypes],
+  )
 
   /** Ask the chat agent. Streams, so the steps and the sentence arrive as they happen. */
   const ask = useCallback(async (question: string, history: ChatTurn[]) => {
@@ -384,7 +615,7 @@ export default function ChatPanel() {
             sentence: partialField(raw, 'sentence'),
           })
           break
-        case 'answer':
+        case 'answer': {
           setAnnouncement(`${event.answer.title}. ${event.answer.sentence}`)
           setMessages((prev) => [
             ...prev,
@@ -397,7 +628,15 @@ export default function ChatPanel() {
               chips: event.answer.followups,
             },
           ])
+          // Plan v2 §4 intent auto-route: when the LLM classified the user's
+          // turn as an intervention, open the ai-plan confirm gate without a
+          // second round trip. The card itself still renders -- the hint goes
+          // *in addition*, so the user sees why the gate opened.
+          if (event.answer.intent === 'intervention' && event.answer.intent_hint) {
+            void openProposalGate(event.answer.intent_hint, 'intent')
+          }
           break
+        }
         case 'error':
           // A provider error is not content. The card that follows already says
           // what happened and which data it rests on, so printing the raw
@@ -423,7 +662,7 @@ export default function ChatPanel() {
       setDraft(null)
       setBusy(false)
     }
-  }, [sceneId, runResult])
+  }, [sceneId, runResult, openProposalGate])
 
   const send = async (text: string) => {
     const trimmed = text.trim()
@@ -432,31 +671,17 @@ export default function ChatPanel() {
     setInput('')
     setBusy(true)
 
-    // Interventions are geometry, not explanation: they keep the AI-plan route.
+    // Plan v2 §4: two-track routing.
+    //   1. If the input obviously reads as an intervention (12-verb regex),
+    //      skip the chat round trip and open the confirm gate directly. The
+    //      intent field inside a chat answer would decide the same way, but
+    //      doing a full SSE first costs 2-5 s of latency the user feels.
+    //   2. Otherwise ask the agent. If the LLM's card then carries
+    //      intent="intervention" the `answer` handler reaches the same
+    //      `openProposalGate` the fast path uses, so behaviour converges.
     if (looksLikeIntervention(trimmed)) {
       try {
-        const r = await createAiPlan(sceneId, trimmed)
-        if (r.features > 0 && r.planId) {
-          const { usePlanStore } = await import('@/state/planStore')
-          await usePlanStore.getState().refreshPlans(sceneId)
-          await usePlanStore.getState().selectPlan(r.planId)
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: mkId(),
-              role: 'ai',
-              text: `Placed ${r.features} intervention${r.features === 1 ? '' : 's'} (${r.types.join(', ') || 'geometry'}) into the sandbox. Status: draft. Run again to see the effect.`,
-              chips: SUGGESTIONS,
-            },
-          ])
-        } else {
-          setMessages((prev) => [
-            ...prev,
-            { id: mkId(), role: 'ai', text: r.message || 'I couldn’t place that as an intervention. Try naming a type (retention basin, trees, green space, water reservoir) and a location.' },
-          ])
-        }
-      } catch (err) {
-        setMessages((prev) => [...prev, { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` }])
+        await openProposalGate(trimmed, 'regex')
       } finally {
         setBusy(false)
       }
@@ -502,6 +727,14 @@ export default function ChatPanel() {
                 : 'Heuristic parser — not AI'}
           </Typography>
         </Box>
+        <IconButton
+          aria-label="LLM configuration"
+          size="small"
+          onClick={(e) => setConfigAnchor(e.currentTarget)}
+          sx={{ width: 24, height: 24, color: 'text.secondary' }}
+        >
+          <span style={{ fontSize: 13 }}>⚙</span>
+        </IconButton>
         {busy && (
           <IconButton
             aria-label="Stop"
@@ -513,6 +746,15 @@ export default function ChatPanel() {
           </IconButton>
         )}
       </Stack>
+      <Popover
+        open={Boolean(configAnchor)}
+        anchorEl={configAnchor}
+        onClose={() => setConfigAnchor(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'right' }}
+      >
+        <LLMConfigPanel onConfiguredChange={setLlmConfigured} />
+      </Popover>
 
       {/* Announces progress and the finished answer to assistive tech. Visually
           hidden rather than display:none, which would remove it from the tree. */}
@@ -569,6 +811,26 @@ export default function ChatPanel() {
                   ))}
                 </Stack>
               )}
+              {m.proposals && sceneId && (
+                <ProposalReview
+                  payload={m.proposals}
+                  sceneId={sceneId}
+                  onResolved={(outcome, note) => {
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === m.id && msg.proposals
+                          ? {
+                              ...msg,
+                              proposals: { ...msg.proposals, resolved: outcome },
+                              text: note ?? msg.text,
+                              chips: outcome === 'applied' ? SUGGESTIONS : msg.chips,
+                            }
+                          : msg,
+                      ),
+                    )
+                  }}
+                />
+              )}
             </Box>
           ))}
 
@@ -608,6 +870,47 @@ export default function ChatPanel() {
 
       {/* Input */}
       <Box sx={{ p: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+        {/*
+          Plan v2 §8 type whitelist. Empty = no restriction (default). A pinned
+          chip tells ai-plan to only propose that type. This is the minimal
+          template mechanism: it narrows the LLM's search without introducing a
+          template schema.
+        */}
+        <Stack direction="row" spacing={0.5} sx={{ mb: 0.75, flexWrap: 'wrap', gap: 0.5 }}>
+          {([
+            ['water_reservoir', 'Reservoir'],
+            ['green_space', 'Green'],
+            ['permeable_paving', 'Paving'],
+            ['drainage', 'Drainage'],
+            ['road', 'Road'],
+          ] as const).map(([kind, label]) => {
+            const on = allowedTypes.includes(kind)
+            return (
+              <Chip
+                key={kind}
+                label={label}
+                size="small"
+                variant={on ? 'filled' : 'outlined'}
+                color={on ? 'primary' : 'default'}
+                onClick={() =>
+                  setAllowedTypes((prev) =>
+                    prev.includes(kind) ? prev.filter((k) => k !== kind) : [...prev, kind],
+                  )
+                }
+                sx={{ fontSize: 10, height: 20, cursor: 'pointer' }}
+              />
+            )
+          })}
+          {allowedTypes.length > 0 && (
+            <Chip
+              label="clear"
+              size="small"
+              variant="outlined"
+              onClick={() => setAllowedTypes([])}
+              sx={{ fontSize: 10, height: 20, cursor: 'pointer', color: 'text.secondary' }}
+            />
+          )}
+        </Stack>
         <Stack direction="row" alignItems="flex-end" spacing={1}>
           <TextField
             fullWidth
