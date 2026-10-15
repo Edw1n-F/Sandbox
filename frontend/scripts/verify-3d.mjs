@@ -178,7 +178,92 @@ for (const label of ['Flood', 'Heat']) {
     errors.filter((e) => !/Failed to load resource/.test(e)).length === 0, errors[0] ?? '')
 }
 
-// ------------------------------------------------------------ 6. no errors
+// ------------------------------------- 6. the building style and a project
+// Two controls that used to be one, and the bug was exactly their fusion: a
+// single "Plan Project" button swapped the building depiction AND spawned the
+// station, so there was no way to ask for 2.5D buildings without the project.
+// These checks hold the two apart, which is the whole point of the split.
+const depot = () => page.evaluate(() => {
+  const v = window.__cesiumViewer
+  let boxes = 0
+  let hidden = 0
+  for (const e of v.entities.values) {
+    if (e.id && String(e.id).startsWith('footprint:')) {
+      boxes += 1
+      if (e.show === false) hidden += 1
+    }
+  }
+  let tilesetShow = null
+  for (let i = 0; i < v.scene.primitives.length; i += 1) {
+    const prim = v.scene.primitives.get(i)
+    if (prim?.constructor?.name !== 'Cesium3DTileset') continue
+    // The buildings tileset is the one that was showing before the switch.
+    if (tilesetShow === null) tilesetShow = prim.show
+  }
+  let models = 0
+  for (let i = 0; i < v.scene.primitives.length; i += 1) {
+    const prim = v.scene.primitives.get(i)
+    if (prim?.constructor?.name === 'Model' && prim.show) models += 1
+  }
+  return { boxes, hidden, models, tilesetShow }
+})
+
+const noProjects = () => page.evaluate(
+  () => document.body.innerText.includes('No projects selected'))
+
+const style2d = page.getByLabel('2.5D massing')
+const style3d = page.getByLabel('Textured 3D buildings')
+const stationRow = page.getByText('HSK MTR station').first()
+
+const in3d = await depot()
+check('the city starts drawn as textured 3D, with no 2.5D boxes',
+  in3d.boxes === 0 && in3d.tilesetShow === true,
+  `boxes ${in3d.boxes}, tileset ${in3d.tilesetShow}`)
+
+await style2d.click()
+await page.waitForTimeout(6000)
+const in2d = await depot()
+check('the 2.5D switch draws the massing and hides the textured tileset',
+  in2d.boxes > 350 && in2d.tilesetShow === false,
+  `boxes ${in2d.boxes}, tileset ${in2d.tilesetShow}`)
+check('and it hides no boxes: it is a depiction, not a project',
+  in2d.hidden === 0,
+  `${in2d.hidden} of ${in2d.boxes} boxes hidden`)
+check('and it does not select the station as a side effect',
+  await noProjects(),
+  'the "No projects selected" note should still be showing')
+
+await stationRow.click()
+await page.waitForTimeout(9000)
+const withStation = await depot()
+check('selecting the station in the Projects panel shows its model',
+  withStation.models > in2d.models,
+  `${in2d.models} -> ${withStation.models} models`)
+check('and hides the boxes it stands on',
+  withStation.hidden > 0,
+  `${withStation.hidden} of ${withStation.boxes} boxes hidden`)
+check('and the run counts it as a selected project',
+  !(await noProjects()),
+  'the "No projects selected" note should be gone')
+
+await stationRow.click()
+await page.waitForTimeout(4000)
+const offAgain = await depot()
+check('turning the station off restores its boxes and removes its model',
+  offAgain.hidden === 0 && offAgain.models === in2d.models,
+  `hidden ${offAgain.hidden}, models ${offAgain.models}`)
+check('and leaves the 2.5D switch exactly where it was',
+  offAgain.boxes === in2d.boxes && offAgain.tilesetShow === false,
+  `boxes ${offAgain.boxes}, tileset ${offAgain.tilesetShow}`)
+
+await style3d.click()
+await page.waitForTimeout(5000)
+const backTo3d = await depot()
+check('switching back to 3D restores the textured tileset',
+  backTo3d.boxes === 0 && backTo3d.tilesetShow === true,
+  `boxes ${backTo3d.boxes}, tileset ${backTo3d.tilesetShow}`)
+
+// ------------------------------------------------------------ 7. no errors
 const fatal = errors.filter((e) => !/Failed to load resource/.test(e))
 check('no unexpected console errors', fatal.length === 0, fatal.slice(0, 2).join(' | '))
 

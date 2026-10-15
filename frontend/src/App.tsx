@@ -15,9 +15,10 @@
 import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import CircularProgress from '@mui/material/CircularProgress'
 import Fab from '@mui/material/Fab'
 import Stack from '@mui/material/Stack'
+import ToggleButton from '@mui/material/ToggleButton'
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Typography from '@mui/material/Typography'
 
 import AppErrorBoundary from './components/AppErrorBoundary'
@@ -38,8 +39,8 @@ const CHAT_WIDTH = 340
 function LayerToggles() {
   const layers = useSceneStore((s) => s.layers)
   const toggleLayer = useSceneStore((s) => s.toggleLayer)
+  const setLayers = useSceneStore((s) => s.setLayers)
   const terrain = useSceneStore((s) => s.terrain)
-  const planProjectLoading = useSceneStore((s) => s.planProjectLoading)
   const hasWet = Boolean(terrain?.wetGridUrl)
   const hasHeat = Boolean(terrain?.heatmapUrl)
   return (
@@ -62,16 +63,24 @@ function LayerToggles() {
       >
         Heat
       </Button>
-      <Button
+      <ToggleButtonGroup
         size="small"
-        variant={layers.planProject ? 'contained' : 'outlined'}
-        disabled={!terrain?.planProjectUrl || planProjectLoading}
-        onClick={() => toggleLayer('planProject')}
-        sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1, gap: 0.5 }}
-        startIcon={planProjectLoading ? <CircularProgress size={10} color="inherit" /> : undefined}
+        exclusive
+        value={layers.massing25d ? '2.5d' : '3d'}
+        onChange={(_, next) => {
+          if (next) setLayers({ massing25d: next === '2.5d' })
+        }}
+        aria-label="Building style"
+        sx={{
+          '& .MuiToggleButton-root': {
+            px: 1, py: 0.4, fontSize: 10, lineHeight: 1, minWidth: 0,
+            textTransform: 'none',
+          },
+        }}
       >
-        {planProjectLoading ? 'Loading…' : 'Plan Project'}
-      </Button>
+        <ToggleButton value="3d" aria-label="Textured 3D buildings">3D</ToggleButton>
+        <ToggleButton value="2.5d" aria-label="2.5D massing">2.5D</ToggleButton>
+      </ToggleButtonGroup>
     </Stack>
   )
 }

@@ -2,6 +2,95 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-15 — a planned project is data, and the building-style switch is not a project toggle
+
+### Fixed — one flag was doing three jobs
+
+`layers.planProject` gated the station GLB, the 2.5D massing overlay, and the
+hiding of the textured 3D Tiles. The single "Plan Project" button flipped all
+three, so selecting the station was a side effect of changing how buildings were
+drawn, and there was no way to ask for 2.5D buildings without the station. It is
+now two independent things:
+
+- **A building-style switch** (`massing25d`, a 3D / 2.5D `ToggleButtonGroup` in
+  the layer stack). It decides which layer the city is drawn from and nothing
+  else.
+- **A project row** in the Projects panel, whose toggle edits the run's
+  `selectedPlanIds`.
+
+### Added — a planned project declares its own effects
+
+A project is a data file, `backend/data/projects/<id>.json`, naming its
+footprint, its model and the effects toggling it on should have.
+`scripts/seed_projects.py` seeds each into a fixed-id plan through the same
+`create_plan` the API uses, tagging it with `params.projectId`. Selecting it puts
+that plan in `plan_ids`, so the run scores it, the "Run N projects" count
+includes it and the cumulative-coverage guard bounds it -- with no special case
+in the run path at all. Swapping in a real user's figures means editing the JSON
+and re-seeding.
+
+The first instance is the HSK MTR station, with two effects:
+
+- `underground_tank`, 2 m of assumed storage over the 1,357 m² footprint. The
+  depth is the model's own service-reservoir working depth, and it is labelled
+  "project-supplied placeholder" in its `basis` rather than presented as design
+  data.
+- `station_massing`, a new kind carrying the block height. It has no land-class
+  effect -- like `massing_height`, its whole consequence is in the geometry
+  rasters -- so `run_service._heat_terms` now rebuilds them from a modified
+  footprint list: the existing envelopes the project overlaps are removed and the
+  project's own block added. Measured on the real grids: the sky-view factor
+  moves over 2,366 cells and the rendered heat anomaly moves up to **0.35 °C over
+  795 cells**. The water ledger drops **33 m³** unstored at 50 mm.
+
+Two things this needed that are easy to get wrong:
+
+- **Baseline and scenario now use different massing terms** when a project is
+  active. They shared one set before, which was right when nothing could change
+  the geometry -- but with a massing effect, sharing would subtract the same
+  geometry from both sides and cancel the project's shade and wind exposure out
+  of the delta entirely. The baseline stays "today"; the scenario gets the
+  project's own terms.
+- **The heat-terms cache is keyed on the override set**, so a run with no project
+  still hits the cache it always hit and a project run cannot serve (or poison)
+  the station-free terms. `test_run` pins both directions.
+
+`station_massing` also gains a `geometry_only` marker so it is reported in
+`interventionsApplied` rather than `interventionsSkipped`. It has no land-class
+consequence because every consequence it has is in the massing rasters; listing
+it as skipped would hide a shade and wind change that genuinely happened. The
+unconsumed no-grid kinds (`massing_height`, `drainage_alignment`) stay skipped,
+because for those it is the truth.
+
+### Fixed — a bug this change introduced and then caught
+
+The first version compared the selection against the project id (`'mtr-station'`)
+directly. The selection holds plan **uuids** -- `create_plan` mints one -- so the
+station showed as selected in the panel and nothing moved on the map. Resolved
+through the plan list by `params.projectId`, which is the handle the seeder
+writes. Added to `verify-3d` so it cannot come back.
+
+### Verification
+
+`test_run` 41/41 (5 new checks, including that the change is local rather than a
+site-wide shift, and that the cache is not poisoned); every other backend suite
+passes. Frontend `tsc`, `eslint`, vitest 85/85. Browser: `verify-3d` 17 -> **27
+checks**, all green, holding the four behaviours apart -- 2.5D draws the massing
+and hides no boxes; selecting the station shows the model, hides the 6 boxes it
+stands on and joins the run; turning it off restores both; switching back to 3D
+restores the tileset. `verify-ux` 21/21, `verify-chat` 17/17, `verify-nav` 29/29.
+
+### Note — the heat effect is local, not a site-mean shift
+
+Worth stating because the panel invites the wrong reading: the temperature field
+is re-anchored so its mean equals the scenario mean by construction, so
+`surfaceMeanC` reads the slider and can never show a project's effect. What a
+project changes is the *distribution* -- the shaded fraction, sky view and wind
+blockage of the cells it stands on. At 1,357 m² against a 43.5 ha study area that
+is a real but small change, and the honest place to see it is the heat overlay,
+not the mean. A future project that matters more would need a larger footprint,
+not a bigger assumption.
+
 ## 2026-10-15 — main goes green: lint warnings, a stale contract, the port sweep, and two hanging suites
 
 Both failures pre-date this entry and were already on `origin/main`; neither came

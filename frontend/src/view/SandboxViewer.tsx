@@ -80,6 +80,27 @@ let mtrModel: Model | null = null
 let mtrMarker: Entity | null = null
 let footprintLayer: FootprintLayerHandle | null = null
 
+/**
+ * The planned project whose 3D model this viewer draws.
+ *
+ * Kept as a constant because the GLB and its footprint sidecar are single
+ * assets on the scene record, not a per-project lookup. When a second modelled
+ * project lands this becomes a map from project id to model URL, which is why
+ * the id is named here rather than inlined at the check.
+ */
+const STATION_PROJECT_ID = 'mtr-station'
+
+/**
+ * The boxes a planned project stands on, recomputed with the 2.5D layer.
+ *
+ * A module-level `let` for the same reason `footprintLayer` is one: the footprint
+ * effect and the selection effect are separate, and the second has to read what
+ * the first computed. `EMPTY_IDS` is shared and never mutated, so "nothing
+ * hidden" is one value rather than a new Set on every render.
+ */
+let stationHiddenIds: ReadonlySet<string> = new Set<string>()
+const EMPTY_IDS: ReadonlySet<string> = new Set<string>()
+
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
 /**
@@ -187,7 +208,36 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
-  const showPlanProject = useSceneStore((s) => s.layers.planProject ?? false)
+  const showMassing25d = useSceneStore((s) => s.layers.massing25d ?? false)
+  const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
+  const plans = usePlanStore((s) => s.plans)
+  /**
+   * Whether the MTR station project is active.
+   *
+   * Read from the run's selection rather than a layer flag, so the station is
+   * visible exactly when the run scores it. Two sources of truth for "is the
+   * station on" is how the picture and the number come to disagree.
+   *
+   * The selection holds plan **uuids**, not project ids: `create_plan` mints a
+   * uuid and the seeder tags the plan with `params.projectId`. Comparing the
+   * selection against the project id directly therefore never matches, which is
+   * a bug this line had on its first draft -- the station appeared in the panel
+   * as selected and nothing moved on the map. Resolve through the plan list.
+   */
+  const stationPlanId = plans.find(
+    (p) => (p.params as { projectId?: string } | undefined)?.projectId === STATION_PROJECT_ID,
+  )?.planId
+  const showStation = Boolean(stationPlanId) && selectedPlanIds.includes(stationPlanId!)
+  /**
+   * The same value, for the footprint effect to read without depending on it.
+   *
+   * Depending on the selection would tear the layer down and refetch the building
+   * list on every project toggle, and the rebuild races the effect below that
+   * applies the hidden set. The selection is applied by `setHiddenIds` instead,
+   * which is what that method is for.
+   */
+  const showStationRef = useRef(showStation)
+  showStationRef.current = showStation
   const setPlanProjectLoading = useSceneStore((s) => s.setPlanProjectLoading)
   const layers = useSceneStore((s) => s.layers)
   const viewMode = useSceneStore((s) => s.viewMode)
@@ -661,8 +711,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24, name: 'buildings' }).then((handle) => {
       if (cancelled || !handle) return
       tilesetHandle = handle
-      // While planProject is on, the 2.5D footprint overlay replaces this layer.
-      handle.tileset.show = showRealBuildings && !showPlanProject
+      // While the 2.5D switch is on, the footprint overlay replaces this layer.
+      handle.tileset.show = showRealBuildings && !showMassing25d
       viewer.scene.requestRender()
     })
 
@@ -676,9 +726,9 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
   useEffect(() => {
     if (!tilesetHandle) return
-    tilesetHandle.tileset.show = showRealBuildings && !showPlanProject
+    tilesetHandle.tileset.show = showRealBuildings && !showMassing25d
     viewerRef.current?.scene.requestRender()
-  }, [showRealBuildings, showPlanProject])
+  }, [showRealBuildings, showMassing25d])
 
   // ---- 3D Tiles terrain visual mesh (6-NW-12D terrain(TB)) ----------------
   // Loaded as a Primitive alongside the globe TerrainProvider.  The globe
@@ -783,7 +833,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   useEffect(() => {
     const viewer = viewerRef.current
     const url = terrainMeta?.planProjectUrl
-    if (!isLive(viewer) || !url || !showPlanProject) {
+    if (!isLive(viewer) || !url || !showStation) {
       if (mtrModel && !mtrModel.isDestroyed()) {
         viewer?.scene.primitives.remove(mtrModel)
         mtrModel = null
@@ -882,19 +932,23 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         mtrMarker = null
       }
     }
-  }, [terrainMeta?.planProjectUrl, showPlanProject, setPlanProjectLoading])
+  }, [terrainMeta?.planProjectUrl, showStation, setPlanProjectLoading])
 
   // ---- 2.5D footprint overlay (Plan Project companion) --------------------
-  // When Plan Project is on, swap the textured 3D Tiles mesh for a planning-doc
-  // style white massing extruded from buildings_hsk.json, and hide the few
-  // boxes under the GLB footprint so the station reads cleanly.
+  // Draw the city as 2.5D white massing in place of the textured 3D Tiles.
+  //
+  // This is the building *style* and nothing else: whether a planned project is
+  // present is a separate question, answered by the run's selection. The set of
+  // boxes a project covers is computed here because it needs the building list,
+  // and stashed in `stationHiddenIds` for the effect below to apply.
   useEffect(() => {
     const viewer = viewerRef.current
     const buildingsUrl = terrainMeta?.buildingsUrl
     const footprintUrl = terrainMeta?.planProjectFootprintUrl
-    if (!isLive(viewer) || !showPlanProject || !buildingsUrl || !footprintUrl) {
+    if (!isLive(viewer) || !showMassing25d || !buildingsUrl || !footprintUrl) {
       footprintLayer?.destroy()
       footprintLayer = null
+      stationHiddenIds = new Set()
       return
     }
 
@@ -910,13 +964,21 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
           fetch(footprintUrl).then((r) => r.json() as Promise<Feature<Polygon> | Polygon>),
         ])
         if (cancelled || !isLive(viewerRef.current)) return
-        const hidden = collectIntersectingIds(buildings, footprint, (a, b) =>
+        stationHiddenIds = collectIntersectingIds(buildings, footprint, (a, b) =>
           booleanIntersects(a as never, b as never),
         )
         footprintLayer?.destroy()
-        footprintLayer = createFootprintLayer(viewerRef.current, buildings, hidden)
+        // Built with the project's boxes hidden or shown according to the
+        // current selection, so the layer is never briefly wrong. Read through
+        // the ref: `showStation` is deliberately NOT a dependency of this effect
+        // (see below), so the prop value here would be a stale closure.
+        footprintLayer = createFootprintLayer(
+          viewerRef.current,
+          buildings,
+          showStationRef.current ? stationHiddenIds : EMPTY_IDS,
+        )
         console.warn(
-          `[planProject] 2.5D overlay: ${footprintLayer.size} boxes, ${hidden.size} hidden by GLB footprint`,
+          `[planProject] 2.5D overlay: ${footprintLayer.size} boxes, ${stationHiddenIds.size} under the project footprint`,
         )
       } catch (err) {
         console.error('[planProject] 2.5D overlay failed:', err)
@@ -928,7 +990,18 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       footprintLayer?.destroy()
       footprintLayer = null
     }
-  }, [showPlanProject, terrainMeta?.buildingsUrl, terrainMeta?.planProjectFootprintUrl])
+  }, [showMassing25d, terrainMeta?.buildingsUrl, terrainMeta?.planProjectFootprintUrl])
+
+  // Hide the boxes a planned project stands on -- only while that project is
+  // actually on. With the project off there is nothing to replace them with, and
+  // a hole in the massing reads as missing data rather than as a design choice.
+  //
+  // A separate effect rather than a rebuild: `setHiddenIds` toggles 390 entities
+  // in place, where recreating the layer would tear down and refetch.
+  useEffect(() => {
+    footprintLayer?.setHiddenIds(showStation ? stationHiddenIds : EMPTY_IDS)
+    viewerRef.current?.scene.requestRender()
+  }, [showStation])
 
   return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }

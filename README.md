@@ -56,7 +56,8 @@ about 43.5 ha, cropped to the Open3Dhk tile coverage on 13 Oct 2026.
 | **AI 3D placement** — new massing on real land cover | Removed (stage 1) | the `place` op and procedural generator are deleted |
 | **AI 3D alteration, scoped** — height / density / orientation, by region or site | Removed (stage 1) | superseded by real Open3Dhk buildings |
 | **3D city model** — real Open3Dhk buildings + terrain, rendered as 3D Tiles | Working | 396 real footprints (`buildings_hsk.json`), heights from tile surface − terrain |
-| **Plan Project toggle** — overlay a government case (MTR HSK station GLB) and swap the 3D Tiles mesh for a planning-doc 2.5D massing, hiding boxes under the GLB | Working | 390 boxes drawn, 6 hidden by the station footprint; GLB footprint precomputed by `scripts/compute_plan_project_footprint.py` |
+| **Building style switch** (3D / 2.5D) — swap the textured 3D Tiles mesh for a planning-doc 2.5D massing. A depiction choice only; it never turns a project on | Working | 398 boxes drawn, 0 hidden; the 3D Tiles layered off while 2.5D is on |
+| **Planned projects** — a project declares its effects in `backend/data/projects/<id>.json`; toggling it in the Projects panel scores them in the run | Working — one project | HSK MTR station: 22.1 m massing (SVF shift over 2,366 cells) + assumed 2 m storage (−33 m³ unstored at 50 mm); GLB footprint precomputed by `scripts/compute_plan_project_footprint.py` |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 11.7% of DEM cells are depressions |
 | **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |

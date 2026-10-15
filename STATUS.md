@@ -17,16 +17,21 @@ Nothing here is a target. The architecture rationale is in
 | 0 | Scaffold and the first feature buildout | Discarded — built on a placeholder world |
 | 1 | Real spatial foundation: terrain, land cover, buildings | **Done** |
 | 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Done** |
-| 3 | Scenario composition: fixed project footprints and toggles | **Partially — one fixed project** (HSK MTR station GLB with a planning-doc 2.5D overlay mode) |
+| 3 | Scenario composition: fixed project footprints and toggles | **Partially — one fixed project** (HSK MTR station, scored in runs) |
 | 4 | Intervention authoring: AI suggestions, NL → card, parameter card, pin/unpin | **Not started** |
 | 5 | Demo narrative, validation, pitch | Not started |
 
-Stage 2 is closed. Stage 3 is partially open: the Plan Project toggle lands the
-first fixed-footprint case and the view-mode machinery (GLB overlay + 2.5D
-massing + overlap hiding) it rides on. What is still missing is **a second
-project** and **the toggles / composition UI** that would turn one project into
-a scenario. The run loop is unchanged; this is a visual layer so far, not a
-run-input one.
+Stage 2 is closed. Stage 3 is partially open: the Projects panel lands the first
+fixed-footprint project and the machinery it rides on. A planned project is data
+(`backend/data/projects/<id>.json`) declaring its effects, seeded into a plan by
+`scripts/seed_projects.py`; toggling it puts that plan in `selectedPlanIds`, so
+the run scores it and the cumulative-coverage guard counts it with no special
+case anywhere. What is still missing is **a second project**.
+
+The building **style** switch (3D / 2.5D) is deliberately separate from the
+project toggles. It changes which layer the city is drawn from and nothing else:
+selecting a project no longer swaps the depiction, and switching to 2.5D no
+longer spawns the station. Those were one flag, and the fusion was the bug.
 
 ### What the two unbuilt stages mean for a demo
 
@@ -204,7 +209,7 @@ copied from the code's output.
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
 | frontend unit (`vitest`) | 71/71 | `npm test` — includes `streamChat` against real streams, the provenance receipt, the trackpad wheel maths and the navigation cheat-sheet |
-| frontend rendering (`verify-3d.mjs`) | 17/17 | `npm run verify:3d` — needs live servers; `/run` is stubbed from `scripts/fixtures/run-result.json`, so it needs no language model |
+| frontend rendering (`verify-3d.mjs`) | 27/27 | `npm run verify:3d` — needs live servers; `/run` is stubbed from `scripts/fixtures/run-result.json`, so it needs no language model |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; both the chat stream and `/run` are stubbed, so it needs no language model |
 | frontend navigation (`verify-nav.mjs`) | 29/29 | `npm run verify:nav` — needs live servers; the help opens once and stays dismissed, the tilt buttons and keys move the real camera, the compass turns and re-centres, tilting past the pitch limit leaves the heading alone, rotating at the limit leaves the pitch alone, zooming leaves both alone, two quick zoom presses add up, zooming after a pan keeps the point under the view centre where it was, a vertical right-drag tilts without rotating and a horizontal one rotates without tilting, the mouse wheel zooms while a trackpad-drag stream tilts |
