@@ -2,7 +2,7 @@
 
 Every non-trivial change gets an entry. Newest first.
 
-## 2026-10-15 — main goes green: lint warnings and a stale contract
+## 2026-10-15 — main goes green: lint warnings, a stale contract, and the port sweep
 
 Both failures pre-date this entry and were already on `origin/main`; neither came
 from the camera work in the entry below.
@@ -24,13 +24,34 @@ objects, which is what Pydantic 2.13.5 now emits. Regenerating was the whole fix
 nothing was hand-edited. The drift was present at `9a1d960` (the planProject
 merge) and absent at `bbd6963`, so it arrived with the planProject branch.
 
-### Note — the dev proxy moved to port 8000
+### Fixed — the verify suites named the old backend port
 
-`902ba21` retargeted the Vite proxy and CLAUDE.md from 8001 to 8000. The backend
-command block in CLAUDE.md and the four browser suites (`verify-*.mjs`) were
-written against 8001 and were *not* updated in the same commit, so they disagree
-with `vite.config.ts`. Run the API on 8000, or point the suites at 8001
-explicitly. Not resolved here: it is a docs-and-scripts sweep, not a defect.
+`902ba21` retargeted the Vite proxy and CLAUDE.md from 8001 to 8000 and both are
+consistent. Six references in the browser suites' prose were missed: the
+docstrings in `_verify-common.mjs`, `verify-3d.mjs`, `verify-chat.mjs`,
+`verify-nav.mjs` and `verify-ux.mjs`, plus `requireServers`'s failure text. The
+suites themselves were never broken — they reach the backend through the Vite
+proxy at :5173 and follow `vite.config.ts` — but a suite exiting 2 told you to
+start the API on the wrong port. All six now say 8000.
+
+### Not fixed — `verify-chat` fails against the configured model
+
+`verify-chat` proxies the real `POST /run` and waits 30 s for it. The run path
+calls `llm.complete_json` to write the result card, so its wall time is the
+model's, not the simulation's: measured locally, 42 s cold and 75–160 s warm at
+~3 s of CPU, i.e. blocked on the network. It only stays inside 30 s when the
+provider is fast.
+
+The config here is `LLM_BASE_URL=https://openrouter.ai/api/v1` with
+`google/gemma-4-31b-it:free`, and `ANTHROPIC_API_KEY` empty. The free tier is
+the slow path, and `llm.py` documents that it also rejects `response_format` and
+streams no `content` deltas — each of which costs a retry, which is most of the
+extra time. With the key set, Anthropic wins and the call is far faster.
+
+Diagnosed, not fixed: raising the suite's timeout would hide a real 30 s ceiling
+rather than remove it. The fix is either a fast provider for the suite or a
+decision that `verify-chat` should stub the run. Every other client-side check in
+the file passes; only the two that wait on a live model fail.
 
 ## 2026-10-14 — rotate, tilt and zoom are three independent axes
 

@@ -8,7 +8,7 @@
  * checked against a response with the field regardless of how old the running
  * backend is.
  *
- * Needs the dev server on :5173 and the backend on :8001. Exits 2 if either is
+ * Needs the dev server on :5173 and the backend on :8000. Exits 2 if either is
  * missing, so a missing server cannot read as a pass.
  */
 import { BASE, LAUNCH_ARGS, loadPlaywright, makeChecker, requireServers, settleViewer, watchErrors } from './_verify-common.mjs'

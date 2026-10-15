@@ -9,7 +9,7 @@
  * class of bug this script exists to catch.
  *
  * Usage:
- *   node scripts/verify-3d.mjs            # needs :5173 and the backend on :8001
+ *   node scripts/verify-3d.mjs            # needs :5173 and the backend on :8000
  *   PLAYWRIGHT_PATH=/path/to/playwright node scripts/verify-3d.mjs
  */
 import {
