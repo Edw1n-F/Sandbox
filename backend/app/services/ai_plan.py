@@ -86,6 +86,17 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
 
 from app.config import settings  # noqa: E402
 
+# The contour geometry the candidate sites are drawn with. Imported, never
+# re-derived: a second implementation of "the shape of the cells I found"
+# would be a second chance to disagree with the ledger's own rasteriser
+# about which cells an intervention actually covers.
+from app.services.intervention_geometry import (  # noqa: E402
+    connected_components,
+    contour_ring,
+    polygon_area_ha,
+    ring_centroid,
+)
+
 # English aliases, because the brief and the model are both English-speaking.
 EN_ALIASES: dict[str, str] = {
     "green space": "green_space",
@@ -192,21 +203,35 @@ def load_grounding() -> Grounding:
             [r(west), r(north)], [r(west), r(south)],
         ]
 
-    def site(ring, kind, evidence, metrics):
+    def site(cells, kind, evidence, metrics):
+        """One candidate site: the contour of its own cells, with the evidence.
+
+        The geometry is the component's **true mask**, contoured by
+        ``app/services/intervention_geometry.py`` -- not the axis-aligned
+        bounding box this function shipped first. The box claimed the empty
+        corners of an irregular basin as intervention area, which overstates
+        the site and trips the coverage guard on the wrong evidence. The area
+        is the contour's own shoelace area and the centroid its own area
+        centroid, for the same reason.
+        """
+        contour = contour_ring(
+            cells, bounds=ov.bounds, rows=ov.rows, cols=ov.cols)
+        if contour is None:  # pragma: no cover - components are non-empty here
+            return None
+        geometry, enclosed, of_component = contour
         return {
             "kind": kind,
-            "geometry": {"type": "Polygon", "coordinates": [ring]},
-            "centroid": [
-                round((ring[0][0] + ring[2][0]) / 2, 6),
-                round((ring[0][1] + ring[2][1]) / 2, 6),
-            ],
-            "areaHa": round(
-                (max(p[0] for p in ring) - min(p[0] for p in ring))
-                * 111_320.0 * math.cos(math.radians((lat_min + lat_max) / 2))
-                * (max(p[1] for p in ring) - min(p[1] for p in ring))
-                * 110_574.0 / 10_000.0, 1),
+            "geometry": geometry,
+            "centroid": ring_centroid(geometry["coordinates"][0]),
+            # Holes included: a site is what would actually be converted, and
+            # quoting the outline alone would claim the gaps as converted too.
+            "areaHa": polygon_area_ha(geometry["coordinates"], lat_min, lat_max),
             "evidence": evidence,
-            "metrics": metrics,
+            "metrics": {
+                **metrics,
+                "contourCells": enclosed,
+                "contourOfComponent": of_component,
+            },
         }
 
     # --- reservoirs: the deepest connected basins of the wet grid ----------
@@ -215,16 +240,19 @@ def load_grounding() -> Grounding:
         depth = np.load(depth_file).astype(np.float64)
         if depth.shape == (ov.rows, ov.cols):
             mask = depth >= 0.35
-            for min_r, min_c, max_r, max_c, size in _components(mask, 40)[:3]:
+            for comp in _components_cells(mask, 40, connectivity=4)[:3]:
+                min_r, min_c = comp["min_r"], comp["min_c"]
+                max_r, max_c = comp["max_r"], comp["max_c"]
                 sub = depth[min_r:max_r + 1, min_c:max_c + 1]
                 g.reservoir_sites.append(site(
-                    extent_ring(min_r, min_c, max_r, max_c),
+                    comp["cells"],
                     "water_reservoir",
-                    "deepest connected basin in the computed wet grid",
+                    "deepest connected basin in the computed wet grid, "
+                    "contoured to its true cell mask",
                     {
                         "maxDepthM": round(float(sub.max()), 2),
-                        "wetCells": size,
-                        "wetAreaHa": round(size * cell_w * cell_h / 10_000.0, 1),
+                        "wetCells": comp["size"],
+                        "wetAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1),
                     },
                 ))
         else:
@@ -236,21 +264,23 @@ def load_grounding() -> Grounding:
         g.notes.append("no wetgrid_hsk.npy; run scripts/make_wetgrid.py")
 
     # --- green space: largest contiguous vegetated blocks -------------------
-    for min_r, min_c, max_r, max_c, size in _components(ov.class_mask("green"), 120)[:3]:
+    for comp in _components_cells(ov.class_mask("green"), 120, connectivity=4)[:3]:
         g.green_sites.append(site(
-            extent_ring(min_r, min_c, max_r, max_c), "green_space",
-            "largest contiguous vegetated block (ESA WorldCover class 'green')",
-            {"greenCells": size,
-             "greenAreaHa": round(size * cell_w * cell_h / 10_000.0, 1)},
+            comp["cells"], "green_space",
+            "largest contiguous vegetated block (ESA WorldCover class 'green'), "
+            "contoured to its true cell mask",
+            {"greenCells": comp["size"],
+             "greenAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
         ))
 
     # --- permeable paving: the biggest contiguous impervious blocks ---------
-    for min_r, min_c, max_r, max_c, size in _components(ov.class_mask("paved"), 150)[:3]:
+    for comp in _components_cells(ov.class_mask("paved"), 150, connectivity=4)[:3]:
         g.paving_sites.append(site(
-            extent_ring(min_r, min_c, max_r, max_c), "permeable_paving",
-            "largest contiguous impervious block (ESA WorldCover class 'paved')",
-            {"pavedCells": size,
-             "pavedAreaHa": round(size * cell_w * cell_h / 10_000.0, 1)},
+            comp["cells"], "permeable_paving",
+            "largest contiguous impervious block (ESA WorldCover class 'paved'), "
+            "contoured to its true cell mask",
+            {"pavedCells": comp["size"],
+             "pavedAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
         ))
 
     g.notes.append(f"terrain={ov.terrain_source}, landcover={ov.landcover_source}")
@@ -259,36 +289,22 @@ def load_grounding() -> Grounding:
 
 def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
     """8-connected components -> (min_r, min_c, max_r, max_c, size), largest first."""
-    import numpy as np
+    return [
+        (c["min_r"], c["min_c"], c["max_r"], c["max_c"], c["size"])
+        for c in _components_cells(mask, min_size)
+    ]
 
-    seen = np.zeros_like(mask, dtype=bool)
-    out: list[tuple[int, int, int, int, int]] = []
-    rows, cols = mask.shape
-    for r0 in range(rows):
-        for c0 in range(cols):
-            if not mask[r0, c0] or seen[r0, c0]:
-                continue
-            stack = [(r0, c0)]
-            seen[r0, c0] = True
-            cells = []
-            while stack:
-                r, c = stack.pop()
-                cells.append((r, c))
-                for dr in (-1, 0, 1):
-                    for dc in (-1, 0, 1):
-                        rr, cc = r + dr, c + dc
-                        if 0 <= rr < rows and 0 <= cc < cols and mask[rr, cc] and not seen[rr, cc]:
-                            seen[rr, cc] = True
-                            stack.append((rr, cc))
-            if len(cells) >= min_size:
-                arr = np.array(cells)
-                out.append((
-                    int(arr[:, 0].min()), int(arr[:, 1].min()),
-                    int(arr[:, 0].max()), int(arr[:, 1].max()),
-                    len(cells),
-                ))
-    out.sort(key=lambda t: -t[4])
-    return out
+
+def _components_cells(mask, min_size: int,
+                      connectivity: int = 8) -> list[dict[str, Any]]:
+    """Connected components with their cell lists kept, largest first.
+
+    Thin alias for ``intervention_geometry.connected_components``: one fill,
+    one definition of "component" for grounding, siting and the catalog
+    generator alike.
+    """
+    return connected_components(mask, min_size, connectivity=connectivity)
+
 
 
 # --------------------------------------------------------------------------- #
@@ -785,6 +801,9 @@ def _feature(
 STYLE_FOR_KIND: dict[str, dict[str, Any]] = {
     "water_reservoir": {"color": "#1f6feb", "opacity": 0.55, "extrusionHeight": 14.0},
     "green_space": {"color": "#2ea043", "opacity": 0.45, "extrusionHeight": 6.0},
+    # A floodable park stays flat and low: it is landscaped ground that ponds,
+    # not a tank, and extruding it 14 m would read as a building.
+    "flood_storage": {"color": "#3fb950", "opacity": 0.35, "extrusionHeight": 1.5},
     "permeable_paving": {"color": "#8957e5", "opacity": 0.45},
     "drainage": {"color": "#e3b341", "opacity": 0.95},
     "road": {"color": "#6e7681", "opacity": 0.8},

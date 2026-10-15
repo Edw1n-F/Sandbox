@@ -362,6 +362,10 @@ def list_interventions(plan_id: str) -> InterventionFeatureCollection:
                 source=item.get("source", "manual"),
                 status=item.get("status", "draft"),
                 params=item.get("params", {}),
+                # The pin state is a top-level field of the stored row; carry
+                # it so the run composition sees it (default True keeps
+                # pre-pinning rows composed as before).
+                pinned=bool(item.get("pinned", True)),
             ),
         )
         for item in doc.get("interventions", [])

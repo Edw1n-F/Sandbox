@@ -116,6 +116,15 @@ class InterventionProperties(WireModel):
     §3.3.2's example shows only ``interventionType`` and ``style``; ``id``,
     ``status``, ``source`` and ``params`` are additive so the frontend can key,
     filter and style without a second request.
+
+    ``pinned`` is additive for the same reason, and it is carried here because
+    the pin state lives at the *top level* of the stored row (see
+    ``app/services/pins.py``) and every reader of a plan goes through this
+    collection -- dropping it left the run-composition fallback chain in
+    ``routers/scenes.py::intervention_features`` landing on its ``True``
+    default, so an unpinned row kept being scored. The default stays ``True``:
+    rows created before pinning existed carry no flag, and they must compose
+    exactly as they did then.
     """
 
     intervention_type: str
@@ -124,6 +133,7 @@ class InterventionProperties(WireModel):
     source: InterventionSource = "manual"
     status: InterventionStatus = "draft"
     params: dict[str, Any] = Field(default_factory=dict)
+    pinned: bool = True
 
 
 class InterventionFeatureCollection(WireModel):
