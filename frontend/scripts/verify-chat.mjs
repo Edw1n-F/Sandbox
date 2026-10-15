@@ -2,15 +2,30 @@
  * Chat panel in a real browser: the receipt, the live region, the in-progress
  * shimmer, and the dropped-stream message.
  *
- * The chat stream is mocked (Playwright route interception), so this does not
- * depend on a language model being configured or on the free tier being under its
- * rate limit. `/run` is real, patched only to add `sources`, so the receipt is
- * checked against a response with the field regardless of how old the running
- * backend is.
+ * BOTH the chat stream and `/run` are stubbed (Playwright route interception), so
+ * this suite tests the panel and depends on no language model at all.
+ *
+ * `/run` used to be real and only patched to add `sources`. That made the suite
+ * wait on the run's *optional* card call: `run_service` asks a model to write the
+ * result card and falls back to a labelled template when the call fails, so the
+ * HTTP response does not return until the provider answers or times out --
+ * `TIMEOUT_S` is 90 s, and a fallback chain multiplies it. Measured here: 33 s
+ * on a good call, 119 s when the provider timed out, and 42-160 s across a run
+ * of them. `route.fetch()` has its own 30 s default, so the suite died on
+ * "route.fetch: Timeout 30000ms exceeded" whenever the model was slower than
+ * that -- which is most of the time on a free tier, and it is why this suite
+ * looked like it hung.
+ *
+ * The fix is the one the header always claimed: mock the run too. Nothing here
+ * is about whether a model can write a card -- the chat stream was already
+ * mocked, so the assertions never covered that -- and the run path itself is
+ * verified server-side by backend/tests/test_run.py.
  *
  * Needs the dev server on :5173 and the backend on :8000. Exits 2 if either is
  * missing, so a missing server cannot read as a pass.
  */
+import { readFileSync } from 'node:fs'
+
 import { BASE, LAUNCH_ARGS, loadPlaywright, makeChecker, requireServers, settleViewer, watchErrors } from './_verify-common.mjs'
 
 const { chromium } = loadPlaywright()
@@ -45,16 +60,42 @@ const steps = [
 ]
 const done = { event: 'done', status: 'done', ms: 10 }
 
+/** How long the stubbed run is held open, so its wait affordances are visible. */
+const RUN_DELAY_MS = 1200
+
 const browser = await chromium.launch({ headless: true, args: LAUNCH_ARGS })
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } })
 const errors = watchErrors(page)
 
 // ---- routes ----------------------------------------------------------------
+/**
+ * The `/run` result, read from a committed fixture.
+ *
+ * `scripts/fixtures/run-result.json` is a real response from a 50 mm baseline
+ * run on this scene, captured once and committed, with `runId` and the overlay
+ * URLs pinned so the receipt assertions are stable. Using the actual response
+ * rather than a hand-built object matters: `StatsPanel` reads `stats.delta
+ * .unstoredM3` and a dozen siblings, and a fixture that omits one crashes the
+ * panel into its error boundary instead of failing the check that cares.
+ *
+ * The overlay PNGs it names do not exist. That is deliberate -- this suite
+ * asserts on the receipt text, and the overlays are verified against a real run
+ * by verify-3d.
+ */
+const runResult = JSON.parse(
+  readFileSync(new URL('./fixtures/run-result.json', import.meta.url), 'utf8'),
+)
+
 await page.route('**/api/scenes/*/run', async (route) => {
-  const res = await route.fetch()
-  const body = await res.json()
-  body.sources = { terrain: 'open3dhk-tiles', landCover: 'esa-worldcover', lst: 'Landsat 8/9 C2 L2 ST_B10' }
-  await route.fulfill({ response: res, json: body })
+  // Held briefly so the run-wait affordances below are actually observable. A
+  // real run took tens of seconds, so the shimmer was easy to catch; an instant
+  // stub would flash and vanish, and the check would report a false failure.
+  await new Promise((r) => setTimeout(r, RUN_DELAY_MS))
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runResult),
+  })
 })
 
 /** Queue of bodies the next chat questions will receive, in order. */

@@ -12,6 +12,8 @@
  *   node scripts/verify-3d.mjs            # needs :5173 and the backend on :8000
  *   PLAYWRIGHT_PATH=/path/to/playwright node scripts/verify-3d.mjs
  */
+import { readFileSync } from 'node:fs'
+
 import {
   BASE, LAUNCH_ARGS, loadPlaywright, makeChecker, requireServers, settleViewer, watchErrors,
 } from './_verify-common.mjs'
@@ -114,10 +116,36 @@ const shotBefore = await page.screenshot({ path: 'verify-before-run.png' })
 const preOverlays = await overlayUrls()
 
 // The Run button starts the simulation; the overlays only appear on its result.
+//
+// `/run` is stubbed from the committed fixture for the same reason verify-chat
+// stubs it: the real endpoint does not return until its *optional* card call to a
+// model finishes, which measured 33-160 s here against a 120 s wait. Nothing in
+// this file is about the model -- it is about whether the overlays reach the
+// canvas -- and the run path itself is covered server-side by
+// backend/tests/test_run.py.
+//
+// The fixture names real per-run PNGs from a previous local run, but only the
+// URLs matter here: `overlayUrls` reads them off the entity materials, and the
+// check below verifies the run id reached the client, not that the image
+// decoded. `data/rasters/run/` is gitignored, and this suite passes on a fresh
+// clone with those PNGs absent -- confirmed by moving them aside and re-running.
+const runFixture = JSON.parse(
+  readFileSync(new URL('./fixtures/run-result.json', import.meta.url), 'utf8'),
+)
+await page.route('**/api/scenes/*/run', async (route) => {
+  // Held briefly so the run-wait affordances are observable, as they were when a
+  // real run took tens of seconds.
+  await new Promise((r) => setTimeout(r, 1200))
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(runFixture),
+  })
+})
 await page.getByText('Run Simulation').first().click()
 const runResponse = await page
   .waitForResponse((r) => r.url().endsWith('/run') && r.request().method() === 'POST',
-    { timeout: 120000 })
+    { timeout: 30000 })
   .catch(() => null)
 check('the Run button reaches POST /run', runResponse?.status() === 200,
   String(runResponse?.status()))

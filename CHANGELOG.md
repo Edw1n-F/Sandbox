@@ -2,7 +2,7 @@
 
 Every non-trivial change gets an entry. Newest first.
 
-## 2026-10-15 — main goes green: lint warnings, a stale contract, and the port sweep
+## 2026-10-15 — main goes green: lint warnings, a stale contract, the port sweep, and two hanging suites
 
 Both failures pre-date this entry and were already on `origin/main`; neither came
 from the camera work in the entry below.
@@ -34,24 +34,39 @@ suites themselves were never broken — they reach the backend through the Vite
 proxy at :5173 and follow `vite.config.ts` — but a suite exiting 2 told you to
 start the API on the wrong port. All six now say 8000.
 
-### Not fixed — `verify-chat` fails against the configured model
+### Fixed — `verify-chat` and `verify-3d` hung on the model call behind `POST /run`
 
-`verify-chat` proxies the real `POST /run` and waits 30 s for it. The run path
-calls `llm.complete_json` to write the result card, so its wall time is the
-model's, not the simulation's: measured locally, 42 s cold and 75–160 s warm at
-~3 s of CPU, i.e. blocked on the network. It only stays inside 30 s when the
-provider is fast.
+Both suites looked like they hung while running the browser checks. They were
+waiting on the network.
 
-The config here is `LLM_BASE_URL=https://openrouter.ai/api/v1` with
-`google/gemma-4-31b-it:free`, and `ANTHROPIC_API_KEY` empty. The free tier is
-the slow path, and `llm.py` documents that it also rejects `response_format` and
-streams no `content` deltas — each of which costs a retry, which is most of the
-extra time. With the key set, Anthropic wins and the call is far faster.
+`run_service._llm_explanation` asks a model to write the run's result card and
+falls back to a labelled template when the call fails — but the HTTP response
+does not return until the call finishes or times out, and `llm.TIMEOUT_S` is
+90 s, multiplied by a fallback chain. Measured on this machine: **0.7 s** with no
+provider configured, **33 s** on a good call to the configured provider, **119 s**
+when it timed out. `verify-chat`'s `route.fetch()` carries a 30 s default of its
+own, so it died with "route.fetch: Timeout 30000ms exceeded" — a message that
+reads like a bug in the suite rather than a slow model.
 
-Diagnosed, not fixed: raising the suite's timeout would hide a real 30 s ceiling
-rather than remove it. The fix is either a fast provider for the suite or a
-decision that `verify-chat` should stub the run. Every other client-side check in
-the file passes; only the two that wait on a live model fail.
+- **`verify-chat`** now stubs `/run` as well as the chat stream, from a new
+  committed fixture, so it depends on no model at all. That is what its own
+  header always claimed; the chat stream was already mocked, so no assertion
+  covered the model.
+- **`verify-3d`** had no such claim — it asserts the overlays reach the canvas,
+  which needs a real run result. It now stubs `/run` from the same fixture and
+  reads the per-run overlay URLs off the entities, which is what it measures
+  anyway. The run path itself stays covered server-side by `test_run.py`.
+
+`scripts/fixtures/run-result.json` is a real captured response from a 50 mm
+baseline run on this scene, with `runId` and the overlay URLs pinned so the
+receipt assertions are stable. Using the actual response rather than a hand-built
+object matters: `StatsPanel` reads `stats.delta.unstoredM3` and a dozen siblings,
+and a fixture missing one crashes the panel into its error boundary instead of
+failing the check that cares — which is exactly what a first attempt did.
+
+Measured, before → after: `verify-chat` never completed → 17/17 in 26 s;
+`verify-3d` 13/17 in 172 s → 17/17 in 76 s. `verify-ux` 21/21 and `verify-nav`
+29/29 are unchanged and unaffected.
 
 ## 2026-10-14 — rotate, tilt and zoom are three independent axes
 
