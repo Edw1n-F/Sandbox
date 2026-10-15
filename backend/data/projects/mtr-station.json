@@ -4,6 +4,9 @@
   "note": "Fixed project footprint. The storage depth is a project-supplied input, not surveyed station design data.",
   "footprint": "plan_project_footprint.json",
   "model": "mtr_station.glb",
+  "origin": [113.993, 22.436],
+  "scale": 50.0,
+  "label": "洪水桥站\nMTR Hung Shui Kiu",
   "effects": [
     {
       "kind": "underground_tank",

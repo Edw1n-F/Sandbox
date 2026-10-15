@@ -65,6 +65,7 @@ KIND_WORD: dict[str, str] = {
     "water_reservoir": "water reservoir",
     "green_space": "green space",
     "permeable_paving": "permeable paving",
+    "flood_storage": "floodable ground",
     "drainage": "drainage",
     "road": "road",
 }
@@ -77,6 +78,7 @@ KIND_PHRASE: dict[str, str] = {
     "water_reservoir": "a water reservoir",
     "green_space": "green space",
     "permeable_paving": "permeable paving",
+    "flood_storage": "floodable ground",
     "drainage": "drainage",
     "road": "a road",
 }
@@ -137,12 +139,19 @@ def _match_noun(text: str) -> tuple[str, str] | None:
     makes "convert the road to permeable paving" read as *paving* (the longer,
     more specific phrase) rather than as a road. Hyphens are flattened first,
     the same normalisation `_match_region` uses.
+
+    The noun may carry an English plural (``s``/``es``): "add two water
+    reservoirs in the north" is a request, and a whole-word match on
+    "reservoir" read it as ambiguous -- which is how a proposal-shaped turn came
+    back as a result card. Matching the plural costs one optional group and keeps
+    the single vocabulary (`ai_plan.EN_ALIASES`) rather than typing the plurals
+    into it, where they would drift from the singulars.
     """
     lowered = text.lower().replace("-", " ")
     best_key: tuple[int, int] | None = None
     best: tuple[str, str] | None = None
     for alias, kind in NOUNS.items():
-        found = re.search(rf"\b{re.escape(alias)}\b", lowered)
+        found = re.search(rf"\b{re.escape(alias)}(?:e?s)?\b", lowered)
         if not found:
             continue
         key = (-len(alias), found.start())

@@ -116,6 +116,18 @@ EN_ALIASES: dict[str, str] = {
     "road": "road",
     "street": "road",
     "railing": "road",
+    # Synonyms the routing test found missing (16 Oct). They live here, in the one
+    # vocabulary both `parse_intent` and `agent/intent.py::_match_noun` read,
+    # rather than in the classifier -- two vocabularies would drift, and the
+    # classifier's noun list is derived from this dict by design. "basin" bare
+    # (not "retention basin") and "wetland" were the two that read as ambiguous,
+    # so a proposal-shaped turn came back as a result card.
+    "green corridor": "green_space",
+    "tree corridor": "green_space",
+    "permeable plaza": "permeable_paving",
+    "basin": "water_reservoir",
+    "floodable park": "flood_storage",
+    "wetland": "flood_storage",
     "wind": "wind",
     "windbreak": "wind",
     "ventilation": "wind",

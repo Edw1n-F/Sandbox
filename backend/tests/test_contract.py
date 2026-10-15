@@ -892,6 +892,132 @@ def test_query_param_spellings_both_take_effect() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Planned projects on the scene record
+# --------------------------------------------------------------------------- #
+
+
+def _project_store(tmp: Path, projects: dict[str, dict], files: list[str]):
+    """Point `settings` at a throwaway data/model tree holding the given projects.
+
+    The resolver is a pure function of two directories, so it is tested against a
+    temp tree rather than the real one: that keeps the test independent of which
+    projects happen to be seeded, and lets it prove an absent file is omitted
+    rather than relying on one being absent in the working copy.
+    """
+    from app.config import settings
+
+    data, model = tmp / "data", tmp / "model"
+    (data / "projects").mkdir(parents=True)
+    model.mkdir()
+    for name, doc in projects.items():
+        (data / "projects" / f"{name}.json").write_text(
+            json.dumps(doc), encoding="utf-8")
+    for rel in files:
+        target = data / rel if rel.endswith(".json") else model / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x", encoding="utf-8")
+    saved = (settings.data_dir, settings.model_dir)
+    object.__setattr__(settings, "data_dir", data)
+    object.__setattr__(settings, "model_dir", model)
+    return saved
+
+
+def _restore(saved) -> None:
+    from app.config import settings
+
+    object.__setattr__(settings, "data_dir", saved[0])
+    object.__setattr__(settings, "model_dir", saved[1])
+
+
+def test_the_scene_lists_every_project_that_has_a_model() -> None:
+    """A second modeled project must appear with no code change.
+
+    The wire used to carry two singular URL fields -- one project per scene -- so
+    the viewer's model handle and project id were both hardcoded and a second
+    model could not appear at all. The ceiling was the wire shape.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as t:
+        saved = _project_store(
+            Path(t),
+            {
+                "alpha": {"id": "alpha", "name": "Alpha", "model": "a.glb",
+                          "footprint": "a.json", "origin": [114.0, 22.4], "scale": 10},
+                "beta": {"id": "beta", "name": "Beta", "model": "b.glb",
+                         "footprint": "b.json", "origin": [114.1, 22.5], "scale": 20,
+                         "label": "Beta site"},
+            },
+            ["a.glb", "a.json", "b.glb", "b.json"],
+        )
+        try:
+            found = scene_service.project_models()
+        finally:
+            _restore(saved)
+
+    assert [p.project_id for p in found] == ["alpha", "beta"]
+    beta = found[1]
+    assert beta.origin == (114.1, 22.5) and beta.scale == 20.0
+    assert beta.label == "Beta site"
+    assert beta.model_url.endswith("/model/b.glb"), beta.model_url
+
+
+def test_a_project_with_a_missing_file_is_omitted_not_listed_with_nulls() -> None:
+    """Draw what exists. A missing GLB is a build step not run, not a project to
+    render a placeholder for -- and a null-filled entry would make the viewer try
+    to load a model that is not there."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as t:
+        saved = _project_store(
+            Path(t),
+            {
+                "ok": {"id": "ok", "name": "Ok", "model": "ok.glb",
+                       "footprint": "ok.json", "origin": [114.0, 22.4]},
+                "no_glb": {"id": "no_glb", "name": "NoGlb", "model": "gone.glb",
+                           "footprint": "n.json", "origin": [114.0, 22.4]},
+                "no_fp": {"id": "no_fp", "name": "NoFp", "model": "f.glb",
+                          "footprint": "missing.json", "origin": [114.0, 22.4]},
+                "effects_only": {"id": "effects_only", "name": "FxOnly"},
+            },
+            ["ok.glb", "ok.json", "n.json", "f.glb"],
+        )
+        try:
+            found = [p.project_id for p in scene_service.project_models()]
+        finally:
+            _restore(saved)
+
+    assert found == ["ok"], found
+
+
+def test_an_unreadable_project_file_does_not_take_the_scene_down() -> None:
+    """One malformed project file must not 500 the whole terrain endpoint."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as t:
+        saved = _project_store(Path(t), {}, [])
+        try:
+            from app.config import settings
+
+            (settings.data_dir / "projects" / "broken.json").write_text(
+                "{not json", encoding="utf-8")
+            found = scene_service.project_models()
+        finally:
+            _restore(saved)
+
+    assert found == []
+
+
+def test_the_terrain_endpoint_carries_projects_and_not_the_old_fields() -> None:
+    """The singular fields are gone, not deprecated: one consumer, one commit."""
+    scene_id = _seeded_scene_for_ai_plan()
+    assert scene_id, "no seeded scene on disk; run scripts/seed_scene.py"
+    body = client.get(f"/api/scenes/{scene_id}/terrain").json()
+    assert isinstance(body.get("projects"), list), body.keys()
+    assert "planProjectUrl" not in body and "planProjectFootprintUrl" not in body
+
+
+# --------------------------------------------------------------------------- #
 # Minimal runner so the suite works without pytest installed
 # --------------------------------------------------------------------------- #
 

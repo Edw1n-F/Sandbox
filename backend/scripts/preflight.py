@@ -16,6 +16,7 @@ the check.
 from __future__ import annotations
 
 import importlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -160,6 +161,36 @@ else:
         "a scene exists",
         False,
         "run: python scripts/seed_scene.py",
+    )
+
+# --- planned projects are seeded ------------------------------------------ #
+# The project files are committed but the plans they become are not (data/plans/
+# is gitignored apart from the baseline), so a fresh clone has the files and none
+# of the plans, and the Projects panel is simply empty -- no error anywhere. This
+# is the one place that notices. A warning, not a blocker: the app runs without
+# any project, it just has nothing to toggle.
+project_files = sorted((data / "projects").glob("*.json")) if (data / "projects").exists() else []
+if project_files:
+    seeded: set[str] = set()
+    for plan_path in (data / "plans").glob("*.json") if (data / "plans").exists() else []:
+        try:
+            doc = json.loads(plan_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        project_id = (doc.get("params") or {}).get("projectId")
+        if project_id:
+            seeded.add(str(project_id))
+    wanted = {
+        (json.loads(p.read_text(encoding="utf-8")).get("id") or p.stem)
+        for p in project_files
+    }
+    missing = sorted(wanted - seeded)
+    check(
+        "planned projects are seeded",
+        not missing,
+        "" if not missing else
+        f"not seeded: {', '.join(missing)} — run: python scripts/seed_projects.py",
+        warn_only=True,
     )
 
 # --- summary -------------------------------------------------------------- #

@@ -77,8 +77,29 @@ export interface TerrainMeta {
   terrain3DUrl?: string | null
   waterbodyUrl?: string | null
   infrastructureUrl?: string | null
-  planProjectUrl?: string | null
-  planProjectFootprintUrl?: string | null
+  /**
+   * Planned projects that have a 3D model on this scene.
+   *
+   * A list, not the two singular URL fields this used to carry. Those described
+   * exactly one modeled project per scene, which is why the station's id and its
+   * model handle were both hardcoded in the viewer and a second model could not
+   * appear at all. The ceiling was the wire shape, not the frontend.
+   */
+  projects?: ProjectModel[] | null
+}
+
+/** One planned project's 3D presence, as the scene record describes it. */
+export interface ProjectModel {
+  projectId: string
+  name: string
+  modelUrl?: string | null
+  /** GeoJSON Polygon the project stands on, for hiding the 2.5D boxes beneath. */
+  footprintUrl?: string | null
+  /** Where the model's origin sits. Must match the footprint's own origin. */
+  origin?: [number, number] | null
+  scale?: number | null
+  /** Label drawn at the model, when the project is one that wants one. */
+  label?: string | null
 }
 
 export type PlanType =
@@ -243,6 +264,24 @@ export interface RunResult {
       surfaceToAirOffsetC: number
       source: string
       note: string
+      /**
+       * Where the scenario moved the temperature field, cell by cell.
+       *
+       * Separate from `delta.surfaceMeanC` because that one cannot show a
+       * project's shade or wind effect: the field is re-anchored so its mean
+       * equals the scenario mean, which pins the mean to the slider whatever a
+       * project does. Absent on older runs.
+       */
+      local?: {
+        cellsChanged: number
+        areaChangedM2: number
+        /** Signed by the largest-magnitude cell: negative is cooler. */
+        peakDeltaC: number
+        meanDeltaC: number
+        thresholdC: number
+        /** True when cells moved but the site mean cannot show it. */
+        hiddenAtMean: boolean
+      }
     }
     baseline: RunLedgerSide
     scenario: RunLedgerSide

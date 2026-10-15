@@ -32,6 +32,7 @@ from app.schemas.intervention import (
 )
 from app.schemas.plan import PlanCreate, PlanListRead, PlanRead, PlanUpdate
 from app.schemas.scene import (
+    ProjectModel,
     SceneCreate,
     SceneCreated,
     SceneRead,
@@ -258,17 +259,27 @@ def list_plans(scene_id: str) -> PlanListRead:
     return PlanListRead(plans=plans)
 
 
-def create_plan(scene_id: str, payload: PlanCreate) -> InterventionCreateResponse:
+def create_plan(scene_id: str, payload: PlanCreate, *,
+                plan_id: str | None = None) -> InterventionCreateResponse:
+    """Persist a plan and its interventions.
+
+    ``plan_id`` is for the seeder only: a planned project is committed to the repo
+    so every clone has it, and a committed file needs a name that is the same on
+    every machine. A random uuid cannot be allowlisted in ``.gitignore`` and would
+    differ per clone. The HTTP route never passes it, so API-created plans keep
+    their minted uuid. Interventions then take ``<plan_id>-<n>``.
+    """
     if db.read_doc(db.scene_path(scene_id)) is None:
         raise SceneNotFound(scene_id)
 
     settings.ensure_dirs()
-    plan_id = db.new_id()
+    fixed = plan_id is not None
+    plan_id = plan_id or db.new_id()
     now = _now()
 
     stored: list[dict[str, Any]] = []
-    for item in payload.interventions:
-        intervention_id = db.new_id()
+    for index, item in enumerate(payload.interventions):
+        intervention_id = f"{plan_id}-{index}" if fixed else db.new_id()
         record = {
             "id": intervention_id,
             "plan_id": plan_id,
@@ -432,17 +443,52 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
         waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
         infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
-        plan_project_url=(
-            settings.public_model_url("mtr_station.glb")
-            if (settings.model_dir / "mtr_station.glb").exists()
-            else None
-        ),
-        plan_project_footprint_url=(
-            settings.public_url("plan_project_footprint.json")
-            if (settings.data_dir / "plan_project_footprint.json").exists()
-            else None
-        ),
+        projects=project_models(),
     )
+
+
+def project_models() -> list[ProjectModel]:
+    """Every seeded planned project that has a model, as the viewer needs it.
+
+    Reads `data/projects/*.json` -- the same files `seed_projects.py` turns into
+    plans -- so a project's URL, origin and scale have one home and adding a
+    second one needs no code. A project with no `model`, or whose GLB or
+    footprint is not on disk, is **omitted rather than listed with nulls**: the
+    viewer should draw what exists, and a missing file is a build step not run,
+    not a broken project to render a placeholder for.
+
+    Sorted by id so the response is stable between calls; an unstable list would
+    make the viewer tear down and rebuild its models on every scene fetch.
+    """
+    out: list[ProjectModel] = []
+    root = settings.data_dir / "projects"
+    if not root.is_dir():
+        return out
+    for path in sorted(root.glob("*.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        project_id = doc.get("id") or path.stem
+        model_rel = doc.get("model")
+        footprint_rel = doc.get("footprint")
+        if not model_rel or not footprint_rel:
+            continue
+        model_path = settings.model_dir / model_rel
+        footprint_path = settings.data_dir / footprint_rel
+        if not model_path.exists() or not footprint_path.exists():
+            continue
+        origin = doc.get("origin")
+        out.append(ProjectModel(
+            project_id=project_id,
+            name=doc.get("name") or project_id,
+            model_url=settings.public_model_url(model_rel),
+            footprint_url=settings.public_url(footprint_rel),
+            origin=(float(origin[0]), float(origin[1])) if origin else None,
+            scale=float(doc.get("scale") or 1.0),
+            label=doc.get("label"),
+        ))
+    return out
 
 
 def buildings_path(scene_id: str) -> Path | None:

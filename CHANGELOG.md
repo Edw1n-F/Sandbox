@@ -2,6 +2,74 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-16 — a second modeled project is a data edit, and a project's heat effect is visible
+
+### Changed — the scene lists its projects; the viewer holds one model per project
+
+The scene record carried `planProjectUrl` / `planProjectFootprintUrl`: one model
+pair per scene. That, not the frontend, was the ceiling on a second modeled
+project, and it is why the station's id and its model handle were both hardcoded
+in the viewer. They are replaced by `terrain.projects`, a list built server-side
+from `data/projects/*.json`:
+
+- `scene_service.project_models()` resolves each project's model and footprint to
+  URLs and **omits** a project whose files are missing, rather than listing it with
+  nulls for the viewer to try to load. A malformed project file is skipped, not a
+  500.
+- The viewer keeps a `Map` of models keyed by project id (the old single
+  `mtrModel` slot could only hold one) and hides the **union** of the boxes under
+  every selected project, so turning one of two projects off restores only its own.
+- The Projects panel builds a row per seeded plan, from `params.projectId`, so it
+  also shows effect-only projects that have no model.
+- `compute_plan_project_footprint.py --project <id>` reads model, origin and scale
+  from the project file instead of module constants.
+
+Proven the way it matters: a throwaway second project was added with **no code
+change** and driven in a browser alongside the station. One selected hides 6
+boxes; both, 8; the first off, 2; both off, 0. It was then removed.
+
+### Added — a project's local heat effect is reported, not just implied
+
+The temperature field is re-anchored so its mean equals the scenario mean, which
+means `surfaceMeanC` reads the slider whatever a project does and can never show
+one. The station's shade and wind effect is real (up to +0.24 °C over 48 cells on
+its real footprint) and was invisible. The run now returns
+`stats.temperature.local` (cells changed, area, signed peak, and `hiddenAtMean`),
+the panel shows it as `Δ surface temp (local)` only when cells moved, the code-
+assembled card says so in the Heat row instead of a flat "0.000 vs baseline", and
+it is handed to the model as a grounded fact so a model-written card quotes the
+run's own figure.
+
+### Changed — planned projects are committed, so testers see them
+
+The plans were gitignored, so a fresh clone had the project files and an empty
+Projects panel with no error anywhere. The seeder now names a project's plan
+`project-<id>` and its interventions `project-<id>-<n>`, and `.gitignore`
+allowlists `project-*` with one glob, so a new project needs no ignore-file edit.
+`preflight.py` warns if a project file has no plan. A random uuid could not have
+been allowlisted and would have differed on every machine.
+
+### Not done — the 429 backoff, because the premise was wrong
+
+The plan said the retry-with-backoff in `llm.py` turned "no model available" into a
+minute of waiting. It does not apply: that loop is in `complete_text`, which no
+production code calls (only tests do). The run and the chat use `complete_json` and
+`stream_text`, and `complete_json` advances on a 429 immediately, with no sleep.
+Measured with the free quota exhausted, the whole four-model chain fails in
+**0.5 s**. The earlier 60-83 s runs were slow *successful-looking* calls while the
+quota lasted, and are now bounded by `CARD_DEADLINE_S`. Capping a loop nothing
+reaches would have changed nothing, so it was left alone. What is genuinely
+unbounded is `stream_text` (the chat) and the chat's own `complete_json`, which
+have no wall-clock deadline.
+
+### Fixed — a flaky check in `verify-3d`
+
+The 3D/2.5D check took "the first `Cesium3DTileset` in the primitive list" as the
+buildings, which held only while the buildings loaded before the terrain mesh. They
+load concurrently, so it failed 25/27 on one run and passed 27/27 on the next with
+nothing changed. It now selects the tileset by its `city_model` URL; four
+consecutive runs are green.
+
 ## 2026-10-15 — a planned project is data, and the building-style switch is not a project toggle
 
 ### Fixed — one flag was doing three jobs

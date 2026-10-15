@@ -67,6 +67,13 @@ backend/data/plans/*
 backend/data/interventions/*
 !backend/data/scenes/51e03c37-5360-43b0-a094-fbaca38cd70b.json
 !backend/data/plans/77593516-77ab-4e93-9451-cf1b5b4cbf93.json
+# Planned projects ARE committed (backend/data/projects/<id>.json is the source,
+# scripts/seed_projects.py writes the plan), so that every clone and every tester
+# sees the same projects instead of an empty Projects panel. The seeder names them
+# `project-<id>` precisely so one glob covers every future project: a random uuid
+# could not be allowlisted here, and would differ on every machine.
+!backend/data/plans/project-*.json
+!backend/data/interventions/project-*.json
 
 # Agent memory, not project source
 .workbuddy/

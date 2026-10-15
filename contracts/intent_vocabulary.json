@@ -1,6 +1,4 @@
 {
-  "version": 1,
-  "note": "Generated from backend/app/agent/intent.py (INTERVENTION_VERBS, REMOVAL_VERBS, NOUNS <- ai_plan.EN_ALIASES, KIND_WORD, REGION_WORDS). The single source of the routing vocabulary: the frontend fast path (frontend/src/api/intentVocabulary.ts) mirrors this file, and backend/tests/test_intent_routing.py pins it back to intent.py so the two cannot silently diverge.",
   "interventionVerbs": [
     "add",
     "place",
@@ -43,6 +41,12 @@
     "road": "road",
     "street": "road",
     "railing": "road",
+    "green corridor": "green_space",
+    "tree corridor": "green_space",
+    "permeable plaza": "permeable_paving",
+    "basin": "water_reservoir",
+    "floodable park": "flood_storage",
+    "wetland": "flood_storage",
     "reservoir": "water_reservoir",
     "pond": "water_reservoir"
   },
@@ -50,6 +54,7 @@
     "water_reservoir": "water reservoir",
     "green_space": "green space",
     "permeable_paving": "permeable paving",
+    "flood_storage": "floodable ground",
     "drainage": "drainage",
     "road": "road"
   },

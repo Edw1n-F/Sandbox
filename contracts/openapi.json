@@ -995,6 +995,85 @@
         "title": "PlanUpdate",
         "type": "object"
       },
+      "ProjectModel": {
+        "additionalProperties": false,
+        "description": "One planned project's 3D presence on a scene.\n\nA list, not two singular fields. `plan_project_url` and\n`plan_project_footprint_url` described exactly one modeled project on the\nwhole scene, so the viewer's model handle and its project id were both\nhardcoded and a second model could not appear at all -- the URLs, not the\nfrontend, were the ceiling.\n\nBuilt server-side from `data/projects/*.json`, which is the one home for a\nproject's non-geometric facts. The geometry and the effects live in the same\nfile; this is the subset the viewer needs in order to draw it.",
+        "properties": {
+          "footprintUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Footprinturl"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "modelUrl": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Modelurl"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origin"
+          },
+          "projectId": {
+            "title": "Projectid",
+            "type": "string"
+          },
+          "scale": {
+            "default": 1.0,
+            "title": "Scale",
+            "type": "number"
+          }
+        },
+        "required": [
+          "projectId",
+          "name"
+        ],
+        "title": "ProjectModel",
+        "type": "object"
+      },
       "ProposalConstraints": {
         "additionalProperties": false,
         "description": "The constraint report carried by every proposal (§2.2).\n\nAll eleven fields have defaults: a rejection travels in\n``AIPlanResponse.rejected[]`` and a client that omits this block still\nparses.",
@@ -1616,27 +1695,12 @@
             ],
             "title": "Infrastructureurl"
           },
-          "planProjectFootprintUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Planprojectfootprinturl"
-          },
-          "planProjectUrl": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Planprojecturl"
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectModel"
+            },
+            "title": "Projects",
+            "type": "array"
           },
           "terrain3DUrl": {
             "anyOf": [

@@ -94,6 +94,20 @@ def interventions_for(doc: dict, geometry: dict) -> list[InterventionIn]:
     return out
 
 
+def plan_id_for(project_id: str) -> str:
+    """The plan id a project always gets: ``project-<id>``.
+
+    Deterministic on purpose. Projects are committed to the repo so every clone
+    and every tester sees them, and a committed file needs the same name on every
+    machine -- a random uuid would differ per clone, and could not be allowlisted
+    in ``.gitignore`` (which ignores ``data/plans/*`` apart from named exceptions).
+    The ``project-`` prefix is what that allowlist matches, so a new project needs
+    no ``.gitignore`` edit.
+    """
+    safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in project_id)
+    return f"project-{safe}"
+
+
 def existing_project_ids(scene_id: str) -> dict[str, str]:
     """``projectId`` -> ``planId`` for the projects already seeded on a scene."""
     out: dict[str, str] = {}
@@ -124,8 +138,9 @@ def main() -> int:
         doc = load_project(path)
         geometry = footprint_geometry(doc)
 
-        # Matched on the `projectId` param, not on the plan id: `create_plan`
-        # mints a uuid, so the two are different, and the frontend resolves a
+        # Matched on the `projectId` param, not on the plan id, because a plan
+        # seeded before ids were deterministic carries a uuid and must still be
+        # recognised rather than seeded a second time. The frontend resolves a
         # project through this param for the same reason.
         if doc["id"] in project_ids:
             results.append({
@@ -146,6 +161,7 @@ def main() -> int:
                 },
                 interventions=interventions_for(doc, geometry),
             ),
+            plan_id=plan_id_for(doc["id"]),
         )
         results.append({
             "id": doc["id"],

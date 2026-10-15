@@ -286,6 +286,41 @@ def main() -> int:
           float(abs(_delta).mean()) < 0.05,
           f"mean {abs(_delta).mean():.5f} C")
 
+    # ---- 5c. the run reports WHERE a project moved the heat ----------------
+    # The site mean cannot: it is re-anchored to the scenario mean by construction,
+    # so a project that cools one block still reads "no change" there. These pin
+    # the per-cell summary, on synthetic fields so each property is isolated.
+    import numpy as _np  # noqa: PLC0415
+
+    flat = _np.zeros((20, 20), dtype=_np.float32)
+    check("a run that moved nothing reports no local change",
+          run_service.local_heat_effect(flat, flat, 25.0)["cellsChanged"] == 0)
+
+    shifted = flat.copy()
+    shifted[2:4, 2:4] = -0.4          # four cells cooler
+    shifted[10, 10] = 0.2             # one cell hotter
+    shifted[:, :] -= shifted.mean()   # re-anchor, exactly as the real field is
+    eff = run_service.local_heat_effect(shifted, flat, 25.0)
+    check("a project that moves cells is counted even though the mean is pinned",
+          eff["cellsChanged"] >= 4 and abs(eff["meanDeltaC"]) < 1e-3,
+          f"{eff['cellsChanged']} cells, mean {eff['meanDeltaC']}")
+    check("and the peak keeps its sign, so cooler and hotter are distinguishable",
+          eff["peakDeltaC"] < 0, f"peak {eff['peakDeltaC']}")
+    check("and it says the site mean is hiding the effect",
+          eff["hiddenAtMean"] is True)
+    check("sub-threshold float noise is not counted as a change",
+          run_service.local_heat_effect(flat + 0.0005, flat, 25.0)["cellsChanged"] == 0)
+
+    scen_local = run_station["stats"]["temperature"]["local"]
+    check("the station run carries a local heat effect",
+          scen_local["cellsChanged"] > 0,
+          f"{scen_local['cellsChanged']} cells, peak {scen_local['peakDeltaC']} C")
+    check("and its site mean is unchanged, which is why the local block exists",
+          abs(run_station["stats"]["delta"]["surfaceMeanC"]) < 0.01,
+          f"mean delta {run_station['stats']['delta']['surfaceMeanC']}")
+    check("a baseline run reports no local change",
+          base["stats"]["temperature"]["local"]["cellsChanged"] == 0)
+
     # The cache is keyed on the override set, so a station run must not poison a
     # later station-free run. Serving the wrong terms would be invisible in the
     # response and wrong in the picture.

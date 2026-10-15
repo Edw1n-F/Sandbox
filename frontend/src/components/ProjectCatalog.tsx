@@ -47,8 +47,9 @@ import {
   fetchProjectCatalog,
   type CatalogPhase,
   type CatalogProject,
-  type ProjectCatalog,
+  type ProjectCatalog as CatalogDocument,
 } from '@/api/catalogApi'
+import type { Plan } from '@/api/types'
 import { usePlanStore } from '@/state/planStore'
 import { useSceneStore } from '@/state/sceneStore'
 
@@ -61,34 +62,55 @@ const AXIS_COLOR: Record<string, string> = {
 
 /**
  * A planned project that exists as real geometry rather than as a generated
- * proposal: the MTR station and its GLB.
+ * proposal -- the MTR station and its GLB today, and any project a teammate adds
+ * as a `backend/data/projects/<id>.json` tomorrow.
  *
  * It joins the run the same way a catalog phase does -- by its plan id going into
- * `selectedPlanIds` -- so its storage effect and its massing effect are scored,
- * and the "Run N projects" count includes it. What it deliberately does NOT do is
- * call `selectPlan`/`resyncViewer` the way a catalog phase does: the station's
- * plan carries a tank polygon, and selecting the plan for the viewer would draw
- * that polygon as a translucent slab over the station model it describes.
+ * `selectedPlanIds` -- so its effects are scored and the "Run N projects" count
+ * includes it. What it deliberately does NOT do is call `selectPlan`/
+ * `resyncViewer` the way a catalog phase does: a project's plan can carry a tank
+ * polygon, and selecting the plan for the viewer would draw that polygon as a
+ * translucent slab over the model it describes.
  *
- * ## Why the plan is looked up rather than hardcoded
+ * ## Rows come from the plans, not from a list in this file
  *
- * The plan id is a uuid minted at seed time, so it cannot be a constant here. The
- * seeder tags the plan with `params.projectId`, which is the stable handle; this
- * finds it among the scene's plans.
+ * The seeder tags every project's plan with `params.projectId`, so the rows are
+ * simply the scene's plans that carry one. That is the whole reason adding a
+ * project needs no change here -- and it picks up effect-only projects with no
+ * 3D model, which a list built from the model URLs would miss. The plan id itself
+ * is a uuid minted at seed time, so the project id is the stable handle.
  */
-const STATION_PROJECT_ID = 'mtr-station'
-
-function FixedProjectRow() {
+function FixedProjectRows() {
   const plans = usePlanStore((s) => s.plans)
+  const projects = plans.filter(
+    (p) => (p.params as { projectId?: string } | undefined)?.projectId,
+  )
+  if (projects.length === 0) {
+    return (
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+        No fixed-footprint projects seeded on this scene. Run backend/scripts/seed_projects.py.
+      </Typography>
+    )
+  }
+  return (
+    <>
+      {projects.map((plan) => (
+        <FixedProjectRow key={plan.planId} plan={plan} />
+      ))}
+    </>
+  )
+}
+
+function FixedProjectRow({ plan }: { plan: Plan }) {
   const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
   const setSelectedPlanIds = usePlanStore((s) => s.setSelectedPlanIds)
   const planProjectLoading = useSceneStore((s) => s.planProjectLoading)
 
-  const plan = plans.find((p) => (p.params as { projectId?: string } | undefined)?.projectId === STATION_PROJECT_ID)
-  const on = Boolean(plan && selectedPlanIds.includes(plan.planId))
+  const on = selectedPlanIds.includes(plan.planId)
+  const params = (plan.params ?? {}) as { note?: string; model?: string }
 
   const toggle = () => {
-    if (!plan || planProjectLoading) return
+    if (planProjectLoading) return
     setSelectedPlanIds(
       on
         ? selectedPlanIds.filter((id) => id !== plan.planId)
@@ -105,14 +127,14 @@ function FixedProjectRow() {
         onClick={toggle}
         sx={{
           px: 1.25, py: 0.75,
-          cursor: plan && !planProjectLoading ? 'pointer' : 'not-allowed',
+          cursor: planProjectLoading ? 'wait' : 'pointer',
           bgcolor: on ? 'rgba(92,255,157,0.12)' : 'transparent',
           '&:hover': { bgcolor: on ? 'rgba(92,255,157,0.18)' : 'rgba(92,255,157,0.06)' },
         }}
       >
         <Stack direction="row" spacing={1} alignItems="center">
           <Typography className="hud-mono" variant="body2" sx={{ fontWeight: 600, fontSize: 12.5 }}>
-            HSK MTR station
+            {plan.label}
           </Typography>
           {on && (
             <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: '#5cff9d', boxShadow: '0 0 6px #5cff9d' }} />
@@ -124,9 +146,7 @@ function FixedProjectRow() {
       </Stack>
       <Box sx={{ px: 1.25, pb: 0.9, pt: 0.1 }}>
         <Typography variant="caption" color="text.secondary" display="block">
-          {plan
-            ? 'Fixed footprint, scored in runs: 22.1 m massing and assumed storage. Not a generated proposal.'
-            : 'Not seeded on this scene. Run backend/scripts/seed_projects.py.'}
+          {params.note ?? 'Fixed footprint, scored in runs. Not a generated proposal.'}
         </Typography>
       </Box>
     </Box>
@@ -169,7 +189,7 @@ export default function ProjectCatalog() {
   const setSelectedPlanIds = usePlanStore((s) => s.setSelectedPlanIds)
   const selectedCount = usePlanStore((s) => s.selectedPlanIds.length)
 
-  const [catalog, setCatalog] = useState<ProjectCatalog | null>(null)
+  const [catalog, setCatalog] = useState<CatalogDocument | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -290,11 +310,12 @@ export default function ProjectCatalog() {
         Toggle projects to score them <strong>together</strong>. Runs combine every
         active project, up to 40% of the study area.
       </Typography>
-      {/* main's fixed, data-driven project (the MTR station, from
-          backend/data/projects/mtr-station.json). It sits above the catalog
-          because it is the one project whose footprint and effects are
-          declared rather than derived. */}
-      <FixedProjectRow />
+      {/* main's fixed, data-driven projects (seeded from backend/data/projects/*.json
+          by scripts/seed_projects.py). They sit above the catalog because their
+          footprints and effects are declared rather than derived, and the list is
+          driven by the scene's seeded plans, so a second modeled project needs no
+          change here. */}
+      <FixedProjectRows />
 
       {error && (
         <Typography variant="caption" color="error" display="block" sx={{ mb: 1 }}>

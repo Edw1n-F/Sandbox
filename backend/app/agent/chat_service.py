@@ -203,11 +203,15 @@ def answer(question: str, facts: dict[str, Any],
     try:
         draft = _draft(facts, question, history)
     except llm.ProviderUnavailable:
-        return template_card(facts)
+        # The template fallback must be classified too, or the non-streaming
+        # endpoint and /chat/stream disagree on the same instruction: the stream
+        # path classifies, this one did not, so "add a water reservoir in the
+        # north" arrived as a result card here and a proposal there.
+        return classify_turn(question, template_card(facts))
     except llm.LLMError:
-        return template_card(facts)
+        return classify_turn(question, template_card(facts))
     if not draft:
-        return template_card(facts)
+        return classify_turn(question, template_card(facts))
     card = _card_from(draft, facts, revised=False)
     # One revision: name the offending numbers and ask again.
     if card.grounding and not card.grounding.ok:

@@ -193,12 +193,17 @@ const depot = () => page.evaluate(() => {
       if (e.show === false) hidden += 1
     }
   }
+  // The BUILDINGS tileset, picked by its URL. This used to take "the first
+  // Cesium3DTileset in the primitive list", which passed only while the buildings
+  // happened to load before the terrain mesh -- the two load concurrently, so the
+  // order flips between runs and the check failed on whichever run got it wrong
+  // (25/27, then 27/27, with nothing changed in between). A flaky check that
+  // reports a rendering regression is worse than no check.
   let tilesetShow = null
   for (let i = 0; i < v.scene.primitives.length; i += 1) {
     const prim = v.scene.primitives.get(i)
     if (prim?.constructor?.name !== 'Cesium3DTileset') continue
-    // The buildings tileset is the one that was showing before the switch.
-    if (tilesetShow === null) tilesetShow = prim.show
+    if (String(prim.resource?.url ?? '').includes('city_model')) tilesetShow = prim.show
   }
   let models = 0
   for (let i = 0; i < v.scene.primitives.length; i += 1) {
