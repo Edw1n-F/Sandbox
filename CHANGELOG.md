@@ -2,6 +2,36 @@
 
 Every non-trivial change gets an entry. Newest first.
 
+## 2026-10-15 — main goes green: lint warnings and a stale contract
+
+Both failures pre-date this entry and were already on `origin/main`; neither came
+from the camera work in the entry below.
+
+### Fixed — three `console.info` calls failed the lint gate
+
+`eslint . --max-warnings 0` permits only `warn` and `error`. The Plan Project GLB
+effect logged its load, its sampled terrain height and its success through
+`console.info`, so three warnings turned the whole frontend job red. They now use
+`console.warn`, which is already what the neighbouring 2.5D-overlay log uses, so
+the planProject diagnostics stay visible and consistent. No behaviour changed.
+
+### Fixed — `contracts/openapi.json` was stale
+
+`test_openapi_contract.py` failed with "contracts/openapi.json is stale". The
+committed contract was missing `"additionalProperties": true` on every bare
+`{"type": "object"}` schema — 40 lines across the run/geometry/params/style
+objects, which is what Pydantic 2.13.5 now emits. Regenerating was the whole fix;
+nothing was hand-edited. The drift was present at `9a1d960` (the planProject
+merge) and absent at `bbd6963`, so it arrived with the planProject branch.
+
+### Note — the dev proxy moved to port 8000
+
+`902ba21` retargeted the Vite proxy and CLAUDE.md from 8001 to 8000. The backend
+command block in CLAUDE.md and the four browser suites (`verify-*.mjs`) were
+written against 8001 and were *not* updated in the same commit, so they disagree
+with `vite.config.ts`. Run the API on 8000, or point the suites at 8001
+explicitly. Not resolved here: it is a docs-and-scripts sweep, not a defect.
+
 ## 2026-10-14 — rotate, tilt and zoom are three independent axes
 
 ### Fixed — tilting past the pitch limit rotated the view

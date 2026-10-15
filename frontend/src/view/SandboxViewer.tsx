@@ -791,7 +791,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       return
     }
 
-    console.info('[planProject] loading GLB:', url)
+    console.warn('[planProject] loading GLB:', url)
     setPlanProjectLoading(true)
     let cancelled = false
     // Confirmed inside scene bbox (113.9922–113.9994 E, 22.431–22.4363 N).
@@ -810,7 +810,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       // height — no vertical offset needed.
       const originH = terrainM
       const labelH  = terrainM + (0.45 + 0.48) * MTR_SCALE + 5   // above model top
-      console.info(`[planProject] terrain=${terrainM.toFixed(1)} m, origin=${originH.toFixed(1)} m`)
+      console.warn(`[planProject] terrain=${terrainM.toFixed(1)} m, origin=${originH.toFixed(1)} m`)
 
       const model = await Model.fromGltfAsync({
         url,
@@ -864,7 +864,7 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
       v.scene.requestRender()
       setPlanProjectLoading(false)
-      console.info('[planProject] GLB loaded and visible')
+      console.warn('[planProject] GLB loaded and visible')
     }).catch((err) => {
       setPlanProjectLoading(false)
       console.error('[planProject] GLB failed to load:', err)

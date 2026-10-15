@@ -198,6 +198,7 @@
           "run": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -332,6 +333,7 @@
         "description": "One feature inside the GeoJSON FeatureCollection (§3.3.2).",
         "properties": {
           "geometry": {
+            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -387,6 +389,7 @@
         "description": "A feature as supplied on create/update (§3.3.3).\n\n``status``/``id``/timestamps are absent by design -- the service owns them.",
         "properties": {
           "geometry": {
+            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -397,6 +400,7 @@
             "type": "string"
           },
           "params": {
+            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -410,6 +414,7 @@
             "type": "string"
           },
           "style": {
+            "additionalProperties": true,
             "title": "Style",
             "type": "object"
           }
@@ -441,6 +446,7 @@
             "type": "string"
           },
           "params": {
+            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -463,6 +469,7 @@
             "type": "string"
           },
           "style": {
+            "additionalProperties": true,
             "title": "Style",
             "type": "object"
           }
@@ -489,6 +496,7 @@
             "title": "Basis"
           },
           "geometry": {
+            "additionalProperties": true,
             "title": "Geometry",
             "type": "object"
           },
@@ -499,6 +507,7 @@
             "type": "string"
           },
           "params": {
+            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -534,6 +543,7 @@
             "type": "string"
           },
           "style": {
+            "additionalProperties": true,
             "title": "Style",
             "type": "object"
           }
@@ -706,6 +716,7 @@
             "title": "Nlinstruction"
           },
           "params": {
+            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -784,6 +795,7 @@
             "title": "Nlinstruction"
           },
           "params": {
+            "additionalProperties": true,
             "title": "Params",
             "type": "object"
           },
@@ -875,6 +887,7 @@
           "params": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -972,6 +985,7 @@
           "bbox": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -981,6 +995,7 @@
             "title": "Bbox"
           },
           "center": {
+            "additionalProperties": true,
             "title": "Center",
             "type": "object"
           },
@@ -1058,6 +1073,7 @@
           "bbox": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1080,6 +1096,7 @@
           "buildingsMeta": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1100,6 +1117,7 @@
             "title": "Buildingsurl"
           },
           "center": {
+            "additionalProperties": true,
             "title": "Center",
             "type": "object"
           },
@@ -1191,6 +1209,7 @@
           "bbox": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1202,6 +1221,7 @@
           "center": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1275,6 +1295,7 @@
           "bbox": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1297,6 +1318,7 @@
           "buildingsMeta": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -1319,6 +1341,7 @@
           "center": {
             "anyOf": [
               {
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -2102,6 +2125,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Building Fit Api Scenes  Scene Id  Buildings  Building Id  Fit Get",
                   "type": "object"
                 }
@@ -2156,6 +2180,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Chat Api Scenes  Scene Id  Chat Post",
                   "type": "object"
                 }
@@ -2287,6 +2312,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Design Metrics Api Scenes  Scene Id  Design Metrics Get",
                   "type": "object"
                 }
@@ -2443,6 +2469,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Drainage Hourly Api Scenes  Scene Id  Drainage Hourly Get",
                   "type": "object"
                 }
@@ -2519,6 +2546,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Drainage Routed Api Scenes  Scene Id  Drainage Routed Get",
                   "type": "object"
                 }
@@ -2599,6 +2627,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Heat Field Api Scenes  Scene Id  Heat Field Get",
                   "type": "object"
                 }
@@ -2675,6 +2704,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Ledger Api Scenes  Scene Id  Ledger Get",
                   "type": "object"
                 }
@@ -2821,6 +2851,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Post Run Api Scenes  Scene Id  Run Post",
                   "type": "object"
                 }
@@ -2864,6 +2895,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -2876,6 +2908,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Post Scenario Compare Api Scenes  Scene Id  Scenario Compare Post",
                   "type": "object"
                 }
@@ -2919,6 +2952,7 @@
           "content": {
             "application/json": {
               "schema": {
+                "additionalProperties": true,
                 "title": "Body",
                 "type": "object"
               }
@@ -2931,6 +2965,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Post Scenario Evaluate Api Scenes  Scene Id  Scenario Evaluate Post",
                   "type": "object"
                 }
@@ -2991,6 +3026,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Published Scenarios Api Scenes  Scene Id  Scenarios Get",
                   "type": "object"
                 }
@@ -3051,6 +3087,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Sea Level Scenarios Api Scenes  Scene Id  Sea Level Get",
                   "type": "object"
                 }
@@ -3137,6 +3174,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Ventilation Api Scenes  Scene Id  Ventilation Get",
                   "type": "object"
                 }
@@ -3197,6 +3235,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Get Ventilation Corridors Api Scenes  Scene Id  Ventilation Corridors Get",
                   "type": "object"
                 }
@@ -3230,6 +3269,7 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }
