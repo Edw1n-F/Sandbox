@@ -147,3 +147,56 @@ class InterventionCreateResponse(WireModel):
     plan_id: str
     scene_id: str
     intervention_count: int = 0
+
+
+class InterventionProposal(InterventionIn):
+    """One AI-proposed feature, **not yet persisted** (plan v2 §5).
+
+    The confirm gate (§5.1) presents these to the user; the client echoes the
+    accepted subset back to `POST /api/scenes/{sceneId}/ai-plan/apply` which
+    writes them through the normal plan-creation path.
+
+    Exposes `site_id`/`rationale`/`basis` as first-class fields so the UI can
+    render them without rummaging in `params`. Each is derived at construction
+    from the feature's `params` to keep a single source of truth: if `params`
+    is round-tripped untouched the derived view and the stored view stay in
+    sync. Values can be overridden on the wire, but a client that does so is
+    telling the server to trust its judgement -- the service only reads these
+    as rendering hints, never as grounding.
+    """
+
+    site_id: str | None = None
+    rationale: str | None = None
+    basis: str | None = None
+
+    @classmethod
+    def from_feature(cls, feature: dict[str, Any]) -> "InterventionProposal":
+        """Lift a provider's feature dict into a proposal.
+
+        Mirrors `_feature()` in `services/ai_plan.py`: `basis`/`rationale`
+        live in `params`; `siteId` is set by massing features (§4.1) and is
+        None otherwise.
+        """
+        params = feature.get("params") or {}
+        return cls(
+            geometry=feature["geometry"],
+            intervention_type=feature["intervention_type"],
+            source=feature.get("source", "ai"),
+            params=params,
+            style=feature.get("style", {}),
+            site_id=params.get("siteId"),
+            rationale=params.get("rationale"),
+            basis=params.get("basis"),
+        )
+
+
+class InterventionProposalList(WireModel):
+    """`POST /api/scenes/{sceneId}/ai-plan` body when `apply=false`.
+
+    Also the request body for `/ai-plan/apply`: the client echoes back the
+    subset the user accepted, so proposals round-trip through the client
+    without any server-held list between the two calls (plan v2 §5.1 keeps
+    the proposal state out of the store).
+    """
+
+    proposals: list[InterventionProposal] = Field(default_factory=list)

@@ -1,6 +1,6 @@
 """Plan routes (§3.3.2, §3.3.4)."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Response, status
 
 from app.schemas.intervention import InterventionFeatureCollection
 from app.schemas.plan import PlanRead, PlanUpdate
@@ -17,3 +17,14 @@ def update_plan(plan_id: str, payload: PlanUpdate) -> PlanRead:
 @router.get("/plans/{plan_id}/interventions")
 def list_interventions(plan_id: str) -> InterventionFeatureCollection:
     return scene_service.list_interventions(plan_id)
+
+
+@router.delete(
+    "/plans/{plan_id}/interventions/{intervention_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_intervention(plan_id: str, intervention_id: str) -> Response:
+    """Hard-delete one intervention from a plan (plan v2 §6.2, Decision 2)."""
+    scene_service.delete_intervention(plan_id, intervention_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -22,6 +22,7 @@ import Typography from '@mui/material/Typography'
 
 import AppErrorBoundary from './components/AppErrorBoundary'
 import ChatPanel from './components/ChatPanel'
+import InterventionLegend from './components/InterventionLegend'
 import LoadingScreen from './components/LoadingScreen'
 import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
@@ -145,6 +146,9 @@ export default function App() {
 
         {/* Bottom-centre: view buttons */}
         <ViewButtons />
+
+        {/* Bottom-left: intervention legend, hidden until a plan has features. */}
+        <InterventionLegend />
 
         {/* Top-left: brand block + chat toggle */}
         <Box sx={{ position: 'absolute', top: 12, left: chatOpen ? CHAT_WIDTH + 12 : 12, zIndex: 1300, transition: 'left 0.2s' }}>

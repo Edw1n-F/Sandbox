@@ -97,11 +97,21 @@ class AIPlanRequest(WireModel):
     the deterministic heuristic otherwise. Asking for "llm" without a key is an
     error rather than a silent downgrade, because a demo that quietly stops
     being AI is worse than one that says so.
+
+    `apply=false` activates the confirm gate (plan v2 §5): the server returns
+    `InterventionProposal[]` **without persisting** them, the client renders a
+    checklist, and the accepted subset is sent back to `/ai-plan/apply`. Default
+    `apply=true` keeps the pre-v2 one-shot behaviour so no existing caller has
+    to change.
     """
 
     instruction: str = Field(min_length=1, max_length=2000)
     provider: str = Field(default="auto", pattern="^(auto|llm|heuristic)$")
     max_features: int = Field(default=6, ge=1, le=20)
+    apply: bool = True
+    # Plan v2 §8: a minimal template whitelist. When non-empty, the server
+    # drops proposals outside this list. None/[] = no restriction (default).
+    allowed_types: list[str] | None = None
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]
@@ -116,6 +126,11 @@ class AIPlanResponse(WireModel):
     `provider` is echoed because "which model actually generated this" is the
     first question anyone will ask, and the answer must not require reading the
     store.
+
+    When `apply=false` (plan v2 §5 confirm gate), `plan_id` is None, `features`
+    is the proposed count, and `proposals` carries the un-persisted draft list
+    the client echoes back to `/ai-plan/apply`. When `apply=true` the response
+    matches the legacy shape (`proposals` empty, `plan_id` populated).
     """
 
     plan_id: str | None = None
@@ -124,9 +139,42 @@ class AIPlanResponse(WireModel):
     types: list[str] = Field(default_factory=list)
     grounding_notes: list[str] = Field(default_factory=list)
     message: str | None = None
+    proposals: list["_InterventionProposal"] = Field(default_factory=list)
+    candidate_counts: dict[str, int] = Field(default_factory=dict)
+    fallback_note: str | None = None
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]
         ).to_camel,
         "populate_by_name": True,
     }
+
+
+class AIPlanApplyRequest(WireModel):
+    """`POST /api/scenes/{sceneId}/ai-plan/apply` body (plan v2 §5).
+
+    The client echoes the accepted proposals (and the instruction/provider so
+    the audit trail matches what the user saw). No server-held list bridges
+    the two calls: the frontend owns the proposals until a user accepts.
+    """
+
+    instruction: str = Field(min_length=1, max_length=2000)
+    provider: str = Field(default="auto", pattern="^(auto|llm|heuristic)$")
+    proposals: list["_InterventionProposal"] = Field(default_factory=list)
+    grounding_notes: list[str] = Field(default_factory=list)
+    candidate_counts: dict[str, int] = Field(default_factory=dict)
+    model_config = {
+        "alias_generator": __import__(
+            "pydantic.alias_generators", fromlist=["to_camel"]
+        ).to_camel,
+        "populate_by_name": True,
+    }
+
+
+# Late import to avoid a cycle: `intervention.InterventionProposal` depends on
+# `scene.WireModel`, which `plan.py` already pulls in. Re-exported under a
+# private alias so the forward refs above resolve by name.
+from app.schemas.intervention import InterventionProposal as _InterventionProposal  # noqa: E402
+
+AIPlanResponse.model_rebuild()
+AIPlanApplyRequest.model_rebuild()

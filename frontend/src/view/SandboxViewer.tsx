@@ -27,6 +27,8 @@ import {
   Model,
   NearFarScalar,
   Rectangle,
+  ScreenSpaceEventHandler,
+  ScreenSpaceEventType,
   Transforms,
   VerticalOrigin,
   Viewer,
@@ -39,7 +41,8 @@ import { useSceneStore } from '@/state/sceneStore'
 import { addOnlineProps, type OnlinePropHandle } from './onlineProps'
 import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
-import { addInterventions } from './interventionLayer'
+import { addInterventions, type InterventionLayerHandle } from './interventionLayer'
+import { deleteIntervention } from '@/api/planApi'
 import { publishHeading } from './cameraHeading'
 import { demElevationRange, sampleDemHeight, whenDemReady } from './demProvider'
 import {
@@ -728,23 +731,51 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     )
 
     let disposed = false
-    let dispose: (() => void) | undefined
+    let handle: InterventionLayerHandle | undefined
+    let clickHandler: ScreenSpaceEventHandler | undefined
 
     void addInterventions(viewer, {
       type: 'FeatureCollection',
       features: showInterventions ? drawn : [],
-    }).then((fn) => {
+    }).then((h) => {
       // The effect may have been torn down while the GeoJSON was in flight.
       if (disposed) {
-        fn()
+        h.dispose()
         return
       }
-      dispose = fn
+      handle = h
+
+      if (!isLive(viewer)) return
+      const scene = viewer.scene
+      const planId = usePlanStore.getState().activePlanId
+      if (!planId) return
+
+      clickHandler = new ScreenSpaceEventHandler(scene.canvas)
+      clickHandler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
+        if (!isLive(viewer)) return
+        const picked = scene.pick(event.position)
+        const entity = picked?.id
+        const interventionId = h.interventionIdOf(entity)
+        if (!interventionId) return
+        if (!window.confirm('Delete this intervention? This cannot be undone.')) return
+        void (async () => {
+          try {
+            await deleteIntervention(planId, interventionId)
+          } catch (err) {
+            console.warn('[sandbox] delete intervention failed:', err)
+            return
+          }
+          // Re-fetch so the layer, the store and the server all agree.
+          const current = usePlanStore.getState().activePlanId
+          if (current) await usePlanStore.getState().selectPlan(current)
+        })()
+      }, ScreenSpaceEventType.LEFT_CLICK)
     })
 
     return () => {
       disposed = true
-      dispose?.()
+      if (clickHandler && !clickHandler.isDestroyed()) clickHandler.destroy()
+      handle?.dispose()
     }
   }, [showInterventions, interventions])
 

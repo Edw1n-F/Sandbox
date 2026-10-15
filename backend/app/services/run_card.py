@@ -139,9 +139,13 @@ def run_card(stats: dict[str, Any], rainfall_mm: float,
         ),
         caveats=caveats[:3],
         followups=[
-            "What changes if rainfall doubles?",
-            "Which project helps most?",
-            "Where does the water pond?",
+            # Intervention instructions, not questions: clicking one goes back
+            # through chat, is judged intent="intervention", and opens the
+            # ai-plan confirm gate. A question ("Is this better than baseline?")
+            # would just re-ask the run and never reach the design loop.
+            "add a water reservoir in the north",
+            "add green space in the centre",
+            "add permeable paving across the whole area",
         ],
         source="template",
         grounding=None,

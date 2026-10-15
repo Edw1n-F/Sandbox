@@ -57,6 +57,20 @@ export interface AnswerCard {
   followups: string[]
   source: 'model' | 'template'
   grounding?: GroundingReport | null
+  /**
+   * Plan v2 §4: what the model decided the user wanted. Optional so a card
+   * from a backend that predates this field (parser/template) is still
+   * typeable -- the ChatPanel falls back to `looksLikeIntervention` when
+   * the field is absent.
+   */
+  intent?: 'question' | 'intervention' | 'ambiguous'
+  /**
+   * The normalised intervention instruction, only present when intent='intervention'.
+   * `intent_hint` on the wire -- AnswerCard does not go through the camelCase
+   * alias generator the WireModel subclasses use, so the snake_case name is
+   * what the backend emits.
+   */
+  intent_hint?: string | null
 }
 
 export interface ChatTurn {

@@ -35,31 +35,59 @@ import type { FeatureCollection } from '@/api/types'
  * So: load, add, request a frame. And surface a failure rather than swallowing
  * it, because a silently-empty layer looks exactly like a layer with no data.
  */
+export interface InterventionLayerHandle {
+  dispose: () => void
+  /** Resolve a picked Cesium entity to its intervention id, or null. */
+  interventionIdOf: (entity: unknown) => string | null
+}
+
+const EMPTY_HANDLE: InterventionLayerHandle = {
+  dispose: () => undefined,
+  interventionIdOf: () => null,
+}
+
 export async function addInterventions(
   viewer: Viewer,
   collection: FeatureCollection,
-): Promise<() => void> {
+): Promise<InterventionLayerHandle> {
   // An empty FeatureCollection is a valid, renderable answer — nothing to do.
-  if (!collection.features.length) return () => undefined
+  if (!collection.features.length) return EMPTY_HANDLE
 
   const dataSource = new GeoJsonDataSource('interventions')
   try {
     await dataSource.load(collection as unknown as object, { clampToGround: true })
   } catch (err) {
     console.warn('[sandbox] interventions failed to load:', err)
-    return () => undefined
+    return EMPTY_HANDLE
   }
 
   applyStyle(dataSource)
 
-  if (viewer.isDestroyed()) return () => undefined
+  if (viewer.isDestroyed()) return EMPTY_HANDLE
   await viewer.dataSources.add(dataSource)
   viewer.scene.requestRender()
 
-  return () => {
-    if (!viewer.isDestroyed() && viewer.dataSources.contains(dataSource)) {
-      viewer.dataSources.remove(dataSource, true)
-    }
+  const owned = new WeakSet<object>()
+  for (const entity of dataSource.entities.values) owned.add(entity)
+
+  return {
+    dispose: () => {
+      if (!viewer.isDestroyed() && viewer.dataSources.contains(dataSource)) {
+        viewer.dataSources.remove(dataSource, true)
+      }
+    },
+    interventionIdOf: (entity) => {
+      if (!entity || typeof entity !== 'object') return null
+      if (!owned.has(entity as object)) return null
+      // Feature's top-level `id` is set by GeoJsonDataSource onto entity.id as a
+      // string. The backend also mirrors it into properties.id (ADR-027), so
+      // either read is fine; the direct one is cheaper.
+      const direct = (entity as { id?: unknown }).id
+      if (typeof direct === 'string' && direct.length > 0) return direct
+      const props = (entity as { properties?: { id?: { getValue?: () => unknown } } }).properties
+      const fromProps = props?.id?.getValue?.()
+      return typeof fromProps === 'string' && fromProps.length > 0 ? fromProps : null
+    },
   }
 }
 
