@@ -11,7 +11,7 @@ only the service assigns it.
 
 from typing import Any
 
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from app.schemas.scene import (
     GeometryType,
@@ -159,6 +159,99 @@ class InterventionCreateResponse(WireModel):
     intervention_count: int = 0
 
 
+# --------------------------------------------------------------------------- #
+# The proposal wire shape (design §2.2, additive)
+# --------------------------------------------------------------------------- #
+#
+# Four additive blocks turn a proposal from "a geometry and a rationale" into
+# "a geometry, the size it actually covers, the raw ask it came from, the
+# constraints it was checked against, and the parameters the run will read".
+# Every field carries a default so a client written before this contract (and a
+# stored feature that predates it) keeps parsing unchanged -- the design's
+# additive-only rule.
+
+
+class ProposalSize(WireModel):
+    """The **served** size of a proposal (§2.2).
+
+    ``cells`` is the rasterised cell count of the served geometry (holes
+    subtracted), ``areaHa`` the shoelace area of that geometry, and
+    ``coverageFraction`` its share of the 17,316-cell study area.
+    """
+
+    cells: int = 0
+    area_ha: float = 0.0
+    coverage_fraction: float = 0.0
+
+
+class ProposalRequested(WireModel):
+    """The model's raw centre + size ask, echoed verbatim (§2.2).
+
+    ``extra="allow"`` on purpose: this block is provenance, so a key the model
+    sent that this schema does not name is preserved rather than dropped. It is
+    never used to derive geometry after validation -- ``geometry`` is what the
+    server produced from it.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    centre: dict[str, Any] | None = None
+    size_cells: int | None = None
+
+
+class ParameterEntry(WireModel):
+    """One parameter the run reads for a kind, with its honesty label (§2.2).
+
+    ``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``
+    names where the number came from, so a proposal never carries a parameter
+    that cannot say what it is.
+    """
+
+    value: float
+    unit: str = ""
+    status: str = "ASSUMPTION"
+    source: str = ""
+
+
+class ProposalConstraints(WireModel):
+    """The constraint report carried by every proposal (§2.2).
+
+    All eleven fields have defaults: a rejection travels in
+    ``AIPlanResponse.rejected[]`` and a client that omits this block still
+    parses.
+    """
+
+    buildings_clear: bool = True
+    building_overlap_cells: int = 0
+    building_ids: list[str] = Field(default_factory=list)
+    overlap_cells: int = 0
+    overlaps_with: list[str] = Field(default_factory=list)
+    clipped_cells: int = 0
+    clipped_fraction: float = 0.0
+    within_single_cap: bool = True
+    within_cumulative_cap: bool = True
+    effect: str = "class_change"
+    effect_note: str = ""
+
+
+class ProposalRejection(WireModel):
+    """One refused proposal, in ``AIPlanResponse.rejected[]`` (§2.2).
+
+    A refusal is a first-class object, not an error: it carries the closed
+    ``reasonCode`` so the UI can group refusals without parsing English, and a
+    non-empty ``warning`` that names the predicate in words.
+    """
+
+    intervention_type: str
+    site_id: str | None = None
+    requested: ProposalRequested | None = None
+    reason_code: str
+    building_overlap_cells: int = 0
+    overlap_cells: int = 0
+    status: str = "PROPOSAL_REJECTED"
+    warning: str = ""
+
+
 class InterventionProposal(InterventionIn):
     """One AI-proposed feature, **not yet persisted** (plan v2 §5).
 
@@ -173,11 +266,23 @@ class InterventionProposal(InterventionIn):
     sync. Values can be overridden on the wire, but a client that does so is
     telling the server to trust its judgement -- the service only reads these
     as rendering hints, never as grounding.
+
+    The four blocks below are the additive part of the design §2.2: the size
+    the proposal actually covers, the raw ask it came from, the constraints it
+    was checked against, and the parameters the run will read. ``status`` here
+    is the **proposal** honesty label (UPPER_SNAKE), distinct from the stored
+    intervention's ``draft``/``validated`` status.
     """
 
     site_id: str | None = None
     rationale: str | None = None
     basis: str | None = None
+    size: ProposalSize = Field(default_factory=ProposalSize)
+    requested: ProposalRequested | None = None
+    constraints: ProposalConstraints = Field(default_factory=ProposalConstraints)
+    parameters: dict[str, ParameterEntry] = Field(default_factory=dict)
+    status: str = "PROPOSAL_ACCEPTED"
+    warning: str = ""
 
     @classmethod
     def from_feature(cls, feature: dict[str, Any]) -> "InterventionProposal":
@@ -186,17 +291,30 @@ class InterventionProposal(InterventionIn):
         Mirrors `_feature()` in `services/ai_plan.py`: `basis`/`rationale`
         live in `params`; `siteId` is set by massing features (§4.1) and is
         None otherwise.
+
+        The additive §2.2 blocks are read if present and left at their
+        defaults otherwise, so a feature dict produced before the constraint
+        engine existed still lifts cleanly.
         """
         params = feature.get("params") or {}
+        requested = feature.get("requested")
+        if not isinstance(requested, dict):
+            requested = None
         return cls(
             geometry=feature["geometry"],
             intervention_type=feature["intervention_type"],
             source=feature.get("source", "ai"),
             params=params,
             style=feature.get("style", {}),
-            site_id=params.get("siteId"),
-            rationale=params.get("rationale"),
-            basis=params.get("basis"),
+            site_id=feature.get("site_id") or params.get("siteId"),
+            rationale=feature.get("rationale") or params.get("rationale"),
+            basis=feature.get("basis") or params.get("basis"),
+            size=feature.get("size") or {},
+            requested=requested,
+            constraints=feature.get("constraints") or {},
+            parameters=feature.get("parameters") or {},
+            status=feature.get("status") or "PROPOSAL_ACCEPTED",
+            warning=feature.get("warning") or "",
         )
 
 

@@ -17,7 +17,11 @@ from app.schemas.scene import (
     PlanType,
     WireModel,
 )
-from app.schemas.intervention import InterventionIn, InterventionProposal
+from app.schemas.intervention import (
+    InterventionIn,
+    InterventionProposal,
+    ProposalRejection,
+)
 
 
 class PlanBase(WireModel):
@@ -131,6 +135,11 @@ class AIPlanResponse(WireModel):
     is the proposed count, and `proposals` carries the un-persisted draft list
     the client echoes back to `/ai-plan/apply`. When `apply=true` the response
     matches the legacy shape (`proposals` empty, `plan_id` populated).
+
+    `rejected` is additive (design §2.2): the refusals that did not survive the
+    constraint engine, one entry each, with a closed `reasonCode` and a
+    non-empty `warning`. A silently shorter `proposals` list is indistinguishable
+    from a provider that returned less, so a refusal is carried, never dropped.
     """
 
     plan_id: str | None = None
@@ -140,6 +149,7 @@ class AIPlanResponse(WireModel):
     grounding_notes: list[str] = Field(default_factory=list)
     message: str | None = None
     proposals: list[InterventionProposal] = Field(default_factory=list)
+    rejected: list[ProposalRejection] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
     fallback_note: str | None = None
     model_config = {

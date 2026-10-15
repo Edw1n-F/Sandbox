@@ -96,7 +96,7 @@
       },
       "AIPlanResponse": {
         "additionalProperties": false,
-        "description": "What the AI module produced, and how.\n\n`provider` is echoed because \"which model actually generated this\" is the\nfirst question anyone will ask, and the answer must not require reading the\nstore.\n\nWhen `apply=false` (plan v2 §5 confirm gate), `plan_id` is None, `features`\nis the proposed count, and `proposals` carries the un-persisted draft list\nthe client echoes back to `/ai-plan/apply`. When `apply=true` the response\nmatches the legacy shape (`proposals` empty, `plan_id` populated).",
+        "description": "What the AI module produced, and how.\n\n`provider` is echoed because \"which model actually generated this\" is the\nfirst question anyone will ask, and the answer must not require reading the\nstore.\n\nWhen `apply=false` (plan v2 §5 confirm gate), `plan_id` is None, `features`\nis the proposed count, and `proposals` carries the un-persisted draft list\nthe client echoes back to `/ai-plan/apply`. When `apply=true` the response\nmatches the legacy shape (`proposals` empty, `plan_id` populated).\n\n`rejected` is additive (design §2.2): the refusals that did not survive the\nconstraint engine, one entry each, with a closed `reasonCode` and a\nnon-empty `warning`. A silently shorter `proposals` list is indistinguishable\nfrom a provider that returned less, so a refusal is carried, never dropped.",
         "properties": {
           "candidateCounts": {
             "additionalProperties": {
@@ -160,6 +160,13 @@
           "provider": {
             "title": "Provider",
             "type": "string"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalRejection"
+            },
+            "title": "Rejected",
+            "type": "array"
           },
           "types": {
             "items": {
@@ -480,7 +487,7 @@
       },
       "InterventionProposal": {
         "additionalProperties": false,
-        "description": "One AI-proposed feature, **not yet persisted** (plan v2 §5).\n\nThe confirm gate (§5.1) presents these to the user; the client echoes the\naccepted subset back to `POST /api/scenes/{sceneId}/ai-plan/apply` which\nwrites them through the normal plan-creation path.\n\nExposes `site_id`/`rationale`/`basis` as first-class fields so the UI can\nrender them without rummaging in `params`. Each is derived at construction\nfrom the feature's `params` to keep a single source of truth: if `params`\nis round-tripped untouched the derived view and the stored view stay in\nsync. Values can be overridden on the wire, but a client that does so is\ntelling the server to trust its judgement -- the service only reads these\nas rendering hints, never as grounding.",
+        "description": "One AI-proposed feature, **not yet persisted** (plan v2 §5).\n\nThe confirm gate (§5.1) presents these to the user; the client echoes the\naccepted subset back to `POST /api/scenes/{sceneId}/ai-plan/apply` which\nwrites them through the normal plan-creation path.\n\nExposes `site_id`/`rationale`/`basis` as first-class fields so the UI can\nrender them without rummaging in `params`. Each is derived at construction\nfrom the feature's `params` to keep a single source of truth: if `params`\nis round-tripped untouched the derived view and the stored view stay in\nsync. Values can be overridden on the wire, but a client that does so is\ntelling the server to trust its judgement -- the service only reads these\nas rendering hints, never as grounding.\n\nThe four blocks below are the additive part of the design §2.2: the size\nthe proposal actually covers, the raw ask it came from, the constraints it\nwas checked against, and the parameters the run will read. ``status`` here\nis the **proposal** honesty label (UPPER_SNAKE), distinct from the stored\nintervention's ``draft``/``validated`` status.",
         "properties": {
           "basis": {
             "anyOf": [
@@ -493,6 +500,9 @@
             ],
             "title": "Basis"
           },
+          "constraints": {
+            "$ref": "#/components/schemas/ProposalConstraints"
+          },
           "geometry": {
             "title": "Geometry",
             "type": "object"
@@ -502,6 +512,13 @@
             "minLength": 1,
             "title": "Interventiontype",
             "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ParameterEntry"
+            },
+            "title": "Parameters",
+            "type": "object"
           },
           "params": {
             "title": "Params",
@@ -518,6 +535,16 @@
             ],
             "title": "Rationale"
           },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposalRequested"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "siteId": {
             "anyOf": [
               {
@@ -529,6 +556,9 @@
             ],
             "title": "Siteid"
           },
+          "size": {
+            "$ref": "#/components/schemas/ProposalSize"
+          },
           "source": {
             "default": "manual",
             "enum": [
@@ -538,9 +568,19 @@
             "title": "Source",
             "type": "string"
           },
+          "status": {
+            "default": "PROPOSAL_ACCEPTED",
+            "title": "Status",
+            "type": "string"
+          },
           "style": {
             "title": "Style",
             "type": "object"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
           }
         },
         "required": [
@@ -674,6 +714,36 @@
           }
         },
         "title": "LLMConfigUpdate",
+        "type": "object"
+      },
+      "ParameterEntry": {
+        "additionalProperties": false,
+        "description": "One parameter the run reads for a kind, with its honesty label (§2.2).\n\n``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``\nnames where the number came from, so a proposal never carries a parameter\nthat cannot say what it is.",
+        "properties": {
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "ASSUMPTION",
+            "title": "Status",
+            "type": "string"
+          },
+          "unit": {
+            "default": "",
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ParameterEntry",
         "type": "object"
       },
       "PlanCreate": {
@@ -923,6 +993,187 @@
           }
         },
         "title": "PlanUpdate",
+        "type": "object"
+      },
+      "ProposalConstraints": {
+        "additionalProperties": false,
+        "description": "The constraint report carried by every proposal (§2.2).\n\nAll eleven fields have defaults: a rejection travels in\n``AIPlanResponse.rejected[]`` and a client that omits this block still\nparses.",
+        "properties": {
+          "buildingIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Buildingids",
+            "type": "array"
+          },
+          "buildingOverlapCells": {
+            "default": 0,
+            "title": "Buildingoverlapcells",
+            "type": "integer"
+          },
+          "buildingsClear": {
+            "default": true,
+            "title": "Buildingsclear",
+            "type": "boolean"
+          },
+          "clippedCells": {
+            "default": 0,
+            "title": "Clippedcells",
+            "type": "integer"
+          },
+          "clippedFraction": {
+            "default": 0.0,
+            "title": "Clippedfraction",
+            "type": "number"
+          },
+          "effect": {
+            "default": "class_change",
+            "title": "Effect",
+            "type": "string"
+          },
+          "effectNote": {
+            "default": "",
+            "title": "Effectnote",
+            "type": "string"
+          },
+          "overlapCells": {
+            "default": 0,
+            "title": "Overlapcells",
+            "type": "integer"
+          },
+          "overlapsWith": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overlapswith",
+            "type": "array"
+          },
+          "withinCumulativeCap": {
+            "default": true,
+            "title": "Withincumulativecap",
+            "type": "boolean"
+          },
+          "withinSingleCap": {
+            "default": true,
+            "title": "Withinsinglecap",
+            "type": "boolean"
+          }
+        },
+        "title": "ProposalConstraints",
+        "type": "object"
+      },
+      "ProposalRejection": {
+        "additionalProperties": false,
+        "description": "One refused proposal, in ``AIPlanResponse.rejected[]`` (§2.2).\n\nA refusal is a first-class object, not an error: it carries the closed\n``reasonCode`` so the UI can group refusals without parsing English, and a\nnon-empty ``warning`` that names the predicate in words.",
+        "properties": {
+          "buildingOverlapCells": {
+            "default": 0,
+            "title": "Buildingoverlapcells",
+            "type": "integer"
+          },
+          "interventionType": {
+            "title": "Interventiontype",
+            "type": "string"
+          },
+          "overlapCells": {
+            "default": 0,
+            "title": "Overlapcells",
+            "type": "integer"
+          },
+          "reasonCode": {
+            "title": "Reasoncode",
+            "type": "string"
+          },
+          "requested": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProposalRequested"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "siteId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Siteid"
+          },
+          "status": {
+            "default": "PROPOSAL_REJECTED",
+            "title": "Status",
+            "type": "string"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interventionType",
+          "reasonCode"
+        ],
+        "title": "ProposalRejection",
+        "type": "object"
+      },
+      "ProposalRequested": {
+        "additionalProperties": true,
+        "description": "The model's raw centre + size ask, echoed verbatim (§2.2).\n\n``extra=\"allow\"`` on purpose: this block is provenance, so a key the model\nsent that this schema does not name is preserved rather than dropped. It is\nnever used to derive geometry after validation -- ``geometry`` is what the\nserver produced from it.",
+        "properties": {
+          "centre": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Centre"
+          },
+          "sizeCells": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sizecells"
+          }
+        },
+        "title": "ProposalRequested",
+        "type": "object"
+      },
+      "ProposalSize": {
+        "additionalProperties": false,
+        "description": "The **served** size of a proposal (§2.2).\n\n``cells`` is the rasterised cell count of the served geometry (holes\nsubtracted), ``areaHa`` the shoelace area of that geometry, and\n``coverageFraction`` its share of the 17,316-cell study area.",
+        "properties": {
+          "areaHa": {
+            "default": 0.0,
+            "title": "Areaha",
+            "type": "number"
+          },
+          "cells": {
+            "default": 0,
+            "title": "Cells",
+            "type": "integer"
+          },
+          "coverageFraction": {
+            "default": 0.0,
+            "title": "Coveragefraction",
+            "type": "number"
+          }
+        },
+        "title": "ProposalSize",
         "type": "object"
       },
       "RunRequest": {
