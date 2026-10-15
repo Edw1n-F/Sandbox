@@ -217,7 +217,17 @@ def connected_components(mask: np.ndarray, min_size: int = 1,
     either way, so this is the single definition of "component" for grounding,
     siting and the catalog generator alike.
     """
-    steps = ((-1, 0), (1, 0), (0, -1), (0, 1)) if connectivity == 4 else (
+    # ``steps`` must be a *materialised* sequence, not a generator. An earlier
+    # version built the 8-connectivity case as a generator expression, which the
+    # flood fill below consumes once -- on the first cell it pops -- and then
+    # finds exhausted, so every component stopped after a handful of cells: a
+    # full 8x8 block of True cells labelled as [4, 1, 1, ...] instead of [64].
+    # The 4-connectivity branch used a tuple and was correct, which is why only
+    # the 8-connected callers broke -- most visibly ``ai_plan._components``,
+    # where ``placement_footprints`` filters components by a 40 m block's cell
+    # count, matched nothing, and the ``place`` op reported "placed 0" on the
+    # real land cover. Tuple, so it is re-iterable for every cell in the fill.
+    steps = ((-1, 0), (1, 0), (0, -1), (0, 1)) if connectivity == 4 else tuple(
         (dr, dc) for dr in (-1, 0, 1) for dc in (-1, 0, 1) if (dr, dc) != (0, 0))
     seen = np.zeros_like(mask, dtype=bool)
     out: list[dict[str, Any]] = []

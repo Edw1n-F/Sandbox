@@ -279,12 +279,49 @@ def load_grounding() -> Grounding:
                     best_r, best_c, best_score = r0, c0, score
         return best_r, best_c, best_r + size - 1, best_c + size - 1
 
+    # --- existing massing is not available to be built on -------------------
+    # Every pool below is a set of *candidate sites*, and a site that sits on a
+    # roof is not a site. Without this subtraction a reservoir or paving site
+    # could be offered on top of a surveyed building and then rejected by the
+    # constraint guard -- so the proposal list would be empty, a worse failure
+    # than the one being fixed. The surveyed footprints are subtracted from all
+    # three masks here, through the one building authority
+    # (``scripts/_overlay_common.building_footprint_mask``, the same mask the
+    # placement generator uses), rather than re-deriving footprints from the
+    # GeoJSON a second time.
+    try:
+        from _overlay_common import building_footprint_mask
+        occupied = building_footprint_mask(ov)
+    except ImportError:  # pragma: no cover - scripts/ off sys.path
+        occupied = None
+
+    if occupied is None:
+        # None is "no city model is present", which is not the same as "there
+        # are no buildings". Subtracting nothing is the only honest option, and
+        # the note says so rather than letting a site on a roof look like a site
+        # on the ground.
+        g.notes.append(
+            "no city model: existing buildings NOT excluded from candidate "
+            "sites, so a proposed site may sit under a building")
+    else:
+        g.notes.append(
+            f"existing buildings excluded from candidate sites "
+            f"({int(occupied.sum())} cells)")
+
+    def free_of_buildings(mask):
+        """A pool mask minus the surveyed footprints, unchanged when none exist.
+
+        Returns a new array (``&``, never ``&=``), so a caller can never mutate
+        the overlay's own class grid by accident.
+        """
+        return mask if occupied is None else (mask & ~occupied)
+
     # --- reservoirs: the deepest connected basins of the wet grid ----------
     depth_file = settings.rasters_dir / "wetgrid_hsk.npy"
     if depth_file.exists():
         depth = np.load(depth_file).astype(np.float64)
         if depth.shape == (ov.rows, ov.cols):
-            mask = depth >= 0.35
+            mask = free_of_buildings(depth >= 0.35)
             # The true cell mask, contoured -- not a 15x15 window at the
             # deepest spot (main's approach at the merge) and not the bounding
             # box (the original). A window is a box: it claims cells that are
@@ -314,7 +351,10 @@ def load_grounding() -> Grounding:
         g.notes.append("no wetgrid_hsk.npy; run scripts/make_wetgrid.py")
 
     # --- green space: largest contiguous vegetated blocks -------------------
-    for comp in _components_cells(ov.class_mask("green"), 120, connectivity=4)[:3]:
+    # Bound to a local variable and freed of buildings first, so the component
+    # labelling below sees only ground a site could actually occupy.
+    green_mask = free_of_buildings(ov.class_mask("green"))
+    for comp in _components_cells(green_mask, 120, connectivity=4)[:3]:
         g.green_sites.append(site(
             comp["cells"], "green_space",
             "largest contiguous vegetated block (ESA WorldCover class 'green'), "
@@ -324,7 +364,8 @@ def load_grounding() -> Grounding:
         ))
 
     # --- permeable paving: the biggest contiguous impervious blocks ---------
-    for comp in _components_cells(ov.class_mask("paved"), 150, connectivity=4)[:3]:
+    paved_mask = free_of_buildings(ov.class_mask("paved"))
+    for comp in _components_cells(paved_mask, 150, connectivity=4)[:3]:
         g.paving_sites.append(site(
             comp["cells"], "permeable_paving",
             "largest contiguous impervious block (ESA WorldCover class 'paved'), "
@@ -1794,9 +1835,16 @@ def route_tools(instruction: str) -> tuple[list[dict], str]:
     check, the separation happens here and the model is never asked to route.
     That is strictly safer than either a prompt rule or a permissive
     ``tool_choice``, and it costs one regex.
+
+    **``assess_building_fit`` is no longer offered** (PRD §1.2). Forcing it was
+    a dead end: ``_parse_tool_use`` handles only ``select_intervention_sites``
+    and ``modify_massing``, so a fit call was silently discarded and the model
+    spent a turn on it while the user waited. The endpoint and its tests remain
+    -- it is still reachable directly -- but a recommendation request now routes
+    to the catalogue, whose answer the parser can actually deliver.
+    :func:`parse_fit_intent` still reads the intent; it is simply no longer a
+    routing target.
     """
-    if parse_fit_intent(instruction):
-        return [FIT_TOOL], FIT_TOOL["name"]
     if parse_massing_intent(instruction):
         return [MASSING_TOOL], MASSING_TOOL["name"]
     return [CHOOSE_TOOL], CHOOSE_TOOL["name"]
@@ -2135,6 +2183,26 @@ def apply_proposals(
     if not features:
         raise PlanGenerationError("no features to apply")
 
+    # Persist only what a *stored* intervention has. The proposal wire shape is
+    # additive (design §2.2): it carries `size`, `requested`, `constraints`,
+    # `parameters`, `status` and `warning` for the UI, and `InterventionIn` --
+    # which PlanCreate validates every item through -- forbids unknown keys, so
+    # passing a proposal dict straight through rejects the whole plan with an
+    # `extra_forbidden` error. Projecting onto the five stored fields keeps this
+    # a thin wrapper rather than a second validation pipeline; nothing the
+    # record needs is lost, because the display fields the UI reads live in
+    # `params` (the materialiser puts rationale/siteId/basis there).
+    stored = [
+        {
+            "geometry": f["geometry"],
+            "intervention_type": f["intervention_type"],
+            "source": f.get("source", "ai"),
+            "params": f.get("params") or {},
+            "style": f.get("style") or {},
+        }
+        for f in features
+    ]
+
     payload = PlanCreate.model_validate({
         "planType": "comprehensive",
         "label": f"AI: {instruction[:60]}",
@@ -2149,7 +2217,7 @@ def apply_proposals(
                 "tied to a raster in params.basis; none is a design."
             ),
         },
-        "interventions": features,
+        "interventions": stored,
     })
     created = scene_service.create_plan(scene_id, payload)
     return {

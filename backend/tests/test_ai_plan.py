@@ -1161,14 +1161,24 @@ def test_the_fit_tool_asks_for_an_objective_and_never_a_number() -> None:
           str(schema["properties"]["objective"]["enum"]))
 
 
-def test_a_recommendation_request_routes_to_the_fit_tool() -> None:
+def test_a_recommendation_request_no_longer_routes_to_the_fit_tool() -> None:
+    """FIT_TOOL is not offered (PRD §1.2): its result was silently discarded.
+
+    ``_parse_tool_use`` handles only ``select_intervention_sites`` and
+    ``modify_massing``, so forcing ``assess_building_fit`` spent a model turn on
+    a call nothing consumed. A recommendation request now routes to the
+    catalogue, whose answer the parser can actually deliver. The endpoint and
+    the FIT_TOOL schema checks above stay -- only the routing changed.
+    """
     for text in ("make this building better for flood risk",
                  "what should I do with this block",
                  "optimise the western blocks for heat",
                  "make it better for the environment"):
         tools, forced = route_tools(text)
-        check(f"'{text[:38]}' routes to the fit tool",
-              forced == "assess_building_fit" and len(tools) == 1, forced)
+        check(f"'{text[:38]}' routes to the catalogue, not the fit tool",
+              forced == "select_intervention_sites"
+              and [t["name"] for t in tools] == ["select_intervention_sites"],
+              forced)
 
     # A stated number is a decision, not a question, and must keep going to the
     # editing tool. Losing this is how "set it to 60 m" turns into "here are some
@@ -1177,6 +1187,13 @@ def test_a_recommendation_request_routes_to_the_fit_tool() -> None:
                  "rotate the northern blocks 20 degrees"):
         _tools, forced = route_tools(text)
         check(f"'{text[:38]}' stays an edit", forced == "modify_massing", forced)
+
+    # The fit tool is gone from every offered set, not just the recommendation one.
+    offered = {t["name"] for text in ("make it better", "add a reservoir",
+                                      "make the district 25% taller")
+               for t in route_tools(text)[0]}
+    check("assess_building_fit is offered by no route",
+          "assess_building_fit" not in offered, str(sorted(offered)))
 
 
 def test_fit_constraints_default_to_conservative_and_parse_goals() -> None:
