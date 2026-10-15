@@ -1,0 +1,162 @@
+classDiagram
+    direction LR
+
+    class proposal_constraints {
+        <<new module>>
+        +building_mask(ov) np.ndarray
+        +claimed_cells(grids, plan_ids, extra_features) set
+        +size_to_cells(area_ha, cell_area_m2) int
+        +cells_to_area_ha(cells, cell_area_m2) float
+        +clip_window(grids, centre, size_cells, occupied, claimed) dict
+        +validate_proposal(grids, candidate, occupied, claimed) dict
+        +validate_batch(grids, candidates, occupied, claimed) tuple
+        +CONSTRAINT_STATUS
+        +REJECT_STATUS
+        +CONSTRAINT_WARNING
+    }
+    class ProposalConstraints {
+        buildingsClear: bool
+        buildingOverlapCells: int
+        buildingIds: list[str]
+        overlapCells: int
+        overlapsWith: list[str]
+        clippedCells: int
+        clippedFraction: float
+        withinSingleCap: bool
+        withinCumulativeCap: bool
+        effect: str
+        effectNote: str
+    }
+    class ProposalSize {
+        cells: int
+        areaHa: float
+        coverageFraction: float
+    }
+    class ProposalRejection {
+        interventionType: str
+        siteId: str | None
+        requested: dict | None
+        reasonCode: str
+        status: str
+        warning: str
+    }
+    class InterventionProposal {
+        geometry: dict
+        interventionType: str
+        source: str
+        params: dict
+        style: dict
+        siteId: str | None
+        rationale: str | None
+        basis: str | None
+        size: ProposalSize
+        requested: dict | None
+        constraints: ProposalConstraints
+        parameters: dict
+        status: str
+        warning: str
+    }
+    class Grounding {
+        bounds: tuple
+        reservoir_sites: list
+        green_sites: list
+        paving_sites: list
+        notes: list[str]
+    }
+    class ai_plan {
+        <<module>>
+        +load_grounding() Grounding
+        +CHOOSE_TOOL
+        +_feature(kind, site, instruction, provider, rationale) dict
+        +generate_proposals(scene_id, instruction, prefer, max_features, allowed_types) dict
+        +apply_proposals(scene_id, instruction, features, provider, grounding_notes, candidate_counts) dict
+        +route_tools(instruction) tuple
+    }
+    class intent {
+        <<new module>>
+        +parse_intervention_intent(question) str | None
+        +classify_turn(question, card) AnswerCard
+        +INTERVENTION_VERBS
+    }
+    class chat_service {
+        <<module>>
+        +stream_events(scene_id, question, run, history) Iterator
+    }
+    class AnswerCard {
+        intent: str
+        intent_hint: str | None
+        intent_source: str
+    }
+    class intervention_geometry {
+        <<module, unchanged>>
+        +contour_ring(cells, bounds, rows, cols) tuple
+        +polygon_area_ha(coordinates, lat_min, lat_max) float
+        +ring_centroid(ring) list
+    }
+    class sandbox_model {
+        <<module, unchanged>>
+        +Grids
+        +_polygon_cells(grids, coordinates) list
+        +apply_interventions(grids, features) tuple
+        +INTERVENTION_EFFECTS
+        +MAX_INTERVENTION_COVERAGE
+        +MAX_TOTAL_COVERAGE
+    }
+    class overlay_common {
+        <<module, unchanged>>
+        +building_footprint_mask(ov) np.ndarray
+        +load_overlay() Overlay
+        +STORAGE_DEPTH_M
+    }
+    class siting {
+        <<module, unchanged>>
+        +MIN_SITE_CELLS
+        +TANK_DEPTH_M
+        +FLOODABLE_DEPTH_M
+        +PERMEABLE_CN
+    }
+    class scenes_router {
+        <<routers/scenes.py>>
+        +create_ai_plan(scene_id, payload) AIPlanResponse
+        +apply_ai_plan(scene_id, payload) AIPlanResponse
+        +post_run(scene_id, body) dict
+    }
+    class proposalLayer {
+        <<new, frontend>>
+        +addProposals(viewer, proposals) Handle
+    }
+    class interventionLayer {
+        <<frontend>>
+        +addInterventions(viewer, collection) Handle
+        +applyStyle(dataSource)
+    }
+    class planStore {
+        <<frontend>>
+        +proposals
+        +setProposals(list)
+        +clearProposals()
+    }
+    class ChatPanel {
+        <<frontend>>
+        +send(text)
+        +openProposalGate(instruction, source)
+    }
+
+    ai_plan --> proposal_constraints : validate_proposal()
+    ai_plan --> intervention_geometry : contour_ring / polygon_area_ha
+    ai_plan --> overlay_common : building_footprint_mask()
+    ai_plan --> siting : MIN_SITE_CELLS / depth assumptions
+    proposal_constraints --> sandbox_model : _polygon_cells / caps
+    proposal_constraints --> overlay_common : building_footprint_mask()
+    proposal_constraints --> intervention_geometry : contour_ring / polygon_area_ha
+    proposal_constraints --> siting : MIN_SITE_CELLS
+    scenes_router --> ai_plan : generate_proposals / apply_proposals
+    scenes_router --> proposal_constraints : validate (run echo)
+    InterventionProposal --> ProposalConstraints
+    InterventionProposal --> ProposalSize
+    chat_service --> intent : classify_turn()
+    intent --> ai_plan : EN_ALIASES / _match_region / parse_massing_intent
+    intent --> AnswerCard
+    ChatPanel --> planStore : setProposals / clearProposals
+    planStore --> proposalLayer : proposals
+    proposalLayer --> interventionLayer : applyStyle()
