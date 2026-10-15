@@ -49,6 +49,7 @@ and `src/view/` must not be imported from state.
 | `demProvider.ts` | terrain-RGB decode, **the ground sampler**, terrain provider |
 | `terrainLoader.ts` | imagery providers, bbox -> `Rectangle` |
 | `tilesetLayer.ts` | the real Open3Dhk 3D Tiles layers (buildings + terrain) |
+| `footprintLayer.ts` | the Plan Project 2.5D massing: 396 `buildings_hsk.json` footprints extruded as white + black-outline polygons, with per-id visibility for GLB overlap hiding |
 | `interventionLayer.ts` | intervention GeoJSON styling |
 | `onlineProps.ts` | the online glTF assets layer (Khronos samples) |
 | `hk1980Transform.ts` | HK1980 grid <-> lon/lat, for reading the Open3Dhk tiles |

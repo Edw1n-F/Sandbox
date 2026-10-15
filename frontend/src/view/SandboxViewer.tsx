@@ -11,18 +11,24 @@
 import { useEffect, useRef } from 'react'
 import { create } from 'zustand'
 import {
+  Cartesian2,
   Cartesian3,
   Cartesian4,
   ClippingPlane,
   ClippingPlaneCollection,
   ClassificationType,
   Color,
+  Entity,
   ImageMaterialProperty,
   ConstantProperty,
+  LabelStyle,
   Math as CesiumMath,
   Matrix4,
+  Model,
+  NearFarScalar,
   Rectangle,
   Transforms,
+  VerticalOrigin,
   Viewer,
   type ImageryLayer,
 } from 'cesium'
@@ -35,7 +41,7 @@ import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions } from './interventionLayer'
 import { publishHeading } from './cameraHeading'
-import { demElevationRange } from './demProvider'
+import { demElevationRange, sampleDemHeight, whenDemReady } from './demProvider'
 import {
   createBaseImageryLayer,
   createOverlayLayer,
@@ -55,10 +61,21 @@ import {
   type Extent,
 } from './cameraRig'
 import { applyViewMode, boundaryColour } from './viewModes'
+import booleanIntersects from '@turf/boolean-intersects'
+import type { Feature, FeatureCollection, MultiPolygon, Polygon } from 'geojson'
+import {
+  collectIntersectingIds,
+  createFootprintLayer,
+  type BuildingProps,
+  type FootprintLayerHandle,
+} from './footprintLayer'
 
 let propsHandle: OnlinePropHandle | null = null
 let tilesetHandle: TilesetHandle | null = null
 let terrainTilesetHandle: TilesetHandle | null = null
+let mtrModel: Model | null = null
+let mtrMarker: Entity | null = null
+let footprintLayer: FootprintLayerHandle | null = null
 
 const useProps = create<{ rev: number }>(() => ({ rev: 0 }))
 
@@ -167,6 +184,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
   const showRealBuildings = useSceneStore((s) => s.layers.realBuildings ?? true)
+  const showPlanProject = useSceneStore((s) => s.layers.planProject ?? false)
+  const setPlanProjectLoading = useSceneStore((s) => s.setPlanProjectLoading)
   const layers = useSceneStore((s) => s.layers)
   const viewMode = useSceneStore((s) => s.viewMode)
 
@@ -639,7 +658,8 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
     void add3DTileset(viewer, url, { modelMatrix: hk1980ToEcefMatrix(), maximumScreenSpaceError: 24, name: 'buildings' }).then((handle) => {
       if (cancelled || !handle) return
       tilesetHandle = handle
-      handle.tileset.show = showRealBuildings
+      // While planProject is on, the 2.5D footprint overlay replaces this layer.
+      handle.tileset.show = showRealBuildings && !showPlanProject
       viewer.scene.requestRender()
     })
 
@@ -653,9 +673,9 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
   useEffect(() => {
     if (!tilesetHandle) return
-    tilesetHandle.tileset.show = showRealBuildings
+    tilesetHandle.tileset.show = showRealBuildings && !showPlanProject
     viewerRef.current?.scene.requestRender()
-  }, [showRealBuildings])
+  }, [showRealBuildings, showPlanProject])
 
   // ---- 3D Tiles terrain visual mesh (6-NW-12D terrain(TB)) ----------------
   // Loaded as a Primitive alongside the globe TerrainProvider.  The globe
@@ -727,6 +747,157 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
       dispose?.()
     }
   }, [showInterventions, interventions])
+
+  // ---- MTR Plan Project GLB model ----------------------------------------
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const url = terrainMeta?.planProjectUrl
+    if (!isLive(viewer) || !url || !showPlanProject) {
+      if (mtrModel && !mtrModel.isDestroyed()) {
+        viewer?.scene.primitives.remove(mtrModel)
+        mtrModel = null
+      }
+      return
+    }
+
+    console.info('[planProject] loading GLB:', url)
+    setPlanProjectLoading(true)
+    let cancelled = false
+    // Confirmed inside scene bbox (113.9922–113.9994 E, 22.431–22.4363 N).
+    // Real station (22°25′55″N 113°59′17″E) is ~400 m west of the scene boundary,
+    // so we place the model at the cluster of buildings the station would replace.
+    const MTR_LON = 113.9930
+    const MTR_LAT = 22.4360
+    const MTR_SCALE = 50
+
+    void whenDemReady().then(async () => {
+      if (cancelled) return
+      const terrainM = sampleDemHeight(MTR_LON, MTR_LAT) ?? 11.3
+      // The GLB has a baked -90° X rotation (Blender Y-up export convention).
+      // After Cesium applies it, the visual base of the model aligns with the
+      // ENU origin (Z=0 in local frame). Place the origin directly at terrain
+      // height — no vertical offset needed.
+      const originH = terrainM
+      const labelH  = terrainM + (0.45 + 0.48) * MTR_SCALE + 5   // above model top
+      console.info(`[planProject] terrain=${terrainM.toFixed(1)} m, origin=${originH.toFixed(1)} m`)
+
+      const model = await Model.fromGltfAsync({
+        url,
+        modelMatrix: Transforms.eastNorthUpToFixedFrame(
+          Cartesian3.fromDegrees(MTR_LON, MTR_LAT, originH),
+        ),
+        scale: MTR_SCALE,
+      })
+      if (cancelled || !isLive(viewerRef.current)) { model.destroy(); return }
+      const v = viewerRef.current!
+      mtrModel = model
+      v.scene.primitives.add(model)
+
+      mtrMarker = v.entities.add({
+        position: Cartesian3.fromDegrees(MTR_LON, MTR_LAT, labelH),
+        label: {
+          text: '洪水桥站\nMTR Hung Shui Kiu',
+          font: 'bold 14px sans-serif',
+          style: LabelStyle.FILL_AND_OUTLINE,
+          fillColor: Color.WHITE,
+          outlineColor: Color.fromCssColorString('#0a2e1a'),
+          outlineWidth: 3,
+          verticalOrigin: VerticalOrigin.BOTTOM,
+          pixelOffset: new Cartesian2(0, -10),
+          scaleByDistance: new NearFarScalar(500, 1.0, 3000, 0.75),
+          translucencyByDistance: new NearFarScalar(3000, 1.0, 8000, 0.0),
+          showBackground: true,
+          backgroundColor: Color.fromCssColorString('#0d4a2c').withAlpha(0.82),
+          backgroundPadding: new Cartesian2(8, 5),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        point: {
+          pixelSize: 14,
+          color: Color.fromCssColorString('#5cff9d'),
+          outlineColor: Color.fromCssColorString('#0a2e1a'),
+          outlineWidth: 2,
+          scaleByDistance: new NearFarScalar(300, 1.4, 5000, 0.6),
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      })
+
+      void v.camera.flyTo({
+        destination: Cartesian3.fromDegrees(MTR_LON, MTR_LAT - 0.004, labelH + 300),
+        orientation: {
+          heading: CesiumMath.toRadians(0),
+          pitch: CesiumMath.toRadians(-25),
+          roll: 0,
+        },
+        duration: 2.0,
+      })
+
+      v.scene.requestRender()
+      setPlanProjectLoading(false)
+      console.info('[planProject] GLB loaded and visible')
+    }).catch((err) => {
+      setPlanProjectLoading(false)
+      console.error('[planProject] GLB failed to load:', err)
+    })
+
+    return () => {
+      cancelled = true
+      setPlanProjectLoading(false)
+      if (mtrModel && !mtrModel.isDestroyed()) {
+        viewerRef.current?.scene.primitives.remove(mtrModel)
+        mtrModel = null
+      }
+      if (mtrMarker) {
+        viewerRef.current?.entities.remove(mtrMarker)
+        mtrMarker = null
+      }
+    }
+  }, [terrainMeta?.planProjectUrl, showPlanProject, setPlanProjectLoading])
+
+  // ---- 2.5D footprint overlay (Plan Project companion) --------------------
+  // When Plan Project is on, swap the textured 3D Tiles mesh for a planning-doc
+  // style white massing extruded from buildings_hsk.json, and hide the few
+  // boxes under the GLB footprint so the station reads cleanly.
+  useEffect(() => {
+    const viewer = viewerRef.current
+    const buildingsUrl = terrainMeta?.buildingsUrl
+    const footprintUrl = terrainMeta?.planProjectFootprintUrl
+    if (!isLive(viewer) || !showPlanProject || !buildingsUrl || !footprintUrl) {
+      footprintLayer?.destroy()
+      footprintLayer = null
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      try {
+        // DEM must be ready before createFootprintLayer samples ground heights
+        // for each footprint, otherwise every box sinks into the terrain.
+        await whenDemReady()
+        if (cancelled || !isLive(viewerRef.current)) return
+        const [buildings, footprint] = await Promise.all([
+          fetch(buildingsUrl).then((r) => r.json() as Promise<FeatureCollection<Polygon | MultiPolygon, BuildingProps>>),
+          fetch(footprintUrl).then((r) => r.json() as Promise<Feature<Polygon> | Polygon>),
+        ])
+        if (cancelled || !isLive(viewerRef.current)) return
+        const hidden = collectIntersectingIds(buildings, footprint, (a, b) =>
+          booleanIntersects(a as never, b as never),
+        )
+        footprintLayer?.destroy()
+        footprintLayer = createFootprintLayer(viewerRef.current, buildings, hidden)
+        console.warn(
+          `[planProject] 2.5D overlay: ${footprintLayer.size} boxes, ${hidden.size} hidden by GLB footprint`,
+        )
+      } catch (err) {
+        console.error('[planProject] 2.5D overlay failed:', err)
+      }
+    })()
+
+    return () => {
+      cancelled = true
+      footprintLayer?.destroy()
+      footprintLayer = null
+    }
+  }, [showPlanProject, terrainMeta?.buildingsUrl, terrainMeta?.planProjectFootprintUrl])
 
   return <div ref={containerRef} className={className ?? 'absolute inset-0 z-0'} />
 }

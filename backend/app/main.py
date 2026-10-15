@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
-from app.routers import chat, plans, scenes, terrain
+from app.routers import chat, citymodel, plans, scenes, terrain
 
 # Starlette's StaticFiles uses the Python mimetypes module. 3D Tiles binary
 # formats are not registered by default, which causes them to be served as
@@ -55,6 +55,7 @@ app.include_router(scenes.router, prefix="/api")
 app.include_router(plans.router, prefix="/api")
 app.include_router(terrain.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
+app.include_router(citymodel.router, prefix="/api")
 
 
 # --------------------------------------------------------------------------- #

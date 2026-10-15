@@ -136,6 +136,104 @@ month — move every dated section older than the current month into
 (`## 2026-10-09–10-12 — see docs/changelog/2026-10.md`). The as-of-date rule
 above is what makes that split safe.
 
+## 2026-10-15 — Plan Project overlay: GLB + 2.5D massing + overlap hiding
+
+### Added — a toggle that swaps the scene into planning-document view
+
+A **Plan Project** toggle in the layer panel renders a government planning case
+(the MTR Hung Shui Kiu station, `backend/model/mtr_station.glb`) on top of
+HSK/HT. When it is on, three things happen together:
+
+1. The textured Open3Dhk 3D Tiles buildings layer is hidden.
+2. The 396 footprints in `buildings_hsk.json` are extruded as white, black-outlined
+   massing — a CityGML LOD1 look that makes the real planning project read against
+   a clean, un-textured context.
+3. The handful of 2.5D boxes whose footprints intersect the GLB's own footprint
+   are hidden, so the station is not drawn through existing massing.
+
+Toggling off destroys the 2.5D entities and restores the 3D Tiles to the user's
+prior `realBuildings` state. The two layers are mutually exclusive by design:
+the 2.5D overlay exists **because** the textured mesh fights the GLB visually.
+
+### Why this is one entry, not two
+
+`fdc1a4c` landed the GLB + toggle on 2026-10-14 and never wrote a CHANGELOG
+entry. The 2.5D companion is the other half of the same feature and was built
+today; collapsing them into one date-of-closure entry is the single-home-per-fact
+rule, not a rewriting of history. The GLB-only commit is in `git log`.
+
+### How the GLB footprint is derived
+
+The GLB has no stored bbox, so **`backend/scripts/compute_plan_project_footprint.py`**
+reads its 902,806 vertices with `trimesh`, applies the same ENU-axis remap and
+`scale=50` the frontend uses (glTF Y-up → ENU as `(x, -z, y)`, matching
+`tiles_to_buildings.py:55`), projects to lon/lat with a flat-earth
+approximation (error <1 cm at 22.44 °N, ±400 m), takes the `scipy` convex hull
+of the XY projection, and writes `backend/data/plan_project_footprint.json`
+as a 32-vertex `Feature<Polygon>`. The script is idempotent; it must be re-run
+whenever the GLB, its placement or `MTR_SCALE` change.
+
+The scene service exposes it as `terrainMeta.planProjectFootprintUrl`
+(`/static/plan_project_footprint.json`), gated on file presence — a missing
+sidecar leaves the field `null` and the 2.5D effect no-ops cleanly rather than
+loading a half-feature.
+
+### Why Entity + PolygonHierarchy, not Primitive
+
+396 polygons toggle in <5 ms, and the Entity API supports per-building
+`show = false` out of the box, which the overlap-hiding step needs. A single
+`GroundPrimitive`-based approach would push ground-clamping onto Cesium, but
+`GroundPrimitive` does not support `extrudedHeight` — the ceiling-vs-floor
+trade-off is wrong for massing.
+
+### What bit us during the build
+
+**Cesium's `PolygonGraphics` silently ignores `heightReference` once
+`extrudedHeight` is set.** The 2.5D boxes shipped at ellipsoid zero with the
+terrain at 3-17 m, so every building appeared to sink into the ground. Fix:
+sample the DEM at every outer-ring vertex, take the minimum (uphill corner
+touches ground, downhill corner buried shallow rather than floating),
+assign `height = base` and `extrudedHeight = base + height_m` as absolute
+elevations.
+
+**Two features' footprints extended past the DEM bbox.** `bldg-0394` and
+`bldg-0395` sit just south of the scene's south edge (lat 22.4310 vs DEM
+south 22.431). `sampleDemHeight` returned `null` for every vertex, the base
+fallback tripped to 0, and both buildings sank into the terrain. Added
+`sampleDemHeightClamped` in `demProvider.ts` — same sampler, but clamps the
+query point into the raster bbox first. HSK/HT edges are flat, so the
+nearest-edge height is within 1-2 m of truth and visually indistinguishable.
+
+**One feature is a MultiPolygon, not a Polygon.** `bldg-0104` broke the
+`coordinates[0]` assumption and read a nested ring as if each item were a
+`[lon, lat]`. `createFootprintLayer` now walks `outerRings()` for both
+geometry types and creates one Entity per outer ring (`bldg-0104#0`,
+`bldg-0104#1`); `setHiddenIds` strips the `#N` suffix so the hidden set
+still keys on the original feature id. The GeoJSON wire type in
+`SandboxViewer.tsx` is now `FeatureCollection<Polygon | MultiPolygon, ...>`.
+
+### Measured on 2026-10-15
+
+- 396 features in `buildings_hsk.json` → **390 drawn**, **6 hidden** by the
+  GLB footprint (`bldg-0001, 0002, 0004, 0005, 0006, 0369`).
+- `bldg-0104` renders as 2 separate entities summing to 1 feature.
+- `bldg-0394` and `bldg-0395` ride the DEM-south edge via clamped sampling.
+- Toggle round-trip adds no leaked entities (`viewer.entities.values.length`
+  returns to its pre-toggle baseline).
+
+### Files
+
+- Added: `backend/scripts/compute_plan_project_footprint.py`,
+  `backend/data/plan_project_footprint.json`,
+  `frontend/src/view/footprintLayer.ts`
+- Changed: `backend/app/schemas/scene.py` (append `plan_project_footprint_url`),
+  `backend/app/services/scene_service.py` (inject URL),
+  `backend/requirements.txt` (declare `trimesh`),
+  `contracts/openapi.json` (regenerated),
+  `frontend/package.json` (add `@turf/boolean-intersects`),
+  `frontend/src/api/types.ts`, `frontend/src/view/demProvider.ts`
+  (export `sampleDemHeightClamped`), `frontend/src/view/SandboxViewer.tsx`
+
 ## 2026-10-14 — navigation: trackpad sensitivity, a compass, tilt buttons and a cheat-sheet
 
 ### Fixed — a trackpad swipe lurched the camera

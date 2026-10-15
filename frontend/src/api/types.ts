@@ -72,6 +72,8 @@ export interface TerrainMeta {
   terrain3DUrl?: string | null
   waterbodyUrl?: string | null
   infrastructureUrl?: string | null
+  planProjectUrl?: string | null
+  planProjectFootprintUrl?: string | null
 }
 
 export type PlanType =
@@ -153,6 +155,7 @@ export interface LayerVisibility {  imagery: boolean
   waterbody: boolean
   /** Infrastructure structures from 6-NW-12D INFRASTRUCTURE glTF. */
   infrastructure: boolean
+  planProject: boolean
 }
 
 /**

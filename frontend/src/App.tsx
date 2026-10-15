@@ -15,6 +15,7 @@
 import { useEffect, useState } from 'react'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
+import CircularProgress from '@mui/material/CircularProgress'
 import Fab from '@mui/material/Fab'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
@@ -37,6 +38,7 @@ function LayerToggles() {
   const layers = useSceneStore((s) => s.layers)
   const toggleLayer = useSceneStore((s) => s.toggleLayer)
   const terrain = useSceneStore((s) => s.terrain)
+  const planProjectLoading = useSceneStore((s) => s.planProjectLoading)
   const hasWet = Boolean(terrain?.wetGridUrl)
   const hasHeat = Boolean(terrain?.heatmapUrl)
   return (
@@ -58,6 +60,16 @@ function LayerToggles() {
         sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1 }}
       >
         Heat
+      </Button>
+      <Button
+        size="small"
+        variant={layers.planProject ? 'contained' : 'outlined'}
+        disabled={!terrain?.planProjectUrl || planProjectLoading}
+        onClick={() => toggleLayer('planProject')}
+        sx={{ minWidth: 0, px: 1, py: 0.4, fontSize: 10, lineHeight: 1, gap: 0.5 }}
+        startIcon={planProjectLoading ? <CircularProgress size={10} color="inherit" /> : undefined}
+      >
+        {planProjectLoading ? 'Loading…' : 'Plan Project'}
       </Button>
     </Stack>
   )
