@@ -2138,9 +2138,48 @@ def generate_proposals(
     if allowed_set:
         features = [f for f in features if f.get("intervention_type") in allowed_set]
 
+    # ---- constraints: code, not a request ---------------------------------- #
+    #
+    # The constraints block in the prompt (design §2.1) is a *request* to the
+    # model; this is the guarantee. Every candidate -- the model's and the
+    # heuristic's alike -- passes through `validate_batch` before it is returned
+    # or persisted, so a provider that ignores the block cannot leak a feature
+    # that sits on a surveyed building, overlaps ground already claimed, or
+    # exceeds the coverage caps. `validate_batch` owns the per-batch claimed-set
+    # loop, so two proposals in one batch cannot claim the same cells.
+    #
+    # Rejections travel back with a reason code rather than being dropped: a
+    # short list must never look exhaustive, and a planner who is told "this
+    # paving site contains 61 cells under surveyed buildings" can act on it.
+    rejected: list[dict[str, Any]] = []
+    try:
+        from app.services import proposal_constraints as _constraints
+        from app.services.sandbox_model import load_grids as _load_grids
+        # Imported here, not at module scope: `_overlay_common` is a script-only
+        # module that `load_grounding` pulls in lazily, and a top-level import
+        # would make importing this service depend on the raster scripts.
+        from _overlay_common import load_overlay as _load_overlay
+
+        grids = _load_grids()
+        if grids is None:
+            grounding.notes.append(
+                "constraints were not checked: no ledger grid is available "
+                "(run make_wetgrid.py), so these proposals are unvalidated")
+        else:
+            occupied = _constraints.building_mask(_load_overlay())
+            claimed = _constraints.claimed_cells_for(scene_id, grids)
+            features, rejected = _constraints.validate_batch(
+                grids, features, occupied, claimed)
+    except Exception as exc:  # noqa: BLE001 - a validator bug must not empty the gate
+        # Named, not swallowed: a proposal list that says it was validated when
+        # it was not is worse than one that admits the gap.
+        grounding.notes.append(
+            f"constraint validation failed ({exc}); proposals are unvalidated")
+
     if not features:
         return {
             "features": [],
+            "rejected": rejected,
             "provider": used_provider,
             "groundingNotes": grounding.notes,
             "candidateCounts": {
@@ -2149,8 +2188,9 @@ def generate_proposals(
                 "paving": len(grounding.paving_sites),
             },
             "message": (
-                "Nothing could be placed: no provider returned a usable answer "
-                "for this instruction. Nothing was invented."
+                "Nothing could be placed: no candidate survived the "
+                "constraints, or no provider returned a usable answer for this "
+                "instruction. Nothing was invented."
                 + (f" The language model was {provider_error}." if provider_error
                    else "")
             ),
@@ -2158,6 +2198,7 @@ def generate_proposals(
 
     return {
         "features": features,
+        "rejected": rejected,
         # used_provider, not provider: after a fallback these differ, and the
         # response has to name whichever one actually produced the features.
         "provider": used_provider,

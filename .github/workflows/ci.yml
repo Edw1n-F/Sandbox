@@ -15,6 +15,14 @@ on:
 
 permissions:
   contents: read
+  # `pull-requests: read` is for dorny/paths-filter, not for this repo's own
+  # checks. On a pull_request event that action calls the pull-request files API
+  # to work out what changed; with only `contents: read` it fails with
+  # "Resource not accessible by integration", the `changes` job produces no
+  # outputs, and every downstream job's `if:` evaluates false — so CI reports
+  # nothing at all rather than a failed job. Without this, no filter can be
+  # evaluated, which is why the failure looked like a test problem.
+  pull-requests: read
 
 # A new push to the same branch/PR makes the older run worthless; cancel it.
 concurrency:
