@@ -92,6 +92,13 @@ for coordinates or a street, keep `intent="intervention"` and set \
 `intent_hint="add <type> in <region>"` using your best read of their intent; the \
 geometry is chosen later from vetted candidate sites, never from your text.
 
+A DETERMINISTIC CLASSIFIER also runs on the server, after your card is built. It \
+reads the user's own words for a proposal verb and a type, and it can only \
+*raise* `intent` to "intervention" -- it never lowers what you set. So a \
+proposal-shaped instruction still routes when you are not configured; your job \
+is to be right when you are, not to be the only thing that can route. Do not \
+reach for `intent="ambiguous"` to avoid a hard call.
+
 Leave `intent_hint` null for `question` and `ambiguous`.\
 """
 

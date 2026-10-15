@@ -1,0 +1,68 @@
+{
+  "version": 1,
+  "note": "Generated from backend/app/agent/intent.py (INTERVENTION_VERBS, REMOVAL_VERBS, NOUNS <- ai_plan.EN_ALIASES, KIND_WORD, REGION_WORDS). The single source of the routing vocabulary: the frontend fast path (frontend/src/api/intentVocabulary.ts) mirrors this file, and backend/tests/test_intent_routing.py pins it back to intent.py so the two cannot silently diverge.",
+  "interventionVerbs": [
+    "add",
+    "place",
+    "create",
+    "build",
+    "dig",
+    "plant",
+    "grow",
+    "fill",
+    "retain",
+    "retrofit",
+    "convert",
+    "replace",
+    "install",
+    "put",
+    "increase",
+    "expand"
+  ],
+  "removalVerbs": [
+    "remove",
+    "delete",
+    "drop",
+    "take out"
+  ],
+  "nouns": {
+    "green space": "green_space",
+    "park": "green_space",
+    "urban green": "green_space",
+    "tree planting": "green_space",
+    "permeable paving": "permeable_paving",
+    "permeable pavement": "permeable_paving",
+    "water reservoir": "water_reservoir",
+    "flood storage": "water_reservoir",
+    "retention basin": "water_reservoir",
+    "storage basin": "water_reservoir",
+    "drain": "drainage",
+    "drainage": "drainage",
+    "channel": "drainage",
+    "swale": "drainage",
+    "road": "road",
+    "street": "road",
+    "railing": "road",
+    "reservoir": "water_reservoir",
+    "pond": "water_reservoir"
+  },
+  "kinds": {
+    "water_reservoir": "water reservoir",
+    "green_space": "green space",
+    "permeable_paving": "permeable paving",
+    "drainage": "drainage",
+    "road": "road"
+  },
+  "regions": {
+    "north": "the north",
+    "south": "the south",
+    "east": "the east",
+    "west": "the west",
+    "centre": "the centre",
+    "north-east": "the north-east",
+    "north-west": "the north-west",
+    "south-east": "the south-east",
+    "south-west": "the south-west",
+    "all": "the whole area"
+  }
+}

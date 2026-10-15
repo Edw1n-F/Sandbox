@@ -110,8 +110,13 @@ interface StyleSpec {
  *
  * Unknown colour strings are ignored rather than thrown on: one bad feature
  * should not empty the whole layer.
+ *
+ * Exported (DESIGN §2.4) so the unpersisted draft layer (`proposalLayer.ts`)
+ * styles a proposal with the *same* function as its confirmed twin -- the draft
+ * differs only in the transform applied to `style` beforehand, never in how a
+ * style becomes a Cesium material.
  */
-function applyStyle(dataSource: GeoJsonDataSource): void {
+export function applyStyle(dataSource: GeoJsonDataSource): void {
   for (const entity of dataSource.entities.values) {
     const style = entity.properties?.style?.getValue() as StyleSpec | undefined
     if (!style) continue

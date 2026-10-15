@@ -6,8 +6,15 @@
  * reading. Entries mirror `STYLE_FOR_KIND` in `backend/app/services/ai_plan.py`
  * — if you change one, change the other, there is no runtime check.
  *
- * Hidden until the active plan has at least one intervention: an empty baseline
- * doesn't need chrome explaining what isn't drawn.
+ * A 2.5D block is a **depiction, not a measurement** (DESIGN §2.4): the
+ * extrusion is a legibility device, so each row says what its height *means*
+ * ("14 m · structure", "6 m · canopy", "1.5 m · depression") rather than
+ * implying a surveyed figure. While a confirm gate is open the legend also
+ * gains a `Draft (unconfirmed)` row, so the translucent dashed blocks on screen
+ * are named rather than left to be mistaken for placed features.
+ *
+ * Hidden until the active plan has at least one intervention, or a proposal
+ * preview is on screen: empty chrome explaining what isn't drawn is noise.
  */
 import Box from '@mui/material/Box'
 import Stack from '@mui/material/Stack'
@@ -21,21 +28,26 @@ interface LegendEntry {
   label: string
   color: string
   heightM: number
+  /** What the extrusion depicts — a structure, a canopy, a depression, a surface. */
+  extrusionMeaning: string
 }
 
 const ENTRIES: LegendEntry[] = [
-  { kind: 'water_reservoir', label: 'Reservoir', color: '#1f6feb', heightM: 14 },
-  { kind: 'green_space', label: 'Green space', color: '#2ea043', heightM: 6 },
-  { kind: 'permeable_paving', label: 'Permeable paving', color: '#8957e5', heightM: 2 },
-  { kind: 'drainage', label: 'Drainage', color: '#e3b341', heightM: 3 },
-  { kind: 'road', label: 'Road', color: '#6e7681', heightM: 2 },
+  { kind: 'water_reservoir', label: 'Reservoir', color: '#1f6feb', heightM: 14, extrusionMeaning: 'structure' },
+  { kind: 'green_space', label: 'Green space', color: '#2ea043', heightM: 6, extrusionMeaning: 'canopy' },
+  { kind: 'permeable_paving', label: 'Permeable paving', color: '#8957e5', heightM: 2, extrusionMeaning: 'surface' },
+  { kind: 'drainage', label: 'Drainage', color: '#e3b341', heightM: 3, extrusionMeaning: 'structure' },
+  { kind: 'road', label: 'Road', color: '#6e7681', heightM: 2, extrusionMeaning: 'surface' },
 ]
 
 export default function InterventionLegend() {
   const show = useSceneStore((s) => s.layers.interventions)
   const features = usePlanStore((s) => s.interventions.features)
+  const proposals = usePlanStore((s) => s.proposals)
 
-  if (!show || features.length === 0) return null
+  const showPlaced = show && features.length > 0
+  const showDraft = proposals.length > 0
+  if (!showPlaced && !showDraft) return null
 
   return (
     <Box
@@ -82,10 +94,36 @@ export default function InterventionLegend() {
               className="hud-mono"
               sx={{ fontSize: 9, lineHeight: 1.25, color: 'text.secondary' }}
             >
-              {e.heightM} m
+              {e.heightM} m · {e.extrusionMeaning}
             </Typography>
           </Stack>
         ))}
+        {showDraft && (
+          <Stack direction="row" spacing={0.75} alignItems="center">
+            <Box
+              sx={{
+                width: 10,
+                height: 10,
+                borderRadius: '2px',
+                flexShrink: 0,
+                border: '1px dashed',
+                borderColor: 'text.secondary',
+                backgroundColor: 'rgba(255,255,255,0.08)',
+              }}
+            />
+            <Typography
+              sx={{ fontSize: 10, lineHeight: 1.25, flexGrow: 1, color: 'text.primary' }}
+            >
+              Draft (unconfirmed)
+            </Typography>
+            <Typography
+              className="hud-mono"
+              sx={{ fontSize: 9, lineHeight: 1.25, color: 'text.secondary' }}
+            >
+              40% · dashed
+            </Typography>
+          </Stack>
+        )}
       </Stack>
     </Box>
   )

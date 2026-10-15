@@ -6,7 +6,7 @@
  */
 import { create } from 'zustand'
 
-import { listInterventions, listPlans } from '@/api/planApi'
+import { listInterventions, listPlans, type InterventionProposal } from '@/api/planApi'
 import { errorMessage } from '@/api/client'
 import type { FeatureCollection, Plan } from '@/api/types'
 
@@ -24,12 +24,26 @@ export interface PlanState {
    * the catalog could only ever offer "one active per run".
    */
   selectedPlanIds: string[]
+  /**
+   * Unpersisted AI proposals, held only between the confirm gate opening and the
+   * user's Apply/Dismiss (DESIGN §2.4).
+   *
+   * The 3D viewer draws these as draft blocks (translucent + dashed); nothing
+   * here is scored or persisted until `applyAiPlan` succeeds. Keeping them in
+   * the store rather than in `ChatPanel` message state is what lets the viewer
+   * render a draft without the chat having to reach into the scene.
+   */
+  proposals: InterventionProposal[]
   loading: boolean
   error: string | null
 
   load: (sceneId: string) => Promise<void>
   selectPlan: (planId: string) => Promise<void>
   setSelectedPlanIds: (planIds: string[]) => void
+  /** Replace the draft set; the viewer mounts/destroys the preview layer from it. */
+  setProposals: (proposals: InterventionProposal[]) => void
+  /** Drop the draft set, so a dismissed proposal disappears from the scene. */
+  clearProposals: () => void
   /**
    * Re-fetch the plan list *without* changing the selection.
    *
@@ -51,10 +65,15 @@ export const usePlanStore = create<PlanState>((set, get) => ({
   activePlanId: null,
   selectedPlanIds: [],
   interventions: EMPTY,
+  proposals: [],
   loading: false,
   error: null,
 
   setSelectedPlanIds: (planIds) => set({ selectedPlanIds: planIds }),
+
+  setProposals: (proposals) => set({ proposals }),
+
+  clearProposals: () => set({ proposals: [] }),
 
   load: async (sceneId) => {
     set({ loading: true, error: null })

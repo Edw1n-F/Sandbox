@@ -95,6 +95,16 @@ class AnswerCard(BaseModel):
         description="When intent='intervention', the model's normalised English "
                     "instruction (type + region only) fed to ai-plan. None otherwise.",
     )
+    # Design §2.5: routing authority is the deterministic classifier in
+    # `agent/intent.py`, which runs *after* the card is parsed and can only raise
+    # the intent. This field records which rule decided it, so the routing is
+    # auditable and a test can assert why a turn went where it did. Code-owned:
+    # a value the model writes is overwritten by `classify_turn`.
+    intent_source: Literal["parser", "model", "both"] = Field(
+        "parser",
+        description="Which rule decided `intent`: 'parser' (the deterministic "
+                    "classifier), 'model' (the model alone), or 'both' (they agreed).",
+    )
 
 
 #: The JSON schema handed to the provider. Mirrors the model above, minus the
@@ -140,6 +150,9 @@ ANSWER_SCHEMA: dict[str, Any] = {
         # pydantic model, so a parser/template answer costs the client nothing.
         "intent": {"type": "string", "enum": ["question", "intervention", "ambiguous"]},
         "intent_hint": {"type": "string", "maxLength": 120},
+        # Code-owned, and present so the contract is complete rather than
+        # implying the model may set it. `classify_turn` overwrites any value.
+        "intent_source": {"type": "string", "enum": ["parser", "model", "both"]},
     },
     "required": ["title", "sentence", "confidence"],
 }
