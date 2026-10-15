@@ -444,6 +444,11 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
                 "Explain the run that has just completed.", checkable))],
             schema=ANSWER_SCHEMA,
             max_tokens=1500,
+            # Bounded, because the numbers above are already computed and the
+            # caller is waiting on this call before it can see them. A card that
+            # takes longer than the deadline is not an error -- it falls through
+            # to the code-assembled template below, labelled like any other.
+            deadline_s=llm.CARD_DEADLINE_S,
         )
         # `complete_json` walks the model chain past empty replies and can still
         # return one: a reasoning model that spends its whole budget on the hidden

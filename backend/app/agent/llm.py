@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Iterator, Literal, Protocol, runtime_checkable
+from typing import Any, Iterator, Literal, Protocol, runtime_checkable
 
 from app.config import settings
 
@@ -66,6 +66,25 @@ def json_contract() -> str:
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 TIMEOUT_S = 90
+
+# A ceiling on the *whole* answer-card call, not on one HTTP request.
+#
+# `TIMEOUT_S` bounds a single request, and `complete_json` walks a fallback chain,
+# so a run whose provider is slow or throttled can spend `TIMEOUT_S` once per model
+# in the chain. Measured here on a free tier: 60 s for one good card, and the
+# chain is what turns a slow provider into a four-minute stall.
+#
+# That matters because of who is waiting. The run's card is an *optional* extra --
+# `run_service` already falls back to the code-assembled template and labels it
+# `source: "template"` -- but the water and heat numbers are computed before the
+# call and cannot reach the caller until it returns. So a slow card does not
+# degrade the explanation, it blocks the whole simulation, and the browser's own
+# request timeout then kills a run that had already succeeded.
+#
+# 45 s is chosen to sit under the client's 60 s with room for the rest of the
+# response. Exceeding it is not an error: it returns no card, and the run reports
+# the labelled template exactly as it does when no provider is configured.
+CARD_DEADLINE_S = 45.0
 
 Effort = Literal["low", "medium", "high"]
 
@@ -485,9 +504,54 @@ def complete_json(
     messages: list[Message],
     schema: dict,
     max_tokens: int = 900,
+    deadline_s: float | None = None,
 ) -> Turn:
-    """One structured call. Raises ProviderUnavailable / LLMError."""
-    turn = get_provider().complete_json(system, messages, schema, max_tokens)
+    """One structured call. Raises ProviderUnavailable / LLMError.
+
+    ``deadline_s`` caps the call in wall-clock time and is enforced by running it
+    on a worker thread: a socket timeout can only bound one request, and this
+    bounds the whole provider chain, which is the number a caller waiting on an
+    HTTP response actually cares about (see :data:`CARD_DEADLINE_S`). A call that
+    overruns raises :class:`LLMError`, so every existing caller's failure path --
+    including the run's template fallback -- handles it without a new branch.
+
+    Leaving ``deadline_s`` as None keeps the old behaviour: bounded only by
+    ``TIMEOUT_S`` per request.
+    """
+    if deadline_s is None:
+        turn = get_provider().complete_json(system, messages, schema, max_tokens)
+    else:
+        import threading  # noqa: PLC0415
+
+        # A daemon thread rather than a ThreadPoolExecutor, deliberately. An
+        # executor's context manager joins its worker on exit, so a `with` block
+        # would wait out the very call the deadline exists to stop -- measured:
+        # a 3 s deadline returned after 27.6 s. A daemon thread lets the caller
+        # return on time, and being a daemon it cannot hold up interpreter exit.
+        #
+        # The worker is not cancelled: Python cannot interrupt a blocked socket
+        # read, so it finishes and its result is discarded. That is the cost of
+        # bounding the caller, and the worker is itself bounded by TIMEOUT_S.
+        box: dict[str, Any] = {}
+
+        def _run() -> None:
+            try:
+                box["turn"] = get_provider().complete_json(
+                    system, messages, schema, max_tokens)
+            except BaseException as exc:  # noqa: BLE001 - re-raised in the caller
+                box["error"] = exc
+
+        worker = threading.Thread(target=_run, name="llm-complete-json", daemon=True)
+        worker.start()
+        worker.join(deadline_s)
+        if worker.is_alive():
+            raise LLMError(
+                f"the card call exceeded its {deadline_s:.0f} s deadline",
+                retryable=False,
+            )
+        if "error" in box:
+            raise box["error"]
+        turn = box["turn"]
     # A model that answers in prose around the JSON still parses: take the
     # outermost {...} rather than failing the whole turn.
     if not turn.text.strip().startswith("{"):

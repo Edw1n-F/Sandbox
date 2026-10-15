@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -614,6 +615,45 @@ def test_the_run_explanation_reports_an_empty_model_reply() -> None:
     assert card is None, card
     assert source == "template", source
     assert "returned nothing" in reason, reason
+
+
+def test_a_slow_card_call_is_cut_off_and_falls_back_to_the_template() -> None:
+    """A card that outruns the deadline must not hold the run open.
+
+    The run's water and heat numbers are computed before this call and cannot
+    reach the caller until it returns, so a slow provider blocks the whole
+    simulation -- which is what made a run that had already succeeded look like a
+    timeout in the browser. The deadline turns that into the same labelled
+    template every other provider failure produces.
+    """
+    from app.services import run_service
+    from app.agent import llm as _llm
+
+    class SlowProvider:
+        name = "slow"
+
+        def complete_json(self, system, messages, schema, max_tokens):  # noqa: ANN001
+            time.sleep(5.0)
+            return _llm.Turn(text="{}", usage=_llm.Usage(0, 0))
+
+    fake = SlowProvider()
+    with llm.use_provider(fake):
+        # Patch the module-level budget rather than sleeping for the real 45 s.
+        original = _llm.CARD_DEADLINE_S
+        _llm.CARD_DEADLINE_S = 0.4
+        try:
+            started = time.monotonic()
+            card, source, reason = run_service._llm_explanation(
+                _run_stats(), 50.0, 30.0, [], [], _data_quality())
+            elapsed = time.monotonic() - started
+        finally:
+            _llm.CARD_DEADLINE_S = original
+
+    assert card is None, card
+    assert source == "template", source
+    assert "deadline" in reason, reason
+    # The point of the deadline: the caller returns without waiting the call out.
+    assert elapsed < 2.0, f"the run waited {elapsed:.1f}s for a 0.4s deadline"
 
 
 def test_a_model_written_run_card_still_passes_through_the_number_check() -> None:
