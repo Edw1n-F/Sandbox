@@ -800,6 +800,74 @@ def test_overlap_guard_refuses_the_second_and_the_accepted_stay_disjoint() -> No
         "cell, so this test would pass without exercising the guard")
 
 
+def test_apply_accepts_the_provider_string_propose_actually_returns() -> None:
+    """The apply endpoint must accept the provider the propose endpoint emits.
+
+    The frontend echoes `AIPlanResult.provider` straight back into
+    `AIPlanApplyRequest.provider` (`ChatPanel.tsx:427`, "so the audit trail
+    matches what the user saw"). Until this was measured against a live Ollama
+    run, `AIPlanApplyRequest.provider` carried the *propose* endpoint's pattern
+    `^(auto|llm|heuristic)$` -- but `generate_proposals` emits a wider set:
+    `openai-compatible` for any /chat/completions endpoint, `anthropic`,
+    `unknown`, and after a fallback a composite such as
+    "heuristic (after openai-compatible returned nothing)" (`ai_plan.py:2287`).
+
+    The consequence was total and invisible from a heuristic-only run: **every
+    apply whose proposal came from a real model failed 422**, because the client
+    echoed back exactly the string the server had just handed it. Only the
+    heuristic fallback could ever be confirmed.
+
+    So this test closes the loop the way the product does: propose, take the
+    `provider` from that response verbatim, and apply with it. It asserts 200,
+    which is the only thing that proves the echo is accepted.
+    """
+    scene_id = _grounded_scene()
+    if scene_id is None:
+        raise AssertionError(
+            "no grounded scene: the propose/apply provider echo cannot be "
+            "observed, and this test must not report a pass it did not earn")
+
+    body = _propose(scene_id, "add a water reservoir in the north")
+    echoed = body.get("provider")
+    assert echoed, "the propose response carried no provider to echo"
+    assert body.get("proposals"), "no proposal to apply"
+
+    resp = client.post(f"/api/scenes/{scene_id}/ai-plan/apply", json={
+        "instruction": "add a water reservoir in the north",
+        "provider": echoed,
+        "proposals": body["proposals"],
+    })
+    assert resp.status_code == 200, (
+        f"apply rejected the provider the propose endpoint returned "
+        f"({echoed!r}): {resp.text[:300]}")
+
+
+def test_apply_accepts_every_provider_string_the_planner_can_emit() -> None:
+    """The same guarantee, without needing a live model.
+
+    The test above echoes whatever provider answered *this* run, which is
+    `heuristic` whenever no LLM is configured -- a value the old pattern
+    happened to allow. So it would have passed with the bug present. This one
+    asserts the schema directly against the full set `generate_proposals` can
+    emit, so it bites in CI where no provider is live.
+
+    Every value here is one the code actually produces, not a hypothetical:
+    `openai-compatible` is the class `name` on `OpenAICompatibleProvider`
+    (`ai_plan.py:1785`), `heuristic` is the fallback, and the composite is the
+    post-fallback label built at `ai_plan.py:2287`.
+    """
+    from app.schemas.plan import AIPlanApplyRequest
+
+    for value in ("auto", "llm", "heuristic", "openai-compatible", "anthropic",
+                  "unknown",
+                  "heuristic (after openai-compatible returned nothing)"):
+        AIPlanApplyRequest.model_validate({
+            "instruction": "add a water reservoir in the north",
+            "provider": value,
+            "proposals": [],
+        })
+
+
 def test_rejected_refusals_reach_the_wire() -> None:
     """A refusal the client cannot see is a silent outage.
 

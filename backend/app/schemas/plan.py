@@ -166,10 +166,27 @@ class AIPlanApplyRequest(WireModel):
     The client echoes the accepted proposals (and the instruction/provider so
     the audit trail matches what the user saw). No server-held list bridges
     the two calls: the frontend owns the proposals until a user accepts.
+
+    ``provider`` here is an **echo, not a control input**, and that distinction
+    is the whole reason it is a free-form string. ``AIPlanRequest.provider``
+    carries the pattern ``^(auto|llm|heuristic)$`` because there the client is
+    *choosing* a provider. Here it is *reporting* which one answered, and the
+    values ``generate_proposals`` actually emits are wider than that set:
+    ``openai-compatible`` (any /chat/completions endpoint, including Ollama),
+    ``anthropic``, ``heuristic``, ``unknown`` -- and, after a fallback, a
+    composite such as ``"heuristic (after openai-compatible returned nothing)"``
+    (``ai_plan.py:2287``).
+
+    This field carried that same pattern until it was measured against a live
+    Ollama run, and the consequence was total: **every apply whose proposal came
+    from a real model failed 422**, because the frontend echoed back exactly the
+    provider string the server had just handed it. Only the heuristic fallback
+    could be confirmed at all. Rejecting a value the server itself emitted turns
+    the audit trail into a trap, so the echo is bounded by length only.
     """
 
     instruction: str = Field(min_length=1, max_length=2000)
-    provider: str = Field(default="auto", pattern="^(auto|llm|heuristic)$")
+    provider: str = Field(default="auto", max_length=200)
     proposals: list[InterventionProposal] = Field(default_factory=list)
     grounding_notes: list[str] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
