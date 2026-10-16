@@ -23,6 +23,12 @@ the same class of defect (an instruction the executor cannot honour, answered by
 a different mechanism. §3B.1 shows the mechanism is **not** an unmatched noun falling back — it is a **forced
 tool with a closed enum**, and the substitution is *the only response the schema permits*.
 
+**§9 was added the same day** after the owner's fourth report — *"Changes to the paving is not visible"* —
+and it is part of this ruling rather than a neighbour: Feature A's preview renders through `applyStyle`, and
+**four of the six intervention kinds are extruded below the terrain and never visible**. A preview of an
+invisible layer is unverifiable. §9 becomes **T00** and blocks T02. Its idiom is verified by *executing* the
+installed Cesium's own resolution functions, not from memory (§9.1).
+
 ---
 
 ## 0. AUDIT of `cbd4cef` — what already exists, measured
@@ -821,3 +827,203 @@ if any of the 14 needs an edit, the change is wrong (§3B.5).
    changing it *now*, because the guard makes it unreachable for unsupported requests. But any future entry
    point that reaches `route_tools` **without** passing through the `/ai-plan` guard would re-expose C1+C2
    instantly. The guard must live in the shared path, not only in the router, if a second caller appears.
+
+---
+
+## 9. RULING — four of six kinds are buried, and the shared style function is why
+
+*(Added 19 Oct 2026 on the lead's measured report and the owner's console paste. This is in Phase 4's scope
+because Feature A's preview renders through the function this ruling changes.)*
+
+The owner: *"Changes to the paving is not visible."* Reported console line, verbatim:
+
+```
+cesium.js: Entity corridor, ellipse, polygon or rectangle with heightReference must also
+           have a defined height.  heightReference will be ignored
+```
+
+### 9.1 What I verified, and how — executed, not remembered
+
+I was asked not to rule from memory, so I did two things: read the installed Cesium's own resolution code, and
+**execute it**.
+
+**Cesium 1.146.0 is installed.** Node can load it, and **`GroundGeometryUpdater` is exported** — so its three
+pure resolution functions can be called directly. This is the real implementation, not a paraphrase:
+
+```
+$ node -e 'const C=require("cesium"); const G=C.GroundGeometryUpdater, H=C.HeightReference; ...'
+idiom                                  resolved.height  resolved.extrudedHeight  GeometryOffsetAttribute
+CURRENT extruded (h=undef ref=NONE  eh=2 eref=NONE)     undefined   2         undefined
+CURRENT plain    (h=undef ref=CLAMP eh=undef)           undefined   undefined undefined
+A  both CLAMP    (h=0 ref=CLAMP    eh=2 eref=CLAMP)     0           "clamp"   TOP
+B  both RELATIVE (h=0 ref=RELATIVE eh=2 eref=RELATIVE)  0           2         ALL
+T1 ref=REL only  (h=0 ref=RELATIVE eh=2 eref=NONE)      0           2         TOP
+T2 eref=REL only (h=0 ref=NONE     eh=2 eref=RELATIVE)  0           2         TOP
+```
+
+Read against the source that produced them (`getGeometryHeight`, `getGeometryExtrudedHeight`,
+`computeGeometryOffsetAttribute`) the facts are these:
+
+- **When `height` is not defined, `getGeometryHeight` emits the warning and returns `undefined`** — and then
+  `computeGeometryOffsetAttribute` returns `undefined`, i.e. **no offset is applied at all**. The
+  `heightReference` is not merely "ignored"; the geometry is built with no base height, which is absolute 0.
+  **That is the burial, and it is the exact branch the owner's console line comes from.**
+- With `CLAMP_TO_GROUND`, a defined `height` resolves to **`0`** and the real lift is deferred to
+  `TerrainOffsetProperty`.
+- **Only setting BOTH `heightReference` and `extrudedHeightReference` to `RELATIVE_TO_GROUND` yields
+  `GeometryOffsetAttribute.ALL`.** Setting just one gives `TOP` (traps T1/T2) — so the natural half-fix, adding
+  `heightReference` alone, does **not** put the base on the ground.
+
+**Terrain, measured** (`load_grids().elevation_5m`): **min 3.41 m, max 17.29 m, mean 10.45 m** — the lead's
+figures reproduce exactly. Buried fraction per kind:
+
+| kind | `extrusionHeight` | cells whose ground is **above** the block's top |
+|---|---|---|
+| `permeable_paving` | 2.0 m | **100.0 %** |
+| `road` | 2.0 m | **100.0 %** |
+| `flood_storage` | 1.5 m | **100.0 %** |
+| `drainage` | 3.0 m | **100.0 %** |
+| `green_space` | 6.0 m | 98.2 % |
+| `water_reservoir` | 14.0 m | 2.2 % |
+
+**Four kinds are buried in every cell; a fifth in 98 %. The reservoir is the only one that reliably shows** —
+precisely what the owner sees, and why this is not a paving-specific defect.
+
+### 9.2 RULING: use the idiom this codebase already proved, not the Cesium-native one
+
+**Sample the DEM per vertex, take the minimum, and set absolute heights — with no `heightReference` at all.**
+
+```ts
+const base = minOverRingVertices(sampleDemHeightClamped(lon, lat))   // metres, absolute
+polygon.height = base
+if (N) polygon.extrudedHeight = base + N
+// and set NO heightReference on either
+```
+
+**This is not a new idiom — it is the one already working in this repository.** `footprintLayer.ts:63-83`
+places all 396 buildings this way, with a comment explaining why. Reusing it is the point: a second answer to
+"stand a polygon on this terrain" is a second thing to drift.
+
+Three independent reasons, all verified, and two of them were **already recorded in this codebase**:
+
+1. **The Cesium-native path discards our material.** `demProvider.ts:148-158` records it: Cesium routes clamped
+   geometry through its ground-primitive path, *"which forces `PerInstanceColorAppearance` and so discards any
+   custom material — silently deleting the tactical view's entire reason for existing."* `applyStyle` colours
+   every intervention with a `ColorMaterialProperty`, and **`STYLE_FOR_KIND` colour is how the legend tells
+   flood storage from tree planting.** A ground primitive would delete the legend. Decisive on its own.
+2. **The native path is unstable under lazy tiles.** Same comment: `globe.getHeight()` *"returns `undefined`
+   until the containing tile has loaded, and these tiles arrive lazily with the camera, so base heights would
+   keep moving underneath the model."*
+3. **The native offset is uniform, sampled at ONE point.** Read out of Cesium: `TerrainOffsetProperty` takes a
+   single `positionProperty` and holds one `_terrainHeight`, and `GroundGeometryUpdater` passes it
+   `this._computeCenter` — **one centre position**, applied across the whole geometry. On 3.41–17.29 m of
+   relief a polygon's corners float or sink depending on where its centre lands. The footprint layer samples
+   every outer-ring vertex and takes the **minimum** so *"sloped sites keep their uphill corner at ground level
+   rather than the floor floating over the downhill one."*
+
+**Why the minimum:** a base too low is *buried*, which reads as a block emerging from a slope; a base too high
+*floats*, which reads as a bug. Minimum is also deterministic and already the convention here.
+
+**A per-vertex drape is not an option at this layer** — it is only reachable through the ground-primitive path,
+which reason 1 rules out. So the trade-off is stated rather than engineered around: **on steep relief a
+polygon's uphill portion is partly buried.** For a depiction that is the correct direction to err.
+
+**Both branches change.** The extruded branch is the reported one, but the non-extruded branch is also broken
+(`height` undefined → the `CLAMP_TO_GROUND` is ignored → a flat patch at absolute 0 → buried). It is not dead
+code either: `_feature`'s fallback style for an unrecognised kind is `{"color": "#8250df", "opacity": 0.6}`
+with **no** `extrusionHeight`. Both branches get the sampled base.
+
+### 9.3 `STYLE_FOR_KIND.extrusionHeight` means **metres above the ground**
+
+**Relative — and no value changes; only the base moves.** The existing comment (*"permeable paving, drainage
+and road are drawn as 2.5D slabs so the legend can read them"*) confirms relative was always the intent, and
+the fix implements exactly that: `N` metres above the ground beneath it, where before it was `N` metres above
+the ellipsoid.
+
+One honest note the legend should carry: for `permeable_paving` and `road` a 2 m slab is a **legibility
+convention, not a claim about built form** — real paving is a surface, not a 2 m platform. The sampled base
+makes the blocks *visible*, not *true*.
+
+### 9.4 The comment that must be replaced
+
+`interventionLayer.ts:146-148` reads:
+
+> *"Extrusion is set from absolute metres, so the polygon must NOT also be clamped to ground — otherwise the
+> two offsets compound and the block floats."*
+
+**Both clauses are wrong, and that belief produced this bug.** The two offsets cannot compound (`heightReference`
+is per-geometry and is discarded entirely when `height` is undefined), and "absolute metres" is the confusion —
+the style's metres were meant to be *above ground* and were being applied *above the ellipsoid*. It must be
+replaced with a comment stating what Cesium actually does and why we sample instead. A wrong comment here
+regenerates the bug.
+
+### 9.5 RULING (test): a vitest unit test, and it needs no browser
+
+**Verified rather than assumed** — in plain Node, no WebGL, no browser:
+
+```
+$ node -e 'const C=require("cesium"); const ds=new C.GeoJsonDataSource(); ds.load(fc,{clampToGround:true})...'
+entities: 1 | polygon present: true
+BEFORE applyStyle: height= undefined  extrudedHeight= undefined  heightReference= undefined
+```
+
+**`GeoJsonDataSource.load()` builds real entities outside a viewer**, so `applyStyle` can be driven from
+vitest. Playwright is **not** needed and this does not wait on it.
+
+1. **`interventionLayer.test.ts` — the regression guard.** For each kind in `STYLE_FOR_KIND`: load a
+   one-feature collection, call `applyStyle`, and assert on the entity:
+   - **`polygon.height` is defined** — the assertion that fails today, because the bug *is* a missing `height`;
+   - `polygon.height` **≥ the minimum ground under that polygon**, sampled in the test through
+     `sampleDemHeightClamped`, independently of the implementation;
+   - where `extrusionHeight` is set, `polygon.extrudedHeight === polygon.height + N`;
+   - **`polygon.heightReference` is never set to a non-`NONE` value** — the invariant that keeps the console
+     warning from returning and keeps us off the ground-primitive path;
+   - the **fallback style** (no `extrusionHeight`) also gets a base, covering §9.2's second branch.
+2. **`interventionGround.test.ts` — the Cesium-contract canary.** Call
+   `GroundGeometryUpdater.getGeometryHeight` / `getGeometryExtrudedHeight` /
+   `computeGeometryOffsetAttribute` with our parameters and assert `resolved.height` is **not `undefined`**.
+   Cheap protection against a Cesium upgrade changing semantics under us — a failure mode that is otherwise
+   *literally a one-time console warning* no test ever sees.
+
+**Not proposed:** a screenshot or pixel check. Both need a renderer, and the entity-property assertions catch
+this bug earlier and more precisely. A browser harness is a different project (Playwright installation) and
+this ruling does not depend on it.
+
+### 9.6 Ordering: it becomes **T00**, and it blocks T02
+
+`applyStyle` is exported and shared (`interventionLayer.ts:114-117`); `proposalLayer.ts` styles drafts through
+it, differing only in the pre-transform (`opacity × 0.5`, `extrusionHeight × 0.4`). So a buried confirmed block
+has an even more buried draft — a 2 m paving draft is **0.8 m**. **Feature A's preview would render nothing and
+be unverifiable in a browser**, which makes this a prerequisite, not a neighbour.
+
+- **T00 — ground every intervention polygon (this section).** Files: `interventionLayer.ts` (`applyStyle`, both
+  branches, and the `:146-148` comment) and `demProvider.ts` (extract the shared
+  `minGroundHeightOverRing(ring)` that `footprintLayer.ts:63-83` hand-rolls), plus the two new tests.
+  **Blocks T02.**
+- Because the base is computed inside `applyStyle`, **`proposalLayer.ts` needs no change** — the draft inherits
+  the corrected base. That is the payoff of the shared function and why the fix belongs there, not in callers.
+- **T02 gains one acceptance condition:** the preview's draft blocks must be visible — the feature is only
+  verifiable after T00.
+
+**Conflict with `feature/region-selection`: none.** This touches `frontend/src/view/**` and `demProvider.ts`
+only — no `ai_plan.py`, no proposal selection. Parallel-safe with the region work and with T03.
+
+### 9.7 Residual risks added by §9
+
+13. **Extracting the shared ring sampler touches a layer that currently works.** `footprintLayer.ts` places 396
+   buildings correctly today. The extraction must be behaviour-preserving, guarded by a test asserting the
+   helper returns the **same base** as the current inline loop for a real building ring. If that guard is
+   awkward, leave `footprintLayer` alone and accept two callers — a slightly worse codebase beats a regression
+   in the only layer that currently works.
+14. **`whenDemReady()` is load-bearing for the fix and `addInterventions` does not await it.**
+   `SandboxViewer.tsx` awaits it for project models (`:915`, `:1031`) but the interventions effect (`:829-852`)
+   does not. A layer added before the DEM decodes would sample `null`, fall back to 0, and be buried again —
+   **the same bug, intermittently, which is worse than reliably.** T00 must await `whenDemReady()` before
+   applying base heights, or re-apply on resolve, and the test must cover the pre-DEM case: the fallback must
+   be a *stated* fallback, not a silent 0.
+15. **The style heights are a depiction and the legend does not yet say so** (§9.3). Cheap to fix there;
+   flagged rather than assumed.
+16. **`clampToGround: true` is passed at `interventionLayer.ts:58` and `proposalLayer.ts:148`.** Empirically it
+   does **not** set `heightReference` for polygons in 1.146 (the run above shows `heightReference === undefined`
+   after a load with that option), so it is not a second source of the warning, and I have not ruled it
+   changed. Noted so a future reader does not assume it is inert for every geometry type.
