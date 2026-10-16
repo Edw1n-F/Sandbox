@@ -47,11 +47,15 @@ longer spawns the station. Those were one flag, and the fusion was the bug.
 
 ### What the two unbuilt stages mean for a demo
 
-The catalog in the UI (`ProjectCatalog.tsx`) is a **placeholder**: four hardcoded
-projects whose phases are English sentences piped through `ai_plan` on every
-click. It is not project data, placements are re-derived per click and therefore
-non-deterministic, and a rate-limited provider makes the click a no-op. Do not
-demo it as a working feature, and do not read it as evidence that Stage 3 exists.
+The catalog in the UI (`ProjectCatalog.tsx`) was **retired on 16 Oct 2026**: its
+four derived placeholder parcels are gone, along with `data/projects.json`,
+`scripts/make_project_catalog.py`, `app/services/project_catalog.py` and
+`GET /scenes/{id}/project-catalog`. The panel now lists only the **declared**
+projects seeded from `backend/data/projects/<id>.json` — the MTR station and HSK
+Park. A derived parcel beside a declared project read as a plan that actually
+exists, which is why it went. The suggester still derives candidate sites
+(`app/services/siting.py`, `GET /scenes/{id}/suggestions`); that is a different
+step and it stays.
 
 The natural-language path is **massing-only**. Measured:
 
@@ -280,12 +284,12 @@ Each item is self-contained. Ordered by what blocks Stage 3 first.
 
 **Blocks Stage 3**
 
-1. **The project catalog is a placeholder.** `ProjectCatalog.tsx` hardcodes four
-   projects whose phases are English sentences piped through `ai_plan` on click.
-   No fixed footprint, no land-cover conversion, no stated assumptions, and
-   placement is re-derived per click — so runs are not reproducible, which a
-   before/after demo requires. Close it with `backend/data/projects.json`:
-   footprint rings, the conversion each implies, source/date/confidence per field.
+1. **Two declared projects exist; the target is four.** `backend/data/projects/`
+   holds `mtr-station.json` and `park.json`, each with a real GLB and a footprint,
+   and both score distinctly in a run and compose when toggled together. What is
+   missing is projects 3 and 4 — added as data, no code change. One caveat: a
+   project whose GLB or footprint is not on disk is silently omitted rather than
+   reported, so an incomplete project disappears instead of failing.
 
 **Blocks a live link**
 

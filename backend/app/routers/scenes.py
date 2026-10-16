@@ -94,35 +94,6 @@ def get_suggestions(scene_id: str, rainfall_mm: float = 450.0,
                            max_per_axis=max(1, min(int(max_per_axis), 10)))
 
 
-@router.get("/scenes/{scene_id}/project-catalog")
-def get_project_catalog(scene_id: str) -> dict:
-    """GET /api/scenes/{sceneId}/project-catalog -- the fixed project catalog.
-
-    The projects the intervention loop offers, with the footprints already
-    fixed and the provenance already attached. The frontend renders these
-    instead of templating natural-language sentences, so toggling a phase
-    twice produces the same geometry twice.
-
-    Scene-scoped only for consistency with every other route the frontend
-    calls: the catalog describes the study area, and the scene is what pins
-    this request to one. A scene that does not exist is a 404, like anywhere
-    else -- the catalog does not conjure a place to put projects in.
-    """
-    from app.db import read_doc, scene_path
-    from app.services import project_catalog
-
-    if read_doc(scene_path(scene_id)) is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
-                            detail="scene not found")
-    try:
-        return project_catalog.load_catalog()
-    except project_catalog.CatalogError as exc:
-        # 503, not 500: the service is fine, its data is not. The message says
-        # which script regenerates it.
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail=str(exc)) from exc
-
-
 @router.post("/scenes/{scene_id}/pins")
 def pin_intervention(scene_id: str, payload: dict) -> dict:
     """POST /api/scenes/{sceneId}/pins -- pin one feature into the staged scenario.

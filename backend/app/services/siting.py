@@ -1,16 +1,17 @@
 """Candidate sites for interventions, from the study area's own rasters.
 
-One definition of "where a project could go", shared by the two things that
-need it:
+One definition of "where a project could go", shared by the things that need
+it: ``app/services/suggest.py``, which ranks the candidate sites for the
+intervention loop's suggest step, and ``app/services/proposal_constraints.py``,
+which uses the size floor and the building exclusion.
 
-- ``scripts/make_project_catalog.py``, which fixes a handful of sites into a
-  checked-in catalog so a before/after comparison is reproducible;
-- ``app/services/suggest.py``, which ranks *all* of them for the intervention
-  loop's suggest step.
+A fixed catalog generated from these sites existed until 16 Oct 2026, when it
+was retired once two declared projects (MTR station, HSK Park) made derived
+placeholder parcels unnecessary. The siting rule it used is unchanged and is
+what the suggester still applies.
 
-If those two had their own siting rules they would drift, and the first symptom
-would be a suggestion that cannot be found in the catalog -- or worse, a
-catalog that quietly disagrees with what the suggester says is available.
+If two callers had their own siting rules they would drift, and the first
+symptom would be a suggestion that cannot be reproduced run to run.
 
 ## What a site is
 
