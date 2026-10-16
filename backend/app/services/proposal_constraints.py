@@ -16,7 +16,9 @@ in a proposal is re-derived here from the rasters.
   **rasterised** through ``sandbox_model._polygon_cells``. There is no second
   point-in-polygon test in this file.
 - the cell map is ``Grids.cell_of`` -- no lon/lat is rounded anywhere else.
-- the building authority is ``_overlay_common.building_footprint_mask``.
+- the building authority is :func:`building_mask` -- the UNION of the
+  polygon-exact footprint raster and the legacy bounding-box one. See its
+  docstring for why the union and not either side alone.
 - the size floor is ``siting.MIN_SITE_CELLS`` (imported, never re-typed); the
   caps are ``sandbox_model.MAX_INTERVENTION_COVERAGE`` /
   ``MAX_TOTAL_COVERAGE`` (imported, never re-typed).
@@ -100,12 +102,86 @@ _STORAGE_CLASS_FOR_KIND: dict[str, str] = {
 # --------------------------------------------------------------------------- #
 
 
+def _polygon_footprint_mask(ov: Any) -> np.ndarray | None:
+    """The polygon-exact building raster: a cell is under a building iff a cell
+    centre falls inside one of the surveyed footprint polygons.
+
+    Rasterised through ``sandbox_model._polygon_cells`` -- the *same* function
+    the ledger uses to decide which cells an intervention converts, and the one
+    ``validate_proposal`` reads a served geometry back with. A second
+    point-in-polygon here would be a second opinion about which cells a polygon
+    covers, and two opinions is how a "no building overlap" guarantee stops
+    meaning anything.
+
+    ``design_metrics.outer_ring`` reads the ring so a ``Polygon`` and a
+    ``MultiPolygon`` arrive as one ring rather than as two nesting depths; the
+    city model genuinely contains one ``MultiPolygon`` (``bldg-0104``), and
+    reading its coordinates blindly drops the building instead of excluding it.
+
+    ``None`` when there is no city model, for the same reason
+    :func:`building_mask` returns ``None``.
+    """
+    import json
+
+    from app.config import settings
+    from app.services.design_metrics import outer_ring
+
+    path = settings.rasters_dir / "buildings_hsk.json"
+    if not path.exists():
+        return None
+    try:
+        features = json.loads(path.read_text(encoding="utf-8")).get("features") or []
+    except (OSError, ValueError):
+        return None
+    if not features:
+        return None
+
+    mask = np.zeros((ov.rows, ov.cols), dtype=bool)
+    for feature in features:
+        ring = outer_ring((feature or {}).get("geometry"))
+        if not ring:
+            continue
+        # `ov` is accepted anywhere `grids` is: both carry the same bounds,
+        # rows/cols and `cell_of`, which is the whole of what `_polygon_cells`
+        # reads. Passing the overlay keeps this function free of a second load.
+        for r, c in _polygon_cells(ov, [ring]):
+            mask[int(r), int(c)] = True
+    return mask
+
+
 def building_mask(ov: Any) -> np.ndarray | None:
     """The one building authority: ``True`` where a cell is under a footprint.
 
-    Delegates to ``_overlay_common.building_footprint_mask`` -- the same mask
-    ``siting.py`` and ``placement_footprints`` use, so the exclusion is one
-    answer rather than a second opinion.
+    The **union** of two rasters over the *same* ``buildings_hsk.json``:
+
+    1. the polygon-exact mask (:func:`_polygon_footprint_mask`) -- cell centre
+       inside a footprint polygon, and
+    2. ``_overlay_common.building_footprint_mask`` -- the legacy bounding-box
+       envelope, which ``design_metrics.rasterise_height`` stamps as one
+       axis-aligned rectangle per footprint.
+
+    **Why the union and not the polygon set alone.** The gate's mask must never
+    be *looser* than the filter that produced the candidate it is checking.
+    ``ai_plan.load_grounding`` builds every candidate pool by subtracting the
+    bounding-box mask, so a polygon-only gate would be ~4,500 cells looser than
+    the pool filter -- the gate would be weaker than the proposal it is
+    auditing. The union dominates both, and the direction is the point: for a
+    "do not build on a surveyed footprint" contract, over-exclusion is a
+    smaller failure than under-exclusion.
+
+    **Why the union and not the bounding box alone.** The bounding-box raster is
+    a *massing-height* raster being used as an occupancy test, and its own
+    docstring says it is a display envelope. As an occupancy test it is wrong in
+    both directions: it claims courtyards and gaps (4,549 cells that are not
+    buildings), and -- the dangerous direction -- it *misses* real building cells
+    that fall outside every footprint's bounding box. The second failure is what
+    a proposal sitting on two surveyed building cells looked like.
+
+    ``siting.py`` and ``placement_footprints`` keep the bounding-box mask: it is
+    the right raster for a massing envelope, and widening it there would put
+    three unrelated behaviours at risk. That leaves ``siting.py``'s pool filter
+    leaking the same cells -- a real, known defect on a different path, filed
+    rather than silently fixed here.
 
     Returns ``None`` when no city model is present (``buildings_hsk.json``
     absent). The caller **must** handle that case: an all-False mask would read
@@ -114,7 +190,15 @@ def building_mask(ov: Any) -> np.ndarray | None:
     """
     from _overlay_common import building_footprint_mask
 
-    return building_footprint_mask(ov)
+    envelope = building_footprint_mask(ov)
+    if envelope is None:
+        # No city model. One authority's "no data" is the whole answer; the
+        # other cannot disagree about a file that is not there.
+        return None
+    exact = _polygon_footprint_mask(ov)
+    if exact is None:
+        return envelope
+    return envelope | exact
 
 
 # --------------------------------------------------------------------------- #
@@ -640,6 +724,17 @@ def _accepted_warning(coordinate_based: bool, clipped: int,
     else:
         parts = ["Screening proposal: geometry is the contoured cell mask of "
                  "the chosen site on the 5 m grid."]
+        # A site-based proposal is clipped too -- the gate's building authority
+        # is stricter than the pool filter that produced the site -- so the
+        # shrink has to be stated here as well. PRD US1 promises a
+        # "shrunk, N cells removed" annotation, and a user who was offered a
+        # 3,596-cell paving site and is shown 3,579 needs to be told why, not
+        # left to diff two numbers against a candidate they cannot see.
+        if clipped:
+            parts.append("The site was shrunk by %d cell(s) to exclude "
+                         "surveyed buildings, and to serve only the part of "
+                         "the remaining ground that is one contiguous polygon."
+                         % clipped)
     parts.append("Depth is a class assumption; a run will score it.")
     if not building_data:
         parts.append("BUILDING_CHECK_UNAVAILABLE: no surveyed building footprint "
@@ -788,6 +883,89 @@ def validate_proposal(grids: Any, candidate: Any, occupied: Any,
                 kind=kind,
             )
         geometry = dict(geom)
+        # --- the contour clip guard -----------------------------------------
+        #
+        # A candidate from a grounding pool arrives as a whole contoured
+        # component. The pool filter that produced it subtracts one building
+        # raster; this gate checks a stricter one, so a component can carry
+        # building cells the pool never saw. Rejecting the whole component would
+        # be correct on the predicate and useless in practice -- the largest
+        # basin loses 2 cells and the user is offered nothing at all, which is
+        # how a correctness fix turns into a dead feature.
+        #
+        # So the site path clips instead: subtract the building authority, then
+        # re-contour the survivors through `contour_ring` -- the one contour
+        # authority (D2) -- and serve *that*.
+        #
+        # This is LOAD-BEARING on the current data, not a structural guarantee
+        # for a future pool: it fires on 2 of the 9 sites offered today
+        # (the reservoir sheds 2 cells, the largest paving site 16). Both halves
+        # of this change are load-bearing for the same reason -- removing the
+        # polygon side of the building mask drops the suite to 17/18, and
+        # removing this guard drops it to 16/18.
+        #
+        # `contour_ring` returns the LARGEST ring only, so a bisecting building
+        # can leave survivors in two pieces and the smaller one is not served.
+        # That is disclosed rather than hidden: `clipped` below counts every
+        # candidate cell that is not in the served geometry -- buildings *and*
+        # any stranded fragment -- so `clippedCells` is the whole difference
+        # between what the pool offered and what the user is shown, which is
+        # the number that makes the field auditable (design §2.2).
+        if occ is not None:
+            survivors = covered - occ
+            if survivors != covered:
+                dropped_buildings = len(covered) - len(survivors)
+                if len(survivors) < MIN_SITE_CELLS:
+                    return _finalize(
+                        grids, REJECT_STATUS, "BUILDING_OVERLAP",
+                        why=("only %d of the site's %d cells survive the "
+                             "building exclusion, below the %d-cell minimum"
+                             % (len(survivors), len(covered), MIN_SITE_CELLS)),
+                        coordinate_based=False, geometry=None,
+                        covered=covered, clipped=dropped_buildings,
+                        clipped_fraction=0.0,
+                        occ=occ, claimed_set=claimed_set, owner_map=owner_map,
+                        effect=effect, effect_note=effect_note, kind=kind,
+                        building_overlap=dropped_buildings,
+                    )
+                contour = contour_ring(
+                    sorted(survivors), bounds=grids.bounds,
+                    rows=grids.rows, cols=grids.cols)
+                if contour is None:
+                    # No ring at all: nothing legal left to serve. Refused
+                    # rather than served un-clipped, which would put the
+                    # building cells straight back on the map.
+                    return _finalize(
+                        grids, REJECT_STATUS, "BUILDING_OVERLAP",
+                        why=("the site's legal ground does not contour to a "
+                             "single polygon once buildings are excluded"),
+                        coordinate_based=False, geometry=None,
+                        covered=covered, clipped=dropped_buildings,
+                        clipped_fraction=0.0,
+                        occ=occ, claimed_set=claimed_set, owner_map=owner_map,
+                        effect=effect, effect_note=effect_note, kind=kind,
+                        building_overlap=dropped_buildings,
+                    )
+                geometry = contour[0]
+                covered = {(int(r), int(c)) for r, c in _polygon_cells(
+                    grids, geometry["coordinates"])}
+                # Every candidate cell the user is NOT being shown: the ones
+                # under buildings, plus any surviving piece the single served
+                # ring could not include.
+                clipped = len(survivors) - len(covered)
+                clipped += dropped_buildings
+                if len(covered) < MIN_SITE_CELLS:
+                    return _finalize(
+                        grids, REJECT_STATUS, "BUILDING_OVERLAP",
+                        why=("the site's legal ground does not contour to a "
+                             "single polygon of at least %d cells once "
+                             "buildings are excluded" % MIN_SITE_CELLS),
+                        coordinate_based=False, geometry=None,
+                        covered=covered, clipped=clipped, clipped_fraction=0.0,
+                        occ=occ, claimed_set=claimed_set, owner_map=owner_map,
+                        effect=effect, effect_note=effect_note, kind=kind,
+                        building_overlap=dropped_buildings,
+                    )
 
     # --- the three predicates, in §2.1's order -----------------------------
     building_overlap = building_overlap_cells(covered, occupied)

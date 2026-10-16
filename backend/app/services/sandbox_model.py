@@ -1076,6 +1076,31 @@ INTERVENTION_EFFECTS: dict[str, dict[str, Any]] = {
                            "why": "a drainage network needs pipe and outfall "
                                   "capacity, which this screening model does "
                                   "not have; no grid effect is claimed"},
+    # `drainage` and `road` are the two kinds `ai_plan.POOL_FOR_KIND` lets the
+    # model *propose* (they draw from the reservoir and paving pools
+    # respectively). They were absent from this table, and an absent key is not
+    # the same disclosure as a `to: None` one: `apply_interventions` skipped
+    # them with "no land-cover effect is defined for this intervention type",
+    # which reads as an oversight in the model rather than as the answer. The
+    # user confirms the alignment and the run then reports identical numbers
+    # with no stated reason -- precisely the failure D8 exists to prevent.
+    #
+    # So they take the `drainage_alignment` shape: skipped, *with the reason*.
+    #
+    # Neither borrows `permeable_paving`'s CN 72. A drainage alignment and a new
+    # road are not a runoff coefficient, and inventing one for them would be
+    # claiming a number this model cannot compute (invariant 5). What each
+    # *would* need is named instead: pipe and outfall capacity for drainage,
+    # permeability and roughness for a road.
+    "drainage": {"to": None,
+                 "why": "a drainage network needs pipe and outfall capacity, "
+                        "which this screening model does not have; the "
+                        "alignment is drawn and disclosed but no grid effect "
+                        "is claimed"},
+    "road": {"to": None,
+             "why": "a new road is a permeability and roughness question this "
+                    "screening model does not parameterise; the footprint is "
+                    "drawn and disclosed but no land-cover effect is claimed"},
     "massing_height": {"to": None,
                        "why": "a 3D operation on existing buildings; it changes "
                               "shade and exposure, not land cover"},

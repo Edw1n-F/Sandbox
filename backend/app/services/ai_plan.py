@@ -74,7 +74,7 @@ import sys
 import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Iterable, Protocol
 
 # This file lives at backend/app/services/, so three parents to reach backend/.
 # (The scripts/ modules use two, being one level shallower -- an easy off-by-one
@@ -185,6 +185,13 @@ def load_grounding() -> Grounding:
     import numpy as np
 
     from _overlay_common import load_overlay
+    # The coverage cap and the site floor, read from the modules that own them
+    # rather than re-typed here. `_split_under_cap` exists precisely to satisfy
+    # the cap, so a second copy of the number would be a second promise about
+    # what the ledger will accept -- and it would drift the moment either
+    # constant moved.
+    from app.services.sandbox_model import MAX_INTERVENTION_COVERAGE
+    from app.services.siting import MIN_SITE_CELLS
 
     g = Grounding()
     try:
@@ -339,15 +346,24 @@ def load_grounding() -> Grounding:
             # box (the original). A window is a box: it claims cells that are
             # not in the basin, and it discards the basin's own shape, which is
             # what the catalog and the suggester both site on.
-            for comp in _components_cells(mask, 40, connectivity=4)[:3]:
+            #
+            # The pool is ordered by AREA (`_components_cells` is largest-first),
+            # so the evidence names the size rank and not "deepest". The two
+            # happen to agree for the first two basins today, but they are not
+            # the same ordering: measured on this data, the 4th-largest basin is
+            # 2.28 m deep against the 2nd's 1.90 m, so "deepest" on `sites[1]`
+            # is simply untrue. The depth itself is published per site as
+            # `maxDepthM`, which is the number a planner should rank on.
+            for rank, comp in enumerate(
+                    _components_cells(mask, 40, connectivity=4)[:3], start=1):
                 min_r, min_c = comp["min_r"], comp["min_c"]
                 max_r, max_c = comp["max_r"], comp["max_c"]
                 sub = depth[min_r:max_r + 1, min_c:max_c + 1]
                 g.reservoir_sites.append(site(
                     comp["cells"],
                     "water_reservoir",
-                    "deepest connected basin in the computed wet grid, "
-                    "contoured to its true cell mask",
+                    "%s connected basin of the computed wet grid, contoured "
+                    "to its true cell mask" % _ranked(rank),
                     {
                         "maxDepthM": round(float(sub.max()), 2),
                         "wetCells": comp["size"],
@@ -362,32 +378,170 @@ def load_grounding() -> Grounding:
     else:
         g.notes.append("no wetgrid_hsk.npy; run scripts/make_wetgrid.py")
 
-    # --- green space: largest contiguous vegetated blocks -------------------
+    # --- green space: the largest contiguous vegetated blocks --------------
     # Bound to a local variable and freed of buildings first, so the component
     # labelling below sees only ground a site could actually occupy.
+    #
+    # The evidence string carries the component's RANK, not just "largest".
+    # `_components_cells` returns largest-first, so `green[0]` is the largest
+    # block and `green[1]`/`green[2]` are the second and third -- labelling all
+    # three "largest" is a claim about ground the second and third sites do not
+    # contain. These strings are the provenance a planner reads next to a
+    # `source` pointing at real code, so they have to be true of *this* site.
     green_mask = free_of_buildings(ov.class_mask("green"))
-    for comp in _components_cells(green_mask, 120, connectivity=4)[:3]:
+    for rank, comp in enumerate(
+            _components_cells(green_mask, 120, connectivity=4)[:3], start=1):
         g.green_sites.append(site(
             comp["cells"], "green_space",
-            "largest contiguous vegetated block (ESA WorldCover class 'green'), "
-            "contoured to its true cell mask",
+            "%s contiguous vegetated block (ESA WorldCover class 'green'), "
+            "contoured to its true cell mask" % _ranked(rank),
             {"greenCells": comp["size"],
              "greenAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
         ))
 
     # --- permeable paving: the biggest contiguous impervious blocks ---------
+    #
+    # Split, because the largest paved component is a district, not a site. On
+    # this study area it is ~6,800 cells -- 39% of the grid against a 25%
+    # single-intervention cap -- so serving it whole means the gate refuses it
+    # `OVER_SINGLE_CAP` and the proposal path emits *nothing* for the kind. A
+    # cap that cannot be satisfied by any site is not a cap, it is an outage.
+    #
+    # The split is by whole raster rows (row-coherent bands) and then by
+    # 4-connected component inside each band, rather than by a flood fill at the
+    # cap. Both alternatives were measured and rejected: a BFS fill at the cap
+    # produces 13 fragments, six of them under `MIN_SITE_CELLS` and so refused
+    # `TOO_SMALL` -- trading one outage for a stream of rejections; and
+    # row-major chunking cuts the component into slivers that contour badly,
+    # because a contour closes over the gaps between them and the served
+    # polygon stops matching the cells it was drawn from.
+    #
+    # The `[:3]` truncation is applied to the emitted sub-sites, not to the
+    # pre-split components. Truncating first would cap the *input* at three and
+    # the split would buy nothing.
     paved_mask = free_of_buildings(ov.class_mask("paved"))
-    for comp in _components_cells(paved_mask, 150, connectivity=4)[:3]:
-        g.paving_sites.append(site(
-            comp["cells"], "permeable_paving",
-            "largest contiguous impervious block (ESA WorldCover class 'paved'), "
-            "contoured to its true cell mask",
-            {"pavedCells": comp["size"],
-             "pavedAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1)},
-        ))
+    paving_cap = int(math.floor(MAX_INTERVENTION_COVERAGE * ov.rows * ov.cols))
+    paving_sites: list[dict[str, Any]] = []
+    for comp in _components_cells(paved_mask, 150, connectivity=4):
+        for band_index, rank_in_band, band_cells in _split_under_cap(
+                comp["cells"], paving_cap, MIN_SITE_CELLS,
+                rows=ov.rows, cols=ov.cols):
+            entry = site(
+                band_cells, "permeable_paving",
+                "%s 4-connected impervious block within row band %d of the "
+                "largest paved component (ESA WorldCover class 'paved'), "
+                "contoured to its true cell mask"
+                % (_ranked(rank_in_band), band_index),
+                {
+                    # Recomputed from THIS sub-site's own cells. Reusing the
+                    # parent component's size here would publish a number the
+                    # served geometry does not support, under a `source` string
+                    # that points at real code -- the most dangerous failure
+                    # mode this project has, because it looks sourced.
+                    "pavedCells": len(band_cells),
+                    "pavedAreaHa": round(
+                        len(band_cells) * cell_w * cell_h / 10_000.0, 1),
+                    "bandIndex": band_index,
+                    "rankInBand": rank_in_band,
+                },
+            )
+            if entry is not None:
+                paving_sites.append(entry)
+    g.paving_sites.extend(paving_sites[:3])
 
     g.notes.append(f"terrain={ov.terrain_source}, landcover={ov.landcover_source}")
     return g
+
+
+def _ranked(rank: int) -> str:
+    """The ordinal phrase for a candidate's rank **within its own pool**.
+
+    Pools are emitted largest-first, so the first site is *the* largest and
+    every later one is the second, third, ... Calling all of them "the largest"
+    is a provenance claim about ground the later sites do not contain, and these
+    strings sit next to a `source` that points at real code -- which is exactly
+    where an untrue label does the most damage, because it looks sourced.
+
+    Ordinals are spelled out rather than numeric: this string is read aloud in
+    a UI tooltip and quoted in a planner's notes, where "2nd" beats "2".
+    """
+    if rank <= 1:
+        return "the largest"
+    if rank == 2:
+        return "the second-largest"
+    if rank == 3:
+        return "the third-largest"
+    return "the %dth-largest" % rank
+
+
+def _split_under_cap(cells: Iterable[tuple[int, int]], cap: int, min_cells: int,
+                     *, rows: int, cols: int
+                     ) -> list[tuple[int, int, list[tuple[int, int]]]]:
+    """Split one component into sub-sites that each fit under ``cap`` cells.
+
+    Returns ``(band_index, rank_in_band, cells)`` per surviving sub-site. Only
+    the band's own cells come back -- never the parent component's ``size`` or
+    bounding box -- because the caller contours and measures from this list, and
+    a metric carried over from the parent would describe ground the served
+    polygon does not contain. The two indices are what let the caller label each
+    site truthfully (see :func:`_ranked`).
+
+    Two deterministic steps, and both matter:
+
+    1. **Row-coherent bands.** Group the cells by row, walk the rows in
+       ascending ``r``, and close the band when adding the next row would
+       exceed ``cap``. Accumulating *whole rows* rather than filling to the cap
+       is what keeps a band contiguous: a row-major fill slices the component
+       into vertical slivers whose contour closes across the gaps, so the
+       served polygon covers cells the band never contained.
+    2. **4-connected components within each band,** via
+       ``intervention_geometry.connected_components`` -- the same component
+       definition every other pool uses (D7). A band can still be several
+       pieces, and serving only the largest would drop real cells with no
+       record, which is the failure D5 exists to prevent.
+
+    Fragments below ``min_cells`` are dropped: the gate would refuse them
+    ``TOO_SMALL``, so offering them spends a rejection to say nothing.
+
+    Ordering is a **total** order, ``(-size, min_r, min_c)``: no two distinct
+    components share all three, so no tie can fall back to set or dict
+    iteration order (invariant 7). The row walk is likewise ordered, never
+    "whatever the set gave". ``rank_in_band`` is that sort's 1-based position,
+    so it is a total order too.
+    """
+    import numpy as np
+
+    by_row: dict[int, list[int]] = {}
+    for r, c in cells:
+        by_row.setdefault(int(r), []).append(int(c))
+
+    bands: list[list[tuple[int, int]]] = []
+    band: list[tuple[int, int]] = []
+    n = 0
+    for r in sorted(by_row):
+        row_cells = sorted(by_row[r])
+        k = len(row_cells)
+        if band and n + k > cap:
+            bands.append(band)
+            band = []
+            n = 0
+        band.extend((r, c) for c in row_cells)
+        n += k
+    if band:
+        bands.append(band)
+
+    out: list[tuple[int, int, list[tuple[int, int]]]] = []
+    for band_index, band_cells in enumerate(bands):
+        mask = np.zeros((rows, cols), dtype=bool)
+        for r, c in band_cells:
+            mask[r, c] = True
+        survivors = [comp for comp in _components_cells(mask, 1, connectivity=4)
+                     if comp["size"] >= min_cells]
+        survivors.sort(key=lambda comp: (-comp["size"], comp["min_r"],
+                                          comp["min_c"]))
+        out.extend((band_index, rank, comp["cells"])
+                   for rank, comp in enumerate(survivors, start=1))
+    return out
 
 
 def _components(mask, min_size: int) -> list[tuple[int, int, int, int, int]]:
