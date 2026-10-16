@@ -726,6 +726,86 @@ def _match_region(text: str) -> str | None:
     return None
 
 
+def _point_in_region(lon: float, lat: float,
+                     bounds: tuple[float, float, float, float],
+                     region: str) -> bool:
+    """True when a point (a site's centroid) lies inside a region rectangle.
+
+    **Centroid-in-rectangle, inclusive** -- deliberately *not* "does the
+    polygon overlap the region". That distinction is measured, not stylistic:
+    ``reservoir#0``'s ring spans x in [0.34, 1.00] and y in [0.00, 1.00] -- the
+    outer two-thirds of the scene in *both* axes -- so an overlap test would put
+    that single site in **every** region and reproduce the exact bug this
+    predicate exists to remove ("add a water reservoir in the north / south /
+    east / west / centre" returning identical geometry). The centroid is already
+    the site's published identity (``params.siteCentroid``), so membership adds
+    no new number about a site -- it reads one the site already carries.
+
+    The test is inclusive (``w <= lon <= e and s <= lat <= n``): at a seam a
+    candidate is offered rather than hidden, which is the safe direction for a
+    filter -- it can never silently empty a pool that has a legitimate
+    candidate. A name that is not one of :data:`REGION_FRACTIONS` matches
+    nothing, so an unrecognised region is never a licence to place anything.
+
+    A pure function of ``(lon, lat, bounds, REGION_FRACTIONS)``: no clock, no
+    RNG, no state. One authority, used by every selection path.
+    """
+    fr = REGION_FRACTIONS.get(region)
+    if fr is None:
+        return False
+    lon_min, lat_min, lon_max, lat_max = bounds
+    width = lon_max - lon_min
+    height = lat_max - lat_min
+    west = lon_min + width * fr[0]
+    east = lon_min + width * fr[2]
+    south = lat_min + height * fr[1]
+    north = lat_min + height * fr[3]
+    return west <= lon <= east and south <= lat <= north
+
+
+def sites_in_region(
+    pool: list[dict[str, Any]],
+    region: str | None,
+    bounds: tuple[float, float, float, float] | None,
+) -> list[tuple[int, dict[str, Any]]]:
+    """Narrow an ordered pool to the sites whose centroid is inside ``region``.
+
+    Returns ``(original_index, site)`` pairs, a **view** over the pool and never
+    a replacement for it. Each site keeps its **original pool index**, because
+    ``site_id`` is ``f"{kind}#{i}"`` over ``enumerate(pool)`` and both
+    ``_materialise`` and ``resolve_scope`` resolve an id by indexing the *full*
+    pool -- renumbering a narrowed list would silently re-point every id to the
+    wrong geometry.
+
+    ``region`` of ``None`` or ``"all"`` returns the pool unchanged, in the
+    original order, carrying the original indices. That is what keeps ``None``
+    meaning "today's behaviour" for every caller, and it is why ``"all"``
+    short-circuits rather than falling through the arithmetic.
+
+    Single-purpose and order-preserving: a list comprehension over the ordered
+    pool, with **no distance sort** (a float key with real ties is how this fix
+    gets written wrong -- the tie would fall back on iteration order) and **no
+    occupancy logic** (a later step in the chain owns that). It therefore
+    composes with whatever runs before or after it without assuming it is last.
+
+    When no site is in the requested region the result is **empty**: it never
+    falls back to an out-of-region site. That is the same posture as
+    :func:`resolve_scope`, whose docstring calls the fallback-to-"all" "the
+    exact bug this function exists to remove".
+    """
+    if region is None or region == "all":
+        return list(enumerate(pool))
+    if bounds is None:
+        # No study-area bbox means no rectangle to test, so a named region
+        # cannot be honoured. Offer nothing rather than everything.
+        return []
+    return [
+        (index, site)
+        for index, site in enumerate(pool)
+        if _point_in_region(site["centroid"][0], site["centroid"][1], bounds, region)
+    ]
+
+
 def _fraction_ring(bounds: tuple[float, float, float, float],
                    fr: tuple[float, float, float, float]) -> list[list[float]]:
     """A closed rectangular ring for one region of the study area."""
@@ -1078,29 +1158,78 @@ POOL_FOR_KIND: dict[str, str] = {
 }
 
 
+# Quantity words that *state* a count. ``a``/``an`` are deliberately absent:
+# the indefinite article names **what** is wanted ("add a reservoir"), not
+# **how many**, so reading it as a count of 1 conflates the two and turns "a
+# reservoir in the north" into "exactly one, and hide the rest" -- half of the
+# owner's complaint. Only a numeral or one of these words counts as stated.
+_STATED_COUNT_WORDS: dict[str, int] = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "several": 3, "some": 2,
+}
+
+
+def _stated_count(text: str, alias: str) -> int | None:
+    """The count a phrase *states*, or ``None`` when it states none.
+
+    The scan is the one ``parse_intent`` has always used -- a numeral or a
+    quantity word in the 24 characters before the kind's alias -- with one
+    change: ``a ``/``an `` are **not** counts (see
+    :data:`_STATED_COUNT_WORDS`). ``None`` is preserved rather than defaulted,
+    because "no count stated" and "exactly one" are different requests: the
+    caller offers every eligible candidate for the former and exactly one for
+    the latter. ``text`` is expected already lower-cased.
+    """
+    if alias not in text:
+        return None
+    start = text.index(alias)
+    window = text[max(0, start - 24):start]
+    digits = re.findall(r"\b(\d{1,2})\b", window)
+    if digits:
+        return int(digits[-1])
+    return next((v for w, v in _STATED_COUNT_WORDS.items() if w in window), None)
+
+
 def parse_intent(instruction: str) -> list[tuple[str, int]]:
     """Extract (kind, count) intents from an instruction.
 
     Deliberately simple and inspectable: the count defaults to 1, and a phrase
     with no recognised verb yields nothing rather than a guess. This is the
     non-AI baseline -- if the LLM cannot beat this, it is not earning its place.
+
+    A thin wrapper over :func:`parse_intent_counts` that maps an unstated count
+    to 1 and clamps to ``max(1, min(count, 3))``. Its signature and return type
+    are pinned by ``test_ai_plan.py::test_intent_parsing_reads_counts``, so the
+    richer "was a count stated at all?" view lives in
+    :func:`parse_intent_counts` rather than here.
+    """
+    return [
+        (kind, max(1, min(count, 3)) if count is not None else 1)
+        for kind, count in parse_intent_counts(instruction)
+    ]
+
+
+def parse_intent_counts(instruction: str) -> list[tuple[str, int | None]]:
+    """As :func:`parse_intent`, but keeps an unstated count as ``None``.
+
+    ``None`` means "the instruction names a kind but no quantity" -- a request
+    for the kind, not for one of it. The region-aware selector offers every
+    eligible candidate in that case (bounded by the pool's own ceiling of 3);
+    an explicit count still caps. Order and de-duplication match
+    :func:`parse_intent` exactly, so the two never disagree about *what* was
+    asked for, only about whether a quantity was stated.
     """
     text = instruction.lower()
-    found: list[tuple[str, int]] = []
+    found: list[tuple[str, int | None]] = []
     for alias, kind in EN_ALIASES.items():
         if alias not in text:
             continue
-        # "three reservoirs" / "3 reservoirs"
-        window = text[max(0, text.index(alias) - 24): text.index(alias)]
-        digits = re.findall(r"\b(\d{1,2})\b", window)
-        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-                 "a ": 1, "an ": 1, "several": 3, "some": 2}
-        count = int(digits[-1]) if digits else next(
-            (v for w, v in words.items() if w in window), 1
-        )
+        raw = _stated_count(text, alias)
+        count = None if raw is None else max(1, min(raw, 3))
         if all(kind != k for k, _ in found):
-            found.append((kind, max(1, min(count, 3))))
+            found.append((kind, count))
     return found
+
 
 
 # --------------------------------------------------------------------------- #
@@ -1336,6 +1465,27 @@ def parse_massing_intent(instruction: str) -> list[dict[str, Any]]:
     return ops
 
 
+def _heuristic_rationale(kind: str, region: str, site: dict[str, Any]) -> str:
+    """The heuristic's stated *basis* for offering one site.
+
+    The basis is code-owned prose, never the model's, and it must be true of the
+    row it sits on. Unscoped (``region == "all"``) the site is the pool's
+    largest-first order, so the original wording is kept verbatim -- an
+    unscoped request stays byte-identical to today's behaviour. Scoped, it names
+    the region **and the rule that put the site in it** (centroid inside the
+    region bounds), because ``reservoir#0`` is exactly the shape that makes the
+    distinction load-bearing: its centroid is northern while its ring reaches
+    the south edge, so "in the north" is a claim about the centroid and the
+    string has to say so (ruling §9, the most-at-risk invariant).
+    """
+    if region == "all":
+        return f"largest available {kind} site by {site['evidence']}"
+    return (
+        f"candidate {kind} site whose centroid lies in the {region} region, "
+        f"ranked within the pool by {site['evidence']}"
+    )
+
+
 class HeuristicProvider:
     """Deterministic intent parser. **Not AI** -- the baseline and the fallback.
 
@@ -1362,13 +1512,31 @@ class HeuristicProvider:
             if feature:
                 out.append(feature)
 
-        for kind, count in parse_intent(instruction):
-            pool = POOL_FOR_KIND.get(kind)
-            sites = getattr(grounding, pool, []) if pool else []
-            for site in sites[:count]:
+        # The region is resolved **once**, from the instruction, and narrows the
+        # pool **before** the count is applied. The order is load-bearing, not a
+        # preference: "add two water reservoirs in the west" is
+        # two-of-the-west = {#1, #2} -> 2. Cap-first would take the first two
+        # overall = {#0, #1}, then keep only the one in the west = 1 -- answering
+        # a question the user did not ask and reporting the shortfall as if the
+        # west were empty. Narrow-first is the only order that answers "in the
+        # west". `region` is "all" when the instruction names no region, which
+        # keeps an unscoped request on today's exact code path.
+        region = _match_region(instruction) or "all"
+        for kind, count in parse_intent_counts(instruction):
+            pool_name = POOL_FOR_KIND.get(kind)
+            pool = getattr(grounding, pool_name, []) if pool_name else []
+            # `eligible` is a view over the *full* pool, so each site keeps its
+            # original index and its `site_id` still resolves to the right
+            # geometry. Filter, never rank: an empty region yields nothing.
+            eligible = sites_in_region(pool, region, grounding.bounds)
+            # No count stated -> offer every eligible candidate in the region
+            # (bounded by the pool's own ceiling). A stated count still caps:
+            # a number is a user instruction and is never inflated.
+            selected = eligible if count is None else eligible[:count]
+            for _index, site in selected:
                 out.append(_feature(
                     kind, site, instruction, self.name,
-                    f"largest available {kind} site by {site['evidence']}",
+                    _heuristic_rationale(kind, region, site),
                 ))
         return out
 
