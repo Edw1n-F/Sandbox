@@ -1,4 +1,4 @@
-# Phase 4 RULING — preview the change, and account for prior work
+# Phase 4 RULING — preview the change, account for prior work, and refuse what the executor cannot do
 
 **Author:** 高见远 (Gao), Architect · **Date:** 19 Oct 2026
 **Branch:** `feature/preview-and-context` · **Base:** `cbd4cef` (`feat(stage4): the sandbox loop`)
@@ -16,6 +16,12 @@ The owner's request, verbatim:
 Two features, both underspecified. The first thing both rulings require is an **audit of `cbd4cef`**, because
 that commit already ships a partial version of each — and building a second one beside a shipping one is the
 failure this document exists to prevent.
+
+**§3B was added on 19 Oct 2026** after the owner's third report — *"When I want to add buildings or other
+objects, it does not respond in an intended manner."* It is a **sibling ruling to §3**, not a fourth document:
+the same class of defect (an instruction the executor cannot honour, answered by producing something else),
+a different mechanism. §3B.1 shows the mechanism is **not** an unmatched noun falling back — it is a **forced
+tool with a closed enum**, and the substitution is *the only response the schema permits*.
 
 ---
 
@@ -338,17 +344,209 @@ already identifies this class as its test #1.
 
 ---
 
-## 4. Honesty invariants — confirmation for both features
+## 3B. RULING — the third case: a **capability** the executor does not have
 
-| # | Invariant | Feature A (preview) | Feature B (prior work) |
+*(Added 19 Oct 2026 on the lead's measured report. Same class as §3, different mechanism — so the ruling is
+the sibling of §3.2, not a repetition of it.)*
+
+The owner: *"When I want to add buildings or other objects, it does not respond in an intended manner."*
+Reproduced on `cbd4cef`. **`buildings` / `school` / `hospital` / `office block` / `tower` are not capabilities
+this sandbox has**, and nothing tells the user that.
+
+### 3B.1 The mechanism is not "the noun falls back" — it is a forced tool with a closed enum
+
+Three compounding causes, **all on our side**. The heuristic provider is innocent: measured,
+`HeuristicProvider().propose()` returns **0 features** for every one of the five building phrasings. The
+substitution happens on the **LLM leg only**, and it is forced.
+
+| # | Cause | Where | Measured |
 |---|---|---|---|
-| 1 | No combined score across heat/wind/drainage | Per-axis figures only; the preview reports each ledger term independently and adds no ranking | The claimed set is cells, not a score; skipping a taken candidate is not a preference |
-| 2 | No pass/fail verdict | A preview states three states and their difference; it does not advise | A refusal keeps its `reasonCode`; a skip is not a verdict on the site |
-| 3 | `status` + non-empty `warning` on every AI output | **Strengthened:** `PREVIEW_NOT_A_RUN_UNCOMMITTED_CHANGE` + a mandatory warning that says what it is and what it is not (§1.4ii) | Unchanged; the 422 carries a `detail` naming the route |
-| 4 | Provenance on every number | Each figure is a ledger reading; `previewDelta` names the two readings it is the difference of; `scope` declares what is *not* included | The claimed set is cells read from the store; the exclusion is code |
-| 5 | The model supplies an assumption, never a result; grounding is code | The preview computes nothing the model wrote; a preview is arithmetic over the user's candidates | §2.1: exclusion is code, never the transcript |
-| 6 | `reasonCode` inside the frozen set | **none added** — a preview produces no refusals of its own; it reports the run's own `interventionsSkipped` | **none added** — the removal refusal is a 422, not a `reasonCode`, for the reason in §3.2 |
-| 7 | Determinism | Stable composition order; no `time`/`random`; equality with the applied run asserted | Iteration over an ordered list; no set ordering anywhere |
+| **C1** | `route_tools` **forces** `select_intervention_sites` for any turn that is not massing, and `tool_choice` is `{"type": "tool", "name": forced}` | `ai_plan.py:1989`, `:1721` | `route_tools("add a school")` → `forced=select_intervention_sites` |
+| **C2** | That tool's schema **requires** `selections`, and each item **requires** `intervention_type` from a **closed enum** | `CHOOSE_TOOL`, `ai_plan.py:1390`; the enum at `:1407` | `enum=['drainage','green_space','permeable_paving','road','water_reservoir']`; `required=['selections']`; item `required=['site_id','intervention_type','rationale']` |
+| **C3** | The system prompt's escape (*"If no site is appropriate, return an empty selection list"*) is **weaker than the schema's `required`**, so declining means violating the schema | `build_prompt`, `:1656` | — |
+
+So for *"add a school"* the server **forces** a tool whose schema **has no way to say "I cannot"**. The
+model's only legal move is to return one of the five kinds — `green_space` — and the tool *requires* a
+`rationale`, so it narrates the substitution: *"The largest contiguous vegetated block is the most suitable
+for adding a school."* **That sentence is not the model disobeying us. It is the model filling the only shape
+we permitted.**
+
+And when the model declines anyway (*"add a hospital"*), `generate_proposals` returns the generic
+*"Nothing could be placed: no candidate survived the constraints, or no provider returned a usable answer for
+this instruction"* — which **blames the instruction or the provider** for a capability gap that is ours.
+
+**Class, stated once.** Same as the removal inversion: *an instruction the executor cannot honour, resolved by
+producing something from the pool instead of declining.* Removal's shape was `parse_intent`'s `(kind, count)`
+with no removal op; this one's is a forced tool with a closed kind enum. The family is what matters — it has
+now appeared twice with the same signature, and §3B.6 rules one shared refusal path because of it.
+
+### 3B.2 RULING: refuse with **422**, from a guard that runs **before any provider is called**
+
+Not a 200 with an empty `features` and a stated reason. Five reasons, each from the reasoning already used in
+§3.2:
+
+1. **A 422 makes the response not-an-AI-output, and that is what keeps invariant 3 honest.** The invariant is
+   *"a `status` plus a non-empty `warning` on every AI output."* `AIPlanResponse` has **no top-level
+   `status`/`warning`** (`schemas/plan.py:127-155`) — only per-proposal ones. So `200 {features: 0,
+   proposals: []}` is an "output" carrying **neither**, and being honest about it would mean widening
+   `AIPlanResponse` — a wire change and an openapi regeneration — **for a case where no model ran**. A 422
+   sidesteps that: no model ran, so there is no output to label.
+2. **A 200 cannot be distinguished from success by a client that does not read prose.** The entire defect is
+   that the failure *looks like success*. A status code is the one signal no client can render as a plausible
+   result by accident.
+3. **It removes the opportunity for substitution rather than filtering its product.** The model is never
+   asked, so it cannot confabulate a rationale. Same move as §1.3's short-circuit for an empty region, and the
+   same reason: do not pay for a call that can only produce something wrong.
+4. **Precedent and consistency.** `PlanGenerationError → 422` is already this handler's rule — *"the request
+   was well-formed, the machine simply cannot honour it, and the client needs to know which"* — and §3.2
+   ruled removal the same way. One status for "cannot honour", **two distinguishable `detail`s**.
+5. **It is already legible to the existing client.** `frontend/src/api/client.ts:75` resolves
+   `data.detail` into `ApiError.message`, so a readable `detail` renders today with **no client change**.
+
+**Two empty-result cases that must stay distinct — and this is why 422 rather than a blanket rule:**
+
+- **(i) The executor never ran the model** (no supported capability named) → **422**, no AI output.
+- **(ii) The model ran and legitimately chose nothing** (*"no site is appropriate"*) → **200** with `message`
+  + notes, exactly as today.
+
+Case (ii) is a real AI output that today carries **no top-level `status`/`warning`**. That is a **pre-existing
+latent gap in invariant 3**, not something this ruling introduces, and I am **not** fixing it here — it needs a
+wire change and an openapi regeneration, and it should be its own decision. Flagged in §8 so it is not
+mistaken for part of this work.
+
+### 3B.3 What the message must name — and a correction to the briefing
+
+Three lists, each **built from one source of truth, never typed**:
+
+| What | Source of truth | Measured value |
+|---|---|---|
+| the kinds it can **create** | `sorted(set(POOL_FOR_KIND))` — **the same expression `CHOOSE_TOOL`'s enum is built from** (`ai_plan.py:1407`) | **5**: `drainage, green_space, permeable_paving, road, water_reservoir` |
+| the massing ops it **does** have | `MASSING_TOOL["input_schema"]["properties"]["edits"]["items"]["properties"]["op"]["enum"]` | **6**: `scale_all, set_site, rotate, move, reset, resize` |
+| the regions it understands | `sorted(REGION_FRACTIONS)` | 10, including `all` |
+
+**CORRECTION — the briefing's list named six kinds including *floodable ground*. That is wrong for this
+route.** `flood_storage` is in `KIND_WORD` (6) and `STYLE_FOR_KIND` (6) but is **absent from `POOL_FOR_KIND`
+(5)**, so the `CHOOSE_TOOL` enum has no such member and the heuristic has no pool for it: **`/ai-plan` cannot
+propose floodable ground.** Naming it in the message would promise a capability the endpoint does not have —
+the same class of error as the substitution it is meant to explain.
+
+**Why the source matters here specifically.** There are **three** kind vocabularies and they disagree by
+design: `KIND_WORD` (6 — the router's nouns), `POOL_FOR_KIND` (5 — what `/ai-plan` can propose),
+`STYLE_FOR_KIND` (6 — what the renderer can draw). Typing the list, or reading the wrong one, produces a
+message that lies. `/ai-plan`'s message must be **generated from `POOL_FOR_KIND`.**
+
+### 3B.4 The message's shape, and the false positive it must not create
+
+The detector is *"a creation verb is present, **no supported noun matches**, and the turn is not
+interrogative"*. That predicate is **also true of phrasings whose intent IS supported but whose noun is a
+synonym** — four of them are already pinned in `test_proposal_contract.py` as `PROPOSAL_SHAPED_GAPS`:
+*"plant a green corridor along the riverfront"*, *"put a permeable plaza in the centre"*, *"dig a basin in the
+north"*, *"create a wetland in the east"*. Those users want green space or a reservoir. A message that told
+them their request is unsupported would be **worse than today's silence.**
+
+**Ruling — every clause must be a fact about the *system*, never a claim about the *user's sentence*:**
+
+```
+I could not match this to an intervention I can create.
+  create: water reservoir, green space, permeable paving, drainage, road
+  reshape existing buildings: scale taller/shorter by %, set a height, rotate, move, resize, reset
+Existing buildings come from the surveyed city model and can be reshaped, not created.
+If you meant one of the above, name it — e.g. "add a water reservoir in the north".
+```
+
+- It answers **"add a school"** and **"add 3 buildings"**: the reshape line shows what happens to buildings —
+  the user learns the real boundary **without us asserting that we understood the sentence**.
+- It answers **"plant a green corridor"**: `green space` is listed, so the retry is obvious.
+- **It never says "a school is impossible"**, which we do not know. We know only that no supported noun
+  matched, and the message says exactly that.
+
+**Explicitly rejected: a building-noun vocabulary** (`school`, `hospital`, `office`, `tower`, …) for a
+custom message. I checked: **there is no reusable building-noun list** — `parse_massing_intent` is regex
+patterns plus scope words and has no noun table. Adding one would be a **fourth** vocabulary, incomplete by
+construction, and free to drift. The capability statement above needs no noun list and is true for every
+trigger.
+
+### 3B.5 The chat side: the card is the seam, and the cause is currently **misattributed**
+
+**Measured.** `classify_turn("add a school in the north", card)` → `intent="ambiguous"`,
+`intent_source="parser"`, `hint=None`. And `template_card(facts)` returns `_empty_card()` when `facts` is
+empty — the card titled **"Nothing to explain yet"**.
+
+**Ruling: do NOT widen `intent`.** Your instinct is right; here is the full justification.
+
+1. `agent/intent.py` is a **pin** — 14/14 plus the three-way vocabulary round-trip. A new member changes the
+   precedence ladder **and** the pinned fixture.
+2. **The information needed is not an *intent*, it is a *reason*.** The card already has first-class fields
+   for exactly this: `cause`, `todo`, `confidence.note`. It is filling them with the **wrong cause**.
+3. That wrongness is itself an honesty defect, and it is measurable. `_empty_card` says
+   `confidence.note = "No run in scope yet: there is nothing to explain until a scenario has been run"` and
+   `todo = "Press Run Simulation in the Scenario Inputs panel."` For **"add a school"** both are **false** — a
+   run may well exist, and pressing Run Simulation does not help. **The card attributes a capability gap to a
+   missing run.** Its own docstring is careful that it *"must not blame a missing model"*; it currently blames
+   something else that is equally not the cause.
+
+**Ruling: a sibling card**, a pure builder in `answer.py`, e.g.
+`unsupported_capability_card(question, card)`, filling `cause` / `todo` / `confidence.note` with the true
+cause and carrying §3B.4's text.
+
+**Where it is selected — one seam, not seven.** `classify_turn` is called at **seven** sites in
+`chat_service.py` (`:202, :210, :212, :214, :230, :259, :363`). Ruling: add a single wrapper
+`_classify(question, card)` in `chat_service` that calls `classify_turn` and then applies the card, and
+replace the seven call sites. **`agent/intent.py` is not modified at all** — its ladder, vocabulary and pin
+are untouched.
+
+**Trigger precision.** The card applies when `intent == "ambiguous"`, `intent_source == "parser"`, and a
+creation verb is present. An interrogative (*"can I add a school?"*) is already `question` and must keep its
+normal card — the selector must not fire on a question. The classifier already computes the distinguishing
+state, so the selector needs **no new data**.
+
+### 3B.6 Scope separation: **one shared refusal path, two detectors, two messages**
+
+| | removal (§3.2) | unsupported capability (§3B) |
+|---|---|---|
+| **detector** | a **removal verb** is present (the pinned `REMOVAL_VERBS`) | a **creation verb** is present **and no supported noun matches** |
+| **source of truth** | the pinned removal vocabulary | `EN_ALIASES` ∩ `POOL_FOR_KIND` |
+| **`detail` names** | the supported kinds, and the route that honours it: `/sandbox/resolve-removal` | the supported kinds **and** the massing ops |
+| **shared** | the **refusal path**: one helper raising the handler's existing `PlanGenerationError`-shaped 422 with a code-built `detail` | same |
+
+**Do not write one detector to cover both.** The inputs differ (a verb class vs. a verb-plus-missing-noun),
+and merging them would blur the two `detail`s — after which a client grouping by status alone could no longer
+tell *"you asked to destroy, which is a different endpoint"* from *"you asked to create something we do not
+make"*. **Share the mechanism; keep the detectors and the messages separate.**
+
+**Overlap with `feature/region-selection`: none**, provided §3B.7 is respected. Both detectors live in
+`routers/scenes.py` + a predicate in `agent/intent.py`; the chat card lives in `answer.py` +
+`chat_service.py`. None of those is the proposal-selection path.
+
+### 3B.7 Do NOT "fix" the forced tool — close the door instead
+
+C1 and C2 are the **mechanism**, and both tempting fixes are wrong:
+
+- **Do not widen the `intervention_type` enum.** That enum is the grounding guarantee — it is why a model
+  cannot label a park a reservoir, and why `_materialise` can trust the id's pool over the model's own
+  `intervention_type` field. Widening it re-opens the free-form-kind problem the enum exists to close.
+- **Do not remove the forced `tool_choice`.** `route_tools` forcing the tool is what makes the routing
+  guarantee real — the module's own note says *"The tool is chosen in route_tools(), not by the model … Forcing
+  it is what makes that guarantee real."* Making it `auto` would let a model answer a proposal request in
+  prose, which the grounding check would then have to police.
+
+The pre-provider guard (§3B.2) makes the forced-tool path **unreachable** for an unsupported request. **Close
+the door rather than loosen the schema.** C1 and C2 stay exactly as they are — which is also why this work
+does not touch the concurrent branch.
+
+---
+
+## 4. Honesty invariants — confirmation for all three cases
+
+| # | Invariant | Feature A (preview) | Feature B (prior work) | 3B (missing capability) |
+|---|---|---|---|---|
+| 1 | No combined score across heat/wind/drainage | Per-axis figures only; the preview reports each ledger term independently and adds no ranking | The claimed set is cells, not a score; skipping a taken candidate is not a preference | The refusal ranks nothing; it lists what exists |
+| 2 | No pass/fail verdict | A preview states three states and their difference; it does not advise | A refusal keeps its `reasonCode`; a skip is not a verdict on the site | The message states the system's capability, not a verdict on the request (§3B.4) |
+| 3 | `status` + non-empty `warning` on every AI output | **Strengthened:** `PREVIEW_NOT_A_RUN_UNCOMMITTED_CHANGE` + a mandatory warning that says what it is and what it is not (§1.4ii) | Unchanged; the 422 carries a `detail` naming the route | **Satisfied by producing no AI output at all:** the guard runs before the provider, so a 422 is not an output to label (§3B.2.1). *But* it also fixes a live violation: `_empty_card` currently dates the cause wrongly (§3B.5) |
+| 4 | Provenance on every number | Each figure is a ledger reading; `previewDelta` names the two readings it is the difference of; `scope` declares what is *not* included | The claimed set is cells read from the store; the exclusion is code | Each list in the message is generated from its owning constant (`POOL_FOR_KIND`, the massing op enum), never typed (§3B.3) |
+| 5 | The model supplies an assumption, never a result; grounding is code | The preview computes nothing the model wrote; a preview is arithmetic over the user's candidates | §2.1: exclusion is code, never the transcript | **This is the invariant the substitution violated** — the model was forced to supply a *result* (a kind) for an assumption it could not ground. The guard restores the rule by not asking (§3B.1) |
+| 6 | `reasonCode` inside the frozen set | **none added** — a preview produces no refusals of its own; it reports the run's own `interventionsSkipped` | **none added** — the removal refusal is a 422, not a `reasonCode`, for the reason in §3.2 | **none added** — the same 422 path, for the same reason |
+| 7 | Determinism | Stable composition order; no `time`/`random`; equality with the applied run asserted | Iteration over an ordered list; no set ordering anywhere | The detector is a pure function of the sentence; the guard runs before any provider call |
 
 ### Most at risk: **#4, in Feature A — via the three deltas**
 
@@ -403,15 +601,21 @@ the region ruling's §3 forbids.
 rebase this branch and add the claimed filter. Do **not** attempt both at once.
 
 Everything else in this document is **conflict-free**: the preview is a new endpoint and a new service
-function; the removal guard lives in `routers/scenes.py` + `agent/intent.py`; the `planIds` field is a schema
+function; the removal guard and the missing-capability guard (§3B) live in `routers/scenes.py` + predicates in
+`agent/intent.py`; the chat card lives in `answer.py` + `chat_service.py`; the `planIds` field is a schema
 addition. None of them touches the region engineer's functions.
+
+**One explicit boundary from §3B.7:** that ruling requires **no change to `ai_plan.py` at all** — C1
+(`route_tools`'s forced `tool_choice`) and C2 (`CHOOSE_TOOL`'s closed enum) stay exactly as they are, and the
+guard makes them unreachable for an unsupported request. So the third case adds **zero** overlap with
+`feature/region-selection`, and T03 can land in parallel with it.
 
 ---
 
 ## 6. Task list (ordered by dependency)
 
-Five tasks. **No two touch `ai_plan.py`'s proposal-selection functions except T05**, which is gated on the
-region branch merging.
+Six tasks (T01–T05, with T03B added by §3B). **No two touch `ai_plan.py`'s proposal-selection functions
+except T04b**, which is gated on the region branch merging.
 
 ### T01 — The preview endpoint and its ledger path
 - **Files:** `backend/app/services/preview.py` (**new**); `backend/app/routers/sandbox.py` (new route);
@@ -441,15 +645,39 @@ region branch merging.
 - **Depends on:** T01
 - **Priority:** P0
 
-### T03 — `/ai-plan` refuses a removal instead of inverting it
-- **Files:** `backend/app/agent/intent.py` (a one-line predicate reusing the existing normalised hint),
-  `backend/app/routers/scenes.py` (`create_ai_plan`, the guard before `generate_proposals`),
-  `backend/tests/test_proposal_contract.py` or `test_sandbox.py` (tests)
-- **Change:** detect a `remove …` hint and raise 422 with a `detail` naming `/sandbox/resolve-removal`. The
-  vocabulary, the classifier and `resolve_removal` are **not touched** (§3.3).
+### T03 — The shared refusal path, with **two** detectors
+- **Files:** `backend/app/agent/intent.py` (a predicate reusing the normalised hint, plus the
+  creation-verb-and-no-supported-noun predicate — **no vocabulary or ladder change**),
+  `backend/app/routers/scenes.py` (`create_ai_plan`: the guard **before** `generate_proposals` and the shared
+  422 raiser), tests in `test_proposal_contract.py` / `test_sandbox.py`
+- **Change — one path, two detectors (§3B.6):**
+  - **removal (§3.2):** a removal verb is present → 422, `detail` names the route that honours it.
+  - **missing capability (§3B):** a creation verb is present and no supported noun matches, and the turn is not
+    interrogative → 422, `detail` carries §3B.4's capability statement.
+  - The `detail` lists are **generated from `POOL_FOR_KIND`**, the massing op **enum**, and
+    `sorted(REGION_FRACTIONS)` — never typed (§3B.3).
+  - **Nothing in `ai_plan.py` is touched.** C1/C2 stay exactly as they are (§3B.7): do not widen the enum, do
+    not un-force the tool. The guard closes the door; it does not loosen the schema.
 - **Depends on:** —
-- **Conflict:** none — `agent/intent.py` and `routers/scenes.py` are outside the region engineer's scope.
-- **Priority:** P0 — this is the worst defect in the document (§3.4).
+- **Conflict:** none — `agent/intent.py` and `routers/scenes.py` are outside the region engineer's scope, and
+  this task does not enter `ai_plan.py`'s proposal-selection path.
+- **Priority:** P0 — this covers the worst defect in the document (§3.4) **and** the substitution (§3B.1).
+
+### T03B — The chat card for a capability the sandbox does not have
+- **Files:** `backend/app/agent/answer.py` (`unsupported_capability_card`, a sibling of `_empty_card` at
+  `:318`); `backend/app/agent/chat_service.py` (a `_classify(question, card)` wrapper replacing the **seven**
+  `classify_turn` call sites at `:202, :210, :212, :214, :230, :259, :363`)
+- **Change:** when the classifier returns `intent="ambiguous"` **from the parser** with a creation verb
+  present, replace the *card* — filling `cause` / `todo` / `confidence.note` with the true cause and carrying
+  §3B.4's text. **`agent/intent.py` is not modified.**
+- **Why this is the seam, not `intent`:** the card already has `cause`/`todo`/`confidence.note`, and
+  `_empty_card` is currently filling them with a **false** cause — it tells the user to press Run Simulation
+  for a capability gap, and dates it to a missing run (§3B.5).
+- **Depends on:** T03 (shares the detector predicate and the capability statement)
+- **Regression risk:** `test_intent_routing.py` **must not move** — no ladder change, so all 14 stay. Watch
+  `test_proposal_contract.py`'s four `PROPOSAL_SHAPED_GAPS` phrasings (§3B.4): they must get the *"could not
+  match"* wording, never a claim that their request is unsupported.
+- **Priority:** P1
 
 ### T04 — Prior work: `planIds` on the request, and the skip rule
 - **Files:** `backend/app/schemas/plan.py` (`AIPlanRequest.planIds`),
@@ -480,6 +708,8 @@ graph TD
   T04A["T04a · AIPlanRequest.planIds<br/>+ claimed_cells_for(plan_ids)"] --> T04B
   T04B["T04b · pool skip rule in load_grounding<br/>GATED on feature/region-selection"] --> T05
   REG["feature/region-selection<br/>owns load_grounding / propose"] --> T04B
+  T03B["T03B · unsupported-capability card<br/>in answer.py + chat_service"] --> T05
+  T03 --> T03B
   GATE["GATE: test_sandbox 24 · test_proposal_contract 23<br/>test_intent_routing 14 · openapi · vitest 98"]
   T05 --> GATE
   classDef gated stroke-dasharray:4 3
@@ -512,9 +742,23 @@ graph TD
 | B4 | `test_the_proposal_path_skips_ground_that_is_already_placed` | Pin one candidate, re-ask: a **different, free** candidate is proposed — not an empty list (M1's asymmetry, fixed) |
 | B5 | `test_the_proposal_path_accounts_for_a_toggled_project` | With a project toggled on and its `planIds` forwarded, `/ai-plan` excludes its cells. Impossible today: no field carries the selection (M2) |
 
+### Feature B, part 2 — a missing capability (6, by §3B)
+
+| # | Test | Asserts |
+|---|---|---|
+| C1 | `test_a_building_request_is_refused_not_substituted` | For each of `add a school`, `add 3 buildings`, `add a hospital`, `add an office block`: `/ai-plan` returns **no proposal at all** — and in particular **no `green_space` with a rationale naming the requested building**. Today `add a school` yields `green_space` 252 cells with *"the most suitable for adding a school"* (§3B.1). Mirrors B1 for the LLM leg |
+| C2 | `test_the_substitution_is_still_reproducible_from_the_schema` | Drives `LLMProvider` with a **recorded transport** returning a selection for a building instruction, proving the substitution is a *server-permitted* response and not a stray model behaviour — i.e. that C2's forced closed-enum tool is the real cause. Pins the diagnosis so a later reader does not "fix" the model |
+| C3 | `test_a_missing_capability_refusal_names_the_supported_set` | The `detail` contains **all five** `sorted(set(POOL_FOR_KIND))` kinds **and all six** massing ops, each read from its owning constant — and specifically **does not contain `flood_storage`** (§3B.3's correction). This is the anti-drift pin: the list must be generated, not typed |
+| C4 | `test_a_synonym_phrasing_is_not_told_it_is_unsupported` | For each of the four `PROPOSAL_SHAPED_GAPS` phrasings: the message must **not** assert the request is unsupported, and **must** list `green space` / `water_reservoir` so the retry is obvious. Guards §3B.4's false positive — the failure that would be *worse than today's silence* |
+| C5 | `test_the_unsupported_card_dates_the_cause_correctly` | With a **run already in scope**, `add a school` must not return `_empty_card`: `confidence.note` must not say *"No run in scope yet"* and `todo` must not say *"Press Run Simulation"*. Fails today, and it is an invariant-3 defect in its own right (§3B.5) |
+| C6 | `test_the_guard_does_not_fire_on_a_question` | *"can you add a school?"* and *"what would happen if I added buildings?"* keep their normal card and are **not** refused by `/ai-plan`. The detector must not fire on an interrogative |
+
 **Also pin one negative:** `test_history_does_not_change_a_proposal` — the same instruction with and without a
 `history` payload yields identical proposals, pinning §2.4 (conversation awareness is *not* an input, and a
 later contributor who "fixes" that must move this test deliberately).
+
+**And one that must NOT move:** `test_intent_routing.py` 14/14. T03B changes a **card**, never the ladder —
+if any of the 14 needs an edit, the change is wrong (§3B.5).
 
 ---
 
@@ -547,3 +791,33 @@ later contributor who "fixes" that must move this test deliberately).
 7. **A preview of a candidate that would be *skipped* is the most useful preview and the least tested.** A7
    covers it, but the fixture must deliberately overshoot the cumulative cap — a fixture that happens to fit
    would exercise nothing (the same trap `test_overlap_guard_...` documents).
+
+### Added by §3B (the missing-capability case)
+
+8. **The guard's false positive is the biggest risk in §3B, and it is silent.** The detector is *"creation verb
+   present, no supported noun matched"*, and that is **also true of a synonym** (§3B.4). A user who typed
+   *"plant a green corridor"* would be told their request is not recognised when the intent IS supported and
+   only the noun is unfamiliar. The message's shape — every clause a fact about the system, never a claim
+   about the sentence — is what keeps this honest, and **C4 is the test that holds it**. If a later contributor
+   "sharpens" the wording into *"a school is not supported"*, they break this risk and C4 should fail.
+9. **The substitution is masked in the browser, exactly like the removal inversion.** `route_tools` forces
+   `select_intervention_sites` only on the `/ai-plan` path; the frontend's `isRemoval` already diverts
+   removals, and a chat turn for *"add a school"* returns `ambiguous` and never reaches the gate. **So the
+   substitution is reachable mainly through the API**, and it will survive a browser walkthrough — the same
+   reason the removal bug did. C1 must therefore drive the endpoint directly, not the UI.
+10. **A third entry to this family is likely, and the family is the finding.** Removal (a verb with no
+   executor), capability (a request with no executor), and earlier `drop the trees` → three reservoirs (an
+   unmatched noun falling back to a default kind) are three instances of one signature: *the executor cannot
+   honour the instruction, and instead of declining it produces something from the pool.* I have ruled the two
+   measured instances; I have **not** audited the vocabulary for further nouns that fall back
+   (`EN_ALIASES` → `POOL_FOR_KIND` is the pair to check). That audit is worth one pass before the pitch and is
+   not part of these tasks.
+11. **Case (ii) of §3B.2 is an open invariant-3 gap I deliberately did not close.** A 200 response with
+   `features: 0` carries no top-level `status`/`warning` (`AIPlanResponse` has neither), so the one legitimate
+   "the model chose nothing" path is the only AI output in the system that is not labelled. Closing it needs a
+   wire change and an openapi regeneration. **It should be its own decision**, and it should not be
+   opportunistically folded into T03 — but it should not be forgotten either.
+12. **`route_tools` forcing the site tool for a non-massing turn remains a latent trap.** §3B.7 rules against
+   changing it *now*, because the guard makes it unreachable for unsupported requests. But any future entry
+   point that reaches `route_tools` **without** passing through the `/ai-plan` guard would re-expose C1+C2
+   instantly. The guard must live in the shared path, not only in the router, if a second caller appears.
