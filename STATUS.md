@@ -1,12 +1,14 @@
 # Status
 
-The live state of the HSK / HT planning sandbox, **measured on 2026-10-15**.
+The live state of the HSK / HT planning sandbox, **measured on 2026-10-16**.
 Nothing here is a target. The architecture rationale is in
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 > **Read the stage table below before reading the flow.** "Works" here means
-> *verified by running it on 15 Oct* — not *designed*. Anything authored against
+> *verified by running it on 16 Oct* — not *designed*. Anything authored against
 > the retired 786 ha extent was purged on 14 Oct and is not described here.
+> The remaining-work list, with the current re-scope, is
+> [`docs/TODO_remaining.md`](docs/TODO_remaining.md).
 
 ---
 
@@ -17,18 +19,21 @@ Nothing here is a target. The architecture rationale is in
 | 0 | Scaffold and the first feature buildout | Discarded — built on a placeholder world |
 | 1 | Real spatial foundation: terrain, land cover, buildings | **Done** |
 | 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Done** |
-| 3 | Scenario composition: fixed project footprints and toggles | **Partially — one fixed project** (HSK MTR station, scored in runs) |
-| 4 | Intervention authoring: AI suggestions, NL → card, parameter card, pin/unpin | **Not started** |
+| 3 | Scenario composition: planned project footprints and toggles | **Partially — one planned project** (HSK MTR station, scored in runs) |
+| 4 | Intervention authoring: NL → proposal gate, parameter card, suggestions | **In progress** — NL path and the parameter card work end to end; `questions[]` and editable assumptions are next |
 | 5 | Demo narrative, validation, pitch | Not started |
 
 Stage 2 is closed. Stage 3 is partially open: the Projects panel lands the first
-fixed-footprint project and the machinery it rides on. A planned project is data
-(`backend/data/projects/<id>.json`) declaring its effects, seeded into a plan by
-`scripts/seed_projects.py`; toggling it puts that plan in `selectedPlanIds`, so
-the run scores it and the cumulative-coverage guard counts it with no special
-case anywhere. A second project is a data edit, not a code change: the scene
-record lists every project that has a model (`terrain.projects`, built from the
-same files), the viewer keeps one model per project, and the Projects panel
+planned-footprint project and the machinery it rides on. **A planned project is a
+government project to be built** — it is data (`backend/data/projects/<id>.json`)
+declaring its effects, seeded into a plan by `scripts/seed_projects.py`; toggling
+it puts that plan in `selectedPlanIds`, so the run scores it and the
+cumulative-coverage guard counts it with no special case anywhere. It is the
+**application scenario** the sandbox exists to help plan, and it is *not* a user
+intervention — the intervention loop (Stage 4) is how a planner proposes changes
+*to* such a project. A second project is a data edit, not a code change: the
+scene record lists every project that has a model (`terrain.projects`, built from
+the same files), the viewer keeps one model per project, and the Projects panel
 builds a row per seeded plan. Proven by adding a throwaway second project and
 driving both independently in a browser, then removing it. What is still missing
 is the **second real project** itself.
@@ -45,27 +50,48 @@ project toggles. It changes which layer the city is drawn from and nothing else:
 selecting a project no longer swaps the depiction, and switching to 2.5D no
 longer spawns the station. Those were one flag, and the fusion was the bug.
 
-### What the two unbuilt stages mean for a demo
+### What Stage 4 means today
 
-The catalog in the UI (`ProjectCatalog.tsx`) is a **placeholder**: four hardcoded
-projects whose phases are English sentences piped through `ai_plan` on every
-click. It is not project data, placements are re-derived per click and therefore
-non-deterministic, and a rate-limited provider makes the click a no-op. Do not
-demo it as a working feature, and do not read it as evidence that Stage 3 exists.
+**The natural-language → intervention path works, end to end.** Measured on 16 Oct
+against the live server, no model key configured:
 
-The natural-language path is **massing-only**. Measured:
+| Step | Endpoint | Result |
+|---|---|---|
+| A planner types "add a water reservoir in the north" | `POST /api/scenes/{id}/chat` | `answer.intent = "intervention"`, with the hint carried back — the deterministic classifier raises proposal-shaped turns without a model |
+| The hint opens the confirm gate | `POST /api/scenes/{id}/ai-plan` (`apply=false`) | one **served** proposal: 1,876 cells, `size`, `constraints`, `parameters`, `status`, `warning` — geometry re-derived from the rasters, never taken from the model |
+| A candidate the constraints refuse | same | returned in `rejected[]` with a closed `reasonCode` and a written reason, instead of being silently dropped |
 
-| Instruction | Parsed |
-|---|---|
-| "make the western blocks 40% taller" | `scale_all(1.4, west)` |
-| "add a retention basin north of canal" | *nothing* |
-| "remove the pond in the south" | *nothing* |
-| "add permeable paving around the school" | *nothing* |
+The proposals are screened by code before they are shown: `proposal_constraints.py`
+checks building overlap (zero tolerance), overlap with anything already staged, and
+the coverage caps, and re-derives every number from the rasters. A paving site at
+39 % of the grid is refused `OVER_SINGLE_CAP` rather than proposed.
 
-The blue-green intervention vocabulary the brief is actually about is not in the
-parser, and the `remove` op does not exist at all. Intervention *application*
-works — an in-bounds polygon moves the run (−302.1 m³ unstored, −0.03 ha wet) —
-but nothing in the product generates one yet.
+**The parameter card works** (`GET /api/scenes/{id}/parameter-card`). It is the
+brief's §2 table, assembled entirely from the dicts `ledger_for_scenario` computed in
+the same request — it never touches `grids.land_class`, so a card and a run cannot
+disagree about a figure. Three rows deliberately carry **no value** and say why:
+soil group (no soil survey exists — `CURVE_NUMBER_HSG_D` is a table *named* HSG D),
+heat preset (`SCENARIO_PRESETS` has no callers; the run takes a raw temperature), and
+tree cover (the land-cover raster has no tree class). Storage is printed as **two**
+numbers side by side — gross `area × depth` (the brief's own formula) and net
+`storageCapacityM3` change (the run's own figure) — because they are different
+quantities and net is smaller whenever the ground gave up storage.
+
+**Still open in Stage 4:** `questions[]` (the AI asking for the assumptions it
+currently defaults), editable assumptions before confirm, and moving the ranked
+suggestions from the HUD into the chat beneath the result card.
+
+### What a "plan project" is — and what it is not
+
+A **plan project is a government-planned project to be built.** The HSK MTR station is
+the one modelled today (`backend/data/projects/mtr-station.json`: a real footprint, a
+real GLB, project-supplied effects). It is the **application scenario** — the thing the
+sandbox exists to help plan — and it is **not** a user intervention.
+
+The four-project catalog that used to sit in the HUD (`detention-reservoir`,
+`underground-tank`, `green-retrofit`, `blue-green-park`) was raster-derived candidate
+parcels, not planned projects. It is being removed. See `docs/TODO_remaining.md` for
+the re-scope.
 
 ---
 
@@ -104,13 +130,22 @@ but nothing in the product generates one yet.
    checked against the run by code before it is shown. Three steps stream as they
    happen. With no key configured the same card is assembled by code and labelled
    `source: "template"`.
-7. **Generate a plan (optional).** A sentence becomes a draft FeatureCollection via
-   `ai_plan`, badged "LLM ready" / "no LLM key" / "LLM status unknown", and the
-   massing ops (`scale_all`, `set_site`, `rotate`, `move`, `resize`, `reset`)
-   apply scoped by a ring. This path is driven from the plan panel, not from the
-   chat. Ops are idempotent — a second application cannot compound. **`place` is
-   not among them**: it was removed from the parser, the tool schema and
-   `_massing_feature` on 14 Oct, so no instruction can add a building.
+7. **Describe an intervention in the chat.** A sentence the classifier reads as
+   proposal-shaped ("add a water reservoir in the north") is routed to the
+   **confirm gate** rather than answered as a result card — with no model key
+   configured, by a deterministic classifier that shares its vocabulary with the
+   client. The gate shows each proposal's served geometry, size, the constraints
+   it was screened against, the parameters the run will read, and a `status` +
+   `warning`. Refused candidates come back in `rejected[]` with a `reasonCode`.
+   Accepting persists a draft plan through the normal plan path; nothing is
+   written until the planner confirms. The massing ops (`scale_all`, `set_site`,
+   `rotate`, `move`, `resize`, `reset`) still apply scoped by a ring, and ops are
+   idempotent. **`place` is not among them**: it was removed from the parser, the
+   tool schema and `_massing_feature` on 14 Oct, so no instruction can add a
+   building.
+8. **Read the parameter card.** `GET /api/scenes/{id}/parameter-card` gives the
+   brief's §2 table for whatever plan is selected, with the three unknowns named
+   as unknowns and storage shown as both gross and net.
 
 Empty states are named rather than blank: a scene with no terrain, or a plan with
 no interventions, renders a `SceneNotice` instead of an empty surface.
@@ -276,44 +311,64 @@ Each of these is a design position, not an unfinished feature.
 
 ## Open work
 
-Each item is self-contained. Ordered by what blocks Stage 3 first.
+Each item is self-contained. The full remaining list, with the re-scope, is in
+`docs/TODO_remaining.md` — read that first; this section is the short version.
 
-**Blocks Stage 3**
+**Closed since this file was last measured**
 
-1. **The project catalog is a placeholder.** `ProjectCatalog.tsx` hardcodes four
-   projects whose phases are English sentences piped through `ai_plan` on click.
-   No fixed footprint, no land-cover conversion, no stated assumptions, and
-   placement is re-derived per click — so runs are not reproducible, which a
-   before/after demo requires. Close it with `backend/data/projects.json`:
-   footprint rings, the conversion each implies, source/date/confidence per field.
+1. ~~**The project catalog is a placeholder.**~~ **Being removed, not completed.**
+   The four projects were raster-derived candidate parcels, not planned projects,
+   and the owner has ruled the whole catalog out of scope. `ProjectCatalog.tsx`,
+   `catalogApi.ts`, `project_catalog.py` and `data/projects.json` are deleted in
+   the re-scope; the planned-project machinery (`data/projects/<id>.json`,
+   `terrain.projects`, the MTR station plan) is untouched and stays.
+2. ~~**No suggestion engine and no Pin/Unpin.**~~ Both exist: `suggest.py` +
+   `GET /api/scenes/{id}/suggestions` (ranked per-axis candidates with the
+   per-cell arithmetic shown) and `pins.py` + three pin routes. What remains is
+   placement — the panel moves into the chat beneath the result card.
+3. ~~**The NL loop has no owner end to end.**~~ The intervention path now runs
+   from the chat through the confirm gate. Still open: the `remove` op, and making
+   an addition *shaped* rather than extruded.
+4. ~~**No parameter card.**~~ `parameter_card.py` + `GET /api/scenes/{id}/parameter-card`
+   exist, assembled from the ledger's own dicts. Still open: `questions[]` and
+   editable assumptions before confirm.
 
-**Blocks a live link**
+**Still open**
 
-2. **An intervention is an axis-aligned slab, not a shaped object.** `extent_ring`
+5. **The AI does not ask for what it assumes.** `InterventionProposal` carries
+   `rationale` and `basis`, but no `questions[]`. The AI silently defaults
+   location, footprint, surface replaced, usable storage depth, drainage/overflow
+   and tree cover instead of asking. A question the model asks and the server
+   ignores is worse than no question.
+6. **A planner cannot edit an assumption.** The gate accepts or rejects but cannot
+   edit — and "usable storage depth", the field the brief calls out, is a class
+   default from `STORAGE_DEPTH_M`. **This is a live disclosure hole, not a missing
+   feature:** `POST /ai-plan/apply` with a client-set `params.storageDepthM = 3.5`
+   returns 200, persists, and is read back as 3.5, while the server's own
+   `parameters` block on that same proposal claims `value: 1.5, status:
+   "ASSUMPTION", source: "…class default"`. The served value and its provenance
+   label disagree with no user action. Fix: `apply_proposals` must run
+   `validate_batch` before `create_plan`.
+7. **An intervention is an axis-aligned slab, not a shaped object.** `extent_ring`
    and `_fraction_ring` emit five-point axis-aligned rings, and `STYLE_FOR_KIND`
    gives each kind one `extrusionHeight` — so a reservoir is a box, not a basin.
    `_components` already computes the true cell mask; contour it, then give each
    kind a massing profile.
-3. **No suggestion engine and no Pin/Unpin.** The chips are hardcoded strings
-   (`ChatPanel.tsx`); a grep for `pin` returns zero hits. Add
-   `suggest_interventions(run_result, grounding)` over the existing
-   `reservoir_sites` / `green_sites` / `paving_sites` pools, and a `pinned: bool`
-   on `InterventionRow`.
-4. **The NL loop has no owner end to end.** NL → geometry exists but is reachable
-   only from the plan panel, and the vocabulary is massing-only with no `remove`,
-   so "remove this" cannot be expressed. Expose the ops as chat-callable, add
-   `remove`, and make an addition *shaped* rather than extruded.
-5. **No parameter card.** The brief puts a validated parameter object between
-   "read scenario" and "calculate"; nothing of it exists. The numbers are
-   scattered across the ledger and the stats dict, with no per-assumption source,
-   date or confidence. Nothing estimates a user intervention's *own* numbers
-   (usable depth, permeability, area reworked), so every intervention falls back
-   to a fixed value in `INTERVENTION_EFFECTS`. The sink is wired and empty:
-   `apply_interventions` already reads `params.storageDepthM`, validates
-   0.05–10 m, and emits the per-cell override the run scores. Add
-   `parameter_card.py` plus an endpoint, cached on (plan ids + intervention hash);
-   have `ai_plan` estimate the params and return `questions[]` for what it cannot
-   ground. **The model supplies an assumption, never a result.**
+8. **The second planned project.** Adding one is a data edit under
+   `backend/data/projects/`, not a code change — but the project itself does not
+   exist yet.
+9. **`siting.py:150-152` still uses the loose bounding-box mask**, so the
+   catalog/suggester path can still site a feature on a real polygon-exact
+   building cell. The proposal gate now uses the stricter union and refuses such
+   a site, so the user-visible guarantee holds; the residual risk is a site
+   offered then rejected.
+10. **`clip_window` under-reports `clippedCells`** on the coordinate path — it
+    contours only the largest ring, so a stranded fragment is not counted.
+11. **The two rainfall defaults differ** (`RunRequest.rainfall_mm = 50.0` vs
+    `DEFAULT_RAINFALL_MM = 450.0`). Deliberately not unified: it would move
+    published run numbers and deserves its own decision.
+12. **`docs/DESIGN_intervention_proposals.md:84`** still describes `building_mask`
+    as `building_footprint_mask(...)`, which is no longer true.
 
 **Configuration and environment**
 

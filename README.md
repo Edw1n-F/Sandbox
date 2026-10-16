@@ -58,6 +58,11 @@ about 43.5 ha, cropped to the Open3Dhk tile coverage on 13 Oct 2026.
 | **3D city model** — real Open3Dhk buildings + terrain, rendered as 3D Tiles | Working | 396 real footprints (`buildings_hsk.json`), heights from tile surface − terrain |
 | **Building style switch** (3D / 2.5D) — swap the textured 3D Tiles mesh for a planning-doc 2.5D massing. A depiction choice only; it never turns a project on | Working | 398 boxes drawn, 0 hidden; the 3D Tiles layered off while 2.5D is on |
 | **Planned projects** — a project declares its footprint, model, placement and effects in `backend/data/projects/<id>.json`; seed it with `scripts/seed_projects.py`, and toggling it in the Projects panel scores it in the run | Working — one real project, N supported | HSK MTR station: 22.1 m massing (sky-view shifts over 2,366 cells, local heat up to +0.24 °C over 48 cells) + assumed 2 m storage (−33 m³ unstored at 50 mm). Footprint from `scripts/compute_plan_project_footprint.py --project <id>` |
+| **Natural language → intervention** — describe a blue-green intervention in the chat and get a sited, screened proposal to confirm | Working, screening-grade | `POST /chat` returns `intent="intervention"` from a deterministic classifier with **no model key**; `POST /ai-plan` (`apply=false`) returns the served proposal and refuses nothing silently |
+| **Proposal screening in code** — building overlap, staged overlap and the coverage caps, enforced before anything is shown | Working | a paving site at 39.4 % of the grid is refused `OVER_SINGLE_CAP`; a reservoir covering a surveyed building cell is clipped, re-contoured and reported as shrunk |
+| **Refusals are disclosed** — `rejected[]` carries every refused candidate with a closed `reasonCode` and a written reason | Working | a total wipe-out returns `features=0, rejected=1, OVERLAPS_STAGED` instead of a bare "nothing could be placed" |
+| **Parameter card** — the brief's §2 table for the selected plan, assembled from the ledger's own dicts | Working | three rows (soil group, heat preset, tree cover) carry **no value** and say why; storage prints as gross *and* net, never one as the other |
+| **Ranked suggestions** — per-axis candidate sites with the per-cell arithmetic shown | Working, being moved | currently a HUD panel; moving under the chat result card, with the LLM naming the axis it advises on |
 | **Online 3D assets** — glTF fetched from Khronos at runtime | Working | all 3 URLs verified 200 + CORS |
 | **Terrain conditioning** — Priority-Flood + D8 flow accumulation | Working | `test_hydrology`; 11.7% of DEM cells are depressions |
 | **Design metrics** — height dispersion, site coverage, ground-level void, shade, each tied to a published AVA rule | Working | every metric names its source rule in the response |
@@ -77,7 +82,20 @@ validated Curve Number table, Hato flood validation, and the ability to
 *delete* an individual building — the AI can place blocks and change their
 height, density and orientation, not remove them. Two drainage readings
 deliberately coexist: the routed cascade and the level-pool headline, which are
-not merged because they are different pictures of the same water. See
+not merged because they are different pictures of the same water.
+
+**Being removed:** the four-project "catalog" in the HUD (`ProjectCatalog.tsx`,
+`GET /api/scenes/{id}/project-catalog`). Those four were raster-derived candidate
+parcels, **not** planned projects — a planned project is a government project to
+be built, like the HSK MTR station, and is the application scenario rather than a
+user intervention. The catalog conflated the two. See
+[`docs/TODO_remaining.md`](docs/TODO_remaining.md) for the re-scope.
+
+**Still open in the intervention loop:** the AI does not yet *ask* for the
+assumptions it currently defaults (`questions[]`), a planner cannot edit an
+assumption before confirming — and a client-set `params.storageDepthM` is already
+persisted and scored while the published provenance still claims the class
+default, which is a live disclosure hole rather than a missing feature. See
 [Limitations](#limitations-what-this-is-not).
 
 ## Tech stack
