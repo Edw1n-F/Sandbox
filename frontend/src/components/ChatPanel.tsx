@@ -40,7 +40,7 @@ import {
   type ChatTurn,
   type StreamEvent,
 } from '@/api/chatApi'
-import { applyAiPlan, createAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
+import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal, type ProposalQuestion } from '@/api/planApi'
 import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import {
@@ -79,6 +79,12 @@ interface ProposalPayload {
    * Typed through `AiPlanResult` so it cannot drift from the wire contract.
    */
   rejected: NonNullable<AiPlanResult['rejected']>
+  /**
+   * The SITE-scope questions, asked once for the batch (Phase 2 R8): drainage
+   * and tree cover belong to the site, not to a kind, so they travel here
+   * rather than repeated on every proposal.
+   */
+  questions?: NonNullable<AiPlanResult['questions']>
   groundingNotes: string[]
   candidateCounts: Record<string, number>
   resolved?: 'applied' | 'dismissed'
@@ -291,6 +297,49 @@ function CardView({ card }: { card: AnswerCard }) {
 }
 
 /**
+ * The assumptions one proposal rests on, and whether the planner has answered (Phase 2).
+ *
+ * Every question names a parameter the run actually reads, and each is rendered
+ * with its own state: `OPEN` is a prompt, `ANSWERED` echoes the planner's words
+ * *and* the server's parse of them, so a mismatched pair is visible rather than
+ * silently resolved. A question whose answer the server could not parse shows
+ * the class default still standing, which is the honest reading — the answer was
+ * read, and it did not apply.
+ */
+function QuestionList({ questions }: { questions: ProposalQuestion[] }) {
+  return (
+    <Box sx={{ mt: 0.5 }}>
+      <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
+        ASSUMPTIONS ASKED ({questions.length})
+      </Typography>
+      {questions.map((q) => (
+        <Box key={q.id} sx={{ mt: 0.25 }}>
+          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45 }}>
+            {q.prompt}
+          </Typography>
+          <Typography
+            className="hud-mono"
+            sx={{
+              fontSize: 9,
+              lineHeight: 1.4,
+              color: q.status === 'ANSWERED' ? '#5cff9d' : 'text.secondary',
+            }}
+          >
+            {q.id} · {q.status}
+            {q.answer ? ` · you: ${q.answer}` : ''}
+            {q.answeredValue !== null && q.answeredValue !== undefined
+              ? ` · read as ${q.answeredValue} ${q.unit}`.trimEnd()
+              : q.status === 'ANSWERED'
+                ? ' · not a number, so the class default stands'
+                : ''}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+/**
  * The size / constraints / parameters of one proposal, read by field (§2.2).
  *
  * A proposal is presented with its evidence and its limits, not as a bare type:
@@ -342,8 +391,14 @@ function ProposalDetail({ proposal }: { proposal: InterventionProposal }) {
       {parameters.map(([name, entry]) => (
         <Typography key={name} className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
           {name}: {entry.value} {entry.unit} · {entry.status} · {entry.source}
+          {entry.edited && entry.defaultValue !== null && entry.defaultValue !== undefined
+            ? ` (was ${entry.defaultValue} ${entry.unit})`
+            : ''}
         </Typography>
       ))}
+      {proposal.questions && proposal.questions.length > 0 && (
+        <QuestionList questions={proposal.questions} />
+      )}
       {proposal.status && (
         <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25 }}>
           status: {proposal.status}
@@ -423,6 +478,13 @@ function ProposalReview({
   // The input card per proposal: what the run reads, and the user's answers.
   const [inputs, setInputs] = useState<SandboxInput[][]>(() => payload.proposals.map(() => []))
   const [answers, setAnswers] = useState<InputAnswers[]>(() => payload.proposals.map(() => ({})))
+  // What the last re-gate said about the edited set (Phase 2 R19.1).
+  const [revalidate, setRevalidate] = useState<{
+    warning: string
+    valuesOnly: string[]
+    movedGeometry: string[]
+    refused: number
+  } | null>(null)
 
   useEffect(() => {
     if (payload.resolved) return
@@ -440,6 +502,52 @@ function ProposalReview({
       live = false
     }
   }, [payload, sceneId])
+
+  // Show what the edit did before Apply (Phase 2 R19.1). Debounced because a
+  // planner types a depth one character at a time; the call writes nothing and
+  // spends no provider call, but a request per character is still that.
+  //
+  // The proposals are sent with the typed values folded into `params`, because
+  // `params.storageDepthM` is the key the ledger reads — re-checking the
+  // unedited params would report on a proposal the planner is no longer
+  // looking at.
+  const editedKey = JSON.stringify(answers)
+  useEffect(() => {
+    if (payload.resolved) return
+    const checkedNow = payload.proposals.map((_, i) => checked[i] ?? true)
+    if (!checkedNow.some(Boolean)) return
+    if (payload.proposals.some((_, i) =>
+      checkedNow[i] && inputs[i]?.some((input) =>
+        fieldError(input, (answers[i] ?? {})[input.key]) !== null))) return
+    const edited = payload.proposals.map((p, i) => {
+      const typed = toValues(inputs[i] ?? [], answers[i] ?? {})
+      return Object.keys(typed).length === 0
+        ? p
+        : { ...p, params: { ...(p.params ?? {}), ...typed } }
+    })
+    const timer = setTimeout(() => {
+      void revalidateAiPlan(sceneId, {
+        proposals: edited,
+        instruction: payload.instruction,
+      })
+        .then((r) => setRevalidate({
+          warning: r.warning,
+          valuesOnly: r.valuesAffectingOnly,
+          movedGeometry: r.geometryAffectingParameters,
+          refused: (r.rejected ?? []).length,
+        }))
+        // A re-gate that fails must not block Apply: the Apply path
+        // re-validates anyway (R19), so this is reported as "could not
+        // re-check" rather than as a reason to refuse the edit.
+        .catch(() => setRevalidate({
+          warning: 'Could not re-check the edit before applying. Apply still validates it.',
+          valuesOnly: [], movedGeometry: [], refused: 0,
+        }))
+    }, 350)
+    return () => clearTimeout(timer)
+    // `editedKey` stands in for `answers`, whose identity changes every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payload, sceneId, inputs, editedKey, checked])
 
   if (payload.resolved === 'applied') {
     return (
@@ -558,6 +666,27 @@ function ProposalReview({
         />
       ))}
       <RefusalList rejected={payload.rejected} />
+      {payload.questions && payload.questions.length > 0 && (
+        <QuestionList questions={payload.questions} />
+      )}
+      {revalidate && (
+        <Box sx={{ mt: 0.5 }}>
+          <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+            {revalidate.movedGeometry.length === 0
+              ? 're-check: no parameter here moves geometry'
+              : `re-check: ${revalidate.movedGeometry.join(', ')} changes the placement`}
+            {revalidate.valuesOnly.length > 0
+              ? ` · value-only: ${revalidate.valuesOnly.join(', ')}`
+              : ''}
+            {revalidate.refused > 0 ? ` · ${revalidate.refused} would now be refused` : ''}
+          </Typography>
+          {revalidate.refused > 0 && (
+            <Typography sx={{ fontSize: 10, color: '#ff6b6b', lineHeight: 1.4 }}>
+              {revalidate.warning}
+            </Typography>
+          )}
+        </Box>
+      )}
       {error && (
         <Typography sx={{ fontSize: 10.5, color: '#ff6b6b' }}>{error}</Typography>
       )}
@@ -953,6 +1082,7 @@ export default function ChatPanel() {
               provider: r.provider,
               proposals,
               rejected,
+              questions: r.questions ?? [],
               groundingNotes: r.groundingNotes ?? [],
               candidateCounts: r.candidateCounts ?? {},
             },

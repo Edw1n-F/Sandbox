@@ -50,12 +50,71 @@ export interface ProposalRequested {
   [key: string]: unknown
 }
 
-/** One parameter the run reads for a kind, with its honesty label (design §2.2). */
+/**
+ * One parameter the run reads for a kind, with its honesty label (design §2.2).
+ *
+ * When a planner sets the value by hand (Phase 2 R17), `status` becomes
+ * `USER_ASSUMPTION`, `edited` becomes true, and `defaultValue` carries the
+ * class default that was replaced — mandatory, because without it the card
+ * cannot show what was overridden.
+ */
 export interface ParameterEntry {
   value: number
   unit: string
   status: string
   source: string
+  date?: string | null
+  /** How well the number is *known*, never how good the option is. */
+  confidence?: string
+  defaultValue?: number | null
+  edited?: boolean
+}
+
+/**
+ * One assumption a proposal rests on, and the planner's answer (Phase 2 R8).
+ *
+ * `scope` discriminates the two kinds: `PROPOSAL` rows travel on each proposal
+ * (a reservoir and a paving slab have different footprints and depths), and
+ * `SITE` rows travel once per batch on `AiPlanResult.questions`.
+ *
+ * `answeredValue` is the **server's** parse of `answer`, so a client that sends
+ * a mismatched pair can see the disagreement. The server's parse is the one
+ * that reaches `params`.
+ */
+export interface ProposalQuestion {
+  /** Derived from `parameter` alone, so it is stable on any machine. */
+  id: string
+  parameter: string
+  scope: string
+  prompt: string
+  unit: string
+  value?: unknown
+  answer?: string | null
+  answeredValue?: number | null
+  /** `OPEN` | `ANSWERED` | `NOT_APPLICABLE`. */
+  status: string
+}
+
+/** A planner's answer, echoed back on the next request (Phase 2 R13). */
+export interface AnsweredQuestion {
+  id: string
+  parameter?: string
+  answer: string
+}
+
+/** What `POST /api/scenes/{sceneId}/ai-plan/revalidate` returns (Phase 2 R19.1). */
+export interface RevalidateResult {
+  proposals: InterventionProposal[]
+  rejected: ProposalRejection[]
+  questions: ProposalQuestion[]
+  status: string
+  warning: string
+  /** Empty on the edit path: a parameter edit moves no cell (R15). */
+  geometryAffectingParameters: string[]
+  valuesAffectingOnly: string[]
+  explicitStorageAddedM3: number | null
+  netStorageCapacityChangeM3: number | null
+  provider: string
 }
 
 /** The constraint report carried by every proposal (design §2.2). */
@@ -102,6 +161,8 @@ export interface InterventionProposal {
   requested?: ProposalRequested | null
   constraints?: ProposalConstraints
   parameters?: Record<string, ParameterEntry>
+  /** Phase 2 R8: this proposal's PROPOSAL-scope questions. */
+  questions?: ProposalQuestion[]
   status?: string
   warning?: string
 }
@@ -118,6 +179,8 @@ export interface AiPlanResult {
   proposals?: InterventionProposal[]
   /** Refusals that did not survive the constraint engine (design §2.2). */
   rejected?: ProposalRejection[]
+  /** Phase 2 R8: the SITE-scope questions, asked once per batch. */
+  questions?: ProposalQuestion[]
   candidateCounts?: Record<string, number>
   fallbackNote?: string | null
 }
@@ -144,6 +207,8 @@ export async function createAiPlan(
     apply?: boolean
     /** Plan v2 §8: non-empty = whitelist; null/omitted = no restriction. */
     allowedTypes?: string[] | null
+    /** Phase 2 R13: answers to a previous response's questions. */
+    answeredQuestions?: AnsweredQuestion[]
   } = {},
 ): Promise<AiPlanResult> {
   const payload: Record<string, unknown> = {
@@ -154,7 +219,34 @@ export async function createAiPlan(
   if (options.allowedTypes && options.allowedTypes.length > 0) {
     payload.allowedTypes = options.allowedTypes
   }
+  if (options.answeredQuestions && options.answeredQuestions.length > 0) {
+    payload.answeredQuestions = options.answeredQuestions
+  }
   const { data } = await http.post<AiPlanResult>(`/scenes/${sceneId}/ai-plan`, payload)
+  return data
+}
+
+/**
+ * `POST /api/scenes/{sceneId}/ai-plan/revalidate` — what an edit just did (Phase 2 R19.1).
+ *
+ * The confirm gate's third call. It writes nothing, starts no run and calls no
+ * model, so it is safe to call whenever the edited set changes. A depth outside
+ * the ledger's accepted range comes back as a 422 with a `detail` naming the
+ * parameter — deliberately not a constraint refusal, because the closed
+ * `reasonCode` set carries placement predicates on geometry and a typo is not one.
+ */
+export async function revalidateAiPlan(
+  sceneId: string,
+  body: {
+    proposals: InterventionProposal[]
+    instruction?: string
+    answeredQuestions?: AnsweredQuestion[]
+  },
+): Promise<RevalidateResult> {
+  const { data } = await http.post<RevalidateResult>(
+    `/scenes/${sceneId}/ai-plan/revalidate`,
+    body,
+  )
   return data
 }
 
@@ -176,6 +268,8 @@ export async function applyAiPlan(
     candidateCounts?: Record<string, number>
     /** The input card's answers, one per proposal; an absent key is the AI's estimate. */
     values?: Array<Record<string, number>>
+    /** Phase 2 R13: answers to the gate's questions, honoured on this path too. */
+    answeredQuestions?: AnsweredQuestion[]
   },
 ): Promise<AiPlanResult> {
   const { data } = await http.post<AiPlanResult>(
@@ -187,6 +281,7 @@ export async function applyAiPlan(
       groundingNotes: args.groundingNotes ?? [],
       candidateCounts: args.candidateCounts ?? {},
       values: args.values ?? [],
+      answeredQuestions: args.answeredQuestions ?? [],
     },
   )
   return data

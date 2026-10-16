@@ -205,12 +205,65 @@ class ParameterEntry(WireModel):
     ``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``
     names where the number came from, so a proposal never carries a parameter
     that cannot say what it is.
+
+    ``confidence`` says how well the number is *known* (a provenance enum, not
+    a score): ``ASSUMED`` for a class default and for a planner's hand-set
+    value alike, because a planner's estimate is not more knowable than a
+    class default.
+
+    When a planner sets the value by hand (Phase 2 R17), ``status`` becomes
+    ``USER_ASSUMPTION``, ``edited`` becomes true, and ``defaultValue`` carries
+    the class default that was replaced -- mandatory, because without it the
+    card cannot show what was overridden and the served value becomes
+    unrecoverable from the record.
     """
 
     value: float
     unit: str = ""
     status: str = "ASSUMPTION"
     source: str = ""
+    date: str | None = None
+    confidence: str = "ASSUMED"
+    default_value: float | None = None
+    edited: bool = False
+
+
+class ProposalQuestion(WireModel):
+    """One assumption a proposal rests on, and the planner's answer (Phase 2).
+
+    ``scope`` discriminates the two kinds: ``PROPOSAL`` rows are properties of
+    one proposal (a reservoir and a paving slab have different footprints and
+    depths), and travel on ``InterventionProposal.questions``; ``SITE`` rows
+    are properties of the site and travel once per batch on
+    ``AIPlanResponse.questions``.
+
+    ``answer`` is what the planner typed. ``answered_value`` is the
+    **server's** parse of it, and is ``null`` when the answer is not numeric --
+    a client that sends a mismatched pair gets the server's number back and can
+    see the disagreement. The server's parse is the one that reaches ``params``.
+    """
+
+    id: str
+    parameter: str
+    scope: str = "PROPOSAL"
+    prompt: str = ""
+    unit: str = ""
+    value: Any = None
+    answer: str | None = None
+    answered_value: float | None = None
+    status: str = "OPEN"
+
+
+class AnsweredQuestion(WireModel):
+    """A planner's answer, echoed back on the next request (Phase 2 R13).
+
+    Matched by ``id``, which is derived from ``parameter`` alone, so the match
+    needs no server state, no sequence number and no timestamp.
+    """
+
+    id: str
+    parameter: str = ""
+    answer: str = ""
 
 
 class ProposalConstraints(WireModel):
@@ -281,6 +334,7 @@ class InterventionProposal(InterventionIn):
     requested: ProposalRequested | None = None
     constraints: ProposalConstraints = Field(default_factory=ProposalConstraints)
     parameters: dict[str, ParameterEntry] = Field(default_factory=dict)
+    questions: list[ProposalQuestion] = Field(default_factory=list)
     status: str = "PROPOSAL_ACCEPTED"
     warning: str = ""
 
@@ -313,6 +367,7 @@ class InterventionProposal(InterventionIn):
             requested=requested,
             constraints=feature.get("constraints") or {},
             parameters=feature.get("parameters") or {},
+            questions=feature.get("questions") or [],
             status=feature.get("status") or "PROPOSAL_ACCEPTED",
             warning=feature.get("warning") or "",
         )

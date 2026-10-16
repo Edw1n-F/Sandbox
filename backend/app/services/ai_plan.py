@@ -74,7 +74,7 @@ import sys
 import urllib.error
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable, Mapping, Protocol
 
 # This file lives at backend/app/services/, so three parents to reach backend/.
 # (The scripts/ modules use two, being one level shallower -- an easy off-by-one
@@ -2438,12 +2438,35 @@ def _constraint_inputs(scene_id: str) -> tuple[Any, Any, Any] | None:
         _constraints.claimed_cells_for(scene_id, grids)
 
 
+def _answer_map(answered: Any) -> dict[str, str]:
+    """The planner's answers as ``{question id: typed answer}`` (Phase 2 R13).
+
+    Accepts either the wire ``AnsweredQuestion`` objects or plain dicts, so the
+    service can be called from the router and from a test without converting
+    first. An entry with no id is dropped rather than guessed at: the id is
+    derived from the parameter alone, and inventing one would match a question
+    the planner never answered.
+    """
+    out: dict[str, str] = {}
+    for item in answered or []:
+        if isinstance(item, Mapping):
+            qid = item.get("id")
+            answer = item.get("answer")
+        else:
+            qid = getattr(item, "id", None)
+            answer = getattr(item, "answer", None)
+        if qid and answer is not None:
+            out[str(qid)] = str(answer)
+    return out
+
+
 def generate_proposals(
     scene_id: str,
     instruction: str,
     prefer: str = "auto",
     max_features: int = 6,
     allowed_types: list[str] | None = None,
+    answered: Any = None,
 ) -> dict[str, Any]:
     """Produce feature proposals **without persisting** them (plan v2 §5).
 
@@ -2467,8 +2490,16 @@ def generate_proposals(
     `scene_id` is accepted but not written; it is kept in the signature so a
     future implementation that pre-validates against the scene (e.g. "this
     reservoir intersects a park") can without changing the wire.
+
+    `answered` (Phase 2 R13) is the planner's answers to a previous response's
+    questions. Matched by question id, an in-range numeric answer replaces the
+    class default for that kind, so answering changes what the run reads rather
+    than merely silencing a prompt. The answers are applied **before** the
+    constraint predicates run, so a proposal is never validated at one depth
+    and served at another.
     """
     _ = scene_id  # scene is read only by apply_proposals today.
+    answer_map = _answer_map(answered)
     allowed_set: set[str] | None = None
     if allowed_types:
         # Clamp to the catalogue so a typo cannot silently empty the result.
@@ -2584,7 +2615,7 @@ def generate_proposals(
         else:
             grids, occupied, claimed = parts
             features, rejected = _constraints.validate_batch(
-                grids, features, occupied, claimed)
+                grids, features, occupied, claimed, answers=answer_map)
     except Exception as exc:  # noqa: BLE001 - a validator bug must not empty the gate
         # Named, not swallowed: a proposal list that says it was validated when
         # it was not is worse than one that admits the gap.
@@ -2601,6 +2632,7 @@ def generate_proposals(
         return {
             "features": [],
             "rejected": rejected,
+            "questions": [],
             "provider": used_provider,
             "groundingNotes": grounding.notes,
             "candidateCounts": {
@@ -2620,6 +2652,9 @@ def generate_proposals(
     return {
         "features": features,
         "rejected": rejected,
+        # Phase 2 R8: the SITE-scope questions, once per batch. The
+        # PROPOSAL-scope rows already travel on each feature's `questions`.
+        "questions": _constraints.site_questions(features, answers=answer_map),
         # used_provider, not provider: after a fallback these differ, and the
         # response has to name whichever one actually produced the features.
         "provider": used_provider,
@@ -2641,6 +2676,7 @@ def apply_proposals(
     grounding_notes: list[str],
     candidate_counts: dict[str, int],
     values: list[dict[str, Any] | None] | None = None,
+    answered: Any = None,
 ) -> dict[str, Any]:
     """Put a confirmed subset of proposals on the sandbox (Stage 4).
 
@@ -2671,10 +2707,19 @@ def apply_proposals(
     ``rejected``.
     """
     from app.services import proposal_constraints as _constraints
+    from app.services import revalidate as _revalidate
     from app.services import sandbox
 
     if not features:
         raise PlanGenerationError("no features to apply")
+
+    # R20: an out-of-range depth is a malformed request, not a placement
+    # refusal. Checked before the predicates so a client typo cannot come back
+    # wearing a geometry reason code that a UI would group with a real refusal.
+    try:
+        _revalidate._reject_malformed(features)
+    except _revalidate.RevalidationError as exc:
+        raise PlanGenerationError(str(exc)) from exc
 
     try:
         parts = _constraint_inputs(scene_id)
@@ -2686,6 +2731,7 @@ def apply_proposals(
             "no ledger grid is available (run scripts/make_wetgrid.py), so "
             "these proposals cannot be checked; nothing was applied")
     grids, occupied, claimed = parts
+    answer_map = _answer_map(answered)
 
     # Each feature's own ground is not a conflict with itself. Subtracting it is
     # what keeps a second confirmation of the same proposal a no-op rather than
@@ -2699,7 +2745,7 @@ def apply_proposals(
         except Exception:  # noqa: BLE001 - an unreadable geometry is refused below
             continue
     accepted, rejected = _constraints.validate_batch(
-        grids, features, occupied, claimed - mine)
+        grids, features, occupied, claimed - mine, answers=answer_map)
     if not accepted:
         return {
             "planId": None,

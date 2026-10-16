@@ -274,6 +274,7 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
             prefer=payload.provider,
             max_features=payload.max_features,
             allowed_types=payload.allowed_types,
+            answered=payload.answered_questions,
         )
     except PlanGenerationError as exc:
         # 422 rather than 500: the request was well-formed, the machine simply
@@ -302,6 +303,7 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
             "message": proposed.get("message"),
             "proposals": [p.model_dump(by_alias=True) for p in proposals],
             "rejected": rejected,
+            "questions": proposed.get("questions", []),
             "candidateCounts": proposed.get("candidateCounts", {}),
             "fallbackNote": proposed.get("fallbackNote"),
         })
@@ -368,6 +370,7 @@ def apply_ai_plan(scene_id: str, payload: AIPlanApplyRequest) -> AIPlanResponse:
             payload.grounding_notes,
             payload.candidate_counts,
             payload.values,
+            payload.answered_questions,
         )
     except PlanGenerationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

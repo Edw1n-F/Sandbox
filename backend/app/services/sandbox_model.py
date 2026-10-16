@@ -1205,6 +1205,26 @@ MIN_STORAGE_DEPTH_M = 0.05
 MAX_STORAGE_DEPTH_M = 10.0
 
 
+def depth_is_acceptable(depth: Any) -> bool:
+    """Is ``depth`` a usable storage depth in metres?
+
+    One predicate for the range, because three callers need the same answer:
+    :func:`apply_interventions` (which scores it), ``suggest._params_for``
+    (which proposes it) and the confirm gate's revalidate path (which reports
+    it before Apply). Each used to spell the comparison out itself, which is
+    three places that can drift apart -- and Phase 2 would have made it four.
+
+    ``False`` for anything that is not a finite real number, so a ``None``, a
+    string, or a NaN is refused here rather than reaching the arithmetic.
+    """
+    if isinstance(depth, bool) or not isinstance(depth, (int, float)):
+        return False
+    value = float(depth)
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / +-inf
+        return False
+    return MIN_STORAGE_DEPTH_M <= value <= MAX_STORAGE_DEPTH_M
+
+
 def _ring_cells(grids: Grids, ring: list[list[float]]) -> list[tuple[int, int]]:
     """Cells whose centre falls inside one ring.
 
@@ -1553,8 +1573,7 @@ def apply_interventions(
                 depth = float(depth_raw)
             except (TypeError, ValueError):
                 depth = None
-            if depth is not None and not (
-                    MIN_STORAGE_DEPTH_M <= depth <= MAX_STORAGE_DEPTH_M):
+            if depth is not None and not depth_is_acceptable(depth):
                 skipped.append({
                     "id": fid, "kind": kind,
                     "why": (f"storageDepthM {depth} m is outside the "

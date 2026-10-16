@@ -226,13 +226,12 @@ def _params_for(site: dict[str, Any]) -> dict[str, Any]:
         depth = site.get("depthM")
         if depth is not None:
             # Validated rather than trusted, exactly as the ledger does: a
-            # 40 m depth over a hectare is not a reservoir.
-            from app.services.sandbox_model import (
-                MAX_STORAGE_DEPTH_M,
-                MIN_STORAGE_DEPTH_M,
-            )
+            # 40 m depth over a hectare is not a reservoir. One predicate for
+            # the range, so a candidate this pool offers can never be one the
+            # run then refuses.
+            from app.services.sandbox_model import depth_is_acceptable
 
-            if MIN_STORAGE_DEPTH_M <= depth <= MAX_STORAGE_DEPTH_M:
+            if depth_is_acceptable(depth):
                 return {"storageDepthM": round(float(depth), 2)}
     return {}
 

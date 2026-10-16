@@ -5,6 +5,13 @@
         "additionalProperties": false,
         "description": "`POST /api/scenes/{sceneId}/ai-plan/apply` body (plan v2 §5).\n\nThe client echoes the accepted proposals (and the instruction/provider so\nthe audit trail matches what the user saw). No server-held list bridges\nthe two calls: the frontend owns the proposals until a user accepts.\n\n``provider`` here is an **echo, not a control input**, and that distinction\nis the whole reason it is a free-form string. ``AIPlanRequest.provider``\ncarries the pattern ``^(auto|llm|heuristic)$`` because there the client is\n*choosing* a provider. Here it is *reporting* which one answered, and the\nvalues ``generate_proposals`` actually emits are wider than that set:\n``openai-compatible`` (any /chat/completions endpoint, including Ollama),\n``anthropic``, ``heuristic``, ``unknown`` -- and, after a fallback, a\ncomposite such as ``\"heuristic (after openai-compatible returned nothing)\"``\n(``ai_plan.py:2287``).\n\nThis field carried that same pattern until it was measured against a live\nOllama run, and the consequence was total: **every apply whose proposal came\nfrom a real model failed 422**, because the frontend echoed back exactly the\nprovider string the server had just handed it. Only the heuristic fallback\ncould be confirmed at all. Rejecting a value the server itself emitted turns\nthe audit trail into a trap, so the echo is bounded by length only.",
         "properties": {
+          "answeredQuestions": {
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "title": "Answeredquestions",
+            "type": "array"
+          },
           "candidateCounts": {
             "additionalProperties": {
               "type": "integer"
@@ -77,6 +84,13 @@
               }
             ],
             "title": "Allowedtypes"
+          },
+          "answeredQuestions": {
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "title": "Answeredquestions",
+            "type": "array"
           },
           "apply": {
             "default": true,
@@ -176,6 +190,13 @@
             "title": "Provider",
             "type": "string"
           },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalQuestion"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
           "rejected": {
             "items": {
               "$ref": "#/components/schemas/ProposalRejection"
@@ -195,6 +216,31 @@
           "provider"
         ],
         "title": "AIPlanResponse",
+        "type": "object"
+      },
+      "AnsweredQuestion": {
+        "additionalProperties": false,
+        "description": "A planner's answer, echoed back on the next request (Phase 2 R13).\n\nMatched by ``id``, which is derived from ``parameter`` alone, so the match\nneeds no server state, no sequence number and no timestamp.",
+        "properties": {
+          "answer": {
+            "default": "",
+            "title": "Answer",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parameter": {
+            "default": "",
+            "title": "Parameter",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "AnsweredQuestion",
         "type": "object"
       },
       "ChatRequest": {
@@ -548,6 +594,13 @@
             "title": "Params",
             "type": "object"
           },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalQuestion"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
           "rationale": {
             "anyOf": [
               {
@@ -869,8 +922,40 @@
       },
       "ParameterEntry": {
         "additionalProperties": false,
-        "description": "One parameter the run reads for a kind, with its honesty label (§2.2).\n\n``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``\nnames where the number came from, so a proposal never carries a parameter\nthat cannot say what it is.",
+        "description": "One parameter the run reads for a kind, with its honesty label (§2.2).\n\n``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``\nnames where the number came from, so a proposal never carries a parameter\nthat cannot say what it is.\n\n``confidence`` says how well the number is *known* (a provenance enum, not\na score): ``ASSUMED`` for a class default and for a planner's hand-set\nvalue alike, because a planner's estimate is not more knowable than a\nclass default.\n\nWhen a planner sets the value by hand (Phase 2 R17), ``status`` becomes\n``USER_ASSUMPTION``, ``edited`` becomes true, and ``defaultValue`` carries\nthe class default that was replaced -- mandatory, because without it the\ncard cannot show what was overridden and the served value becomes\nunrecoverable from the record.",
         "properties": {
+          "confidence": {
+            "default": "ASSUMED",
+            "title": "Confidence",
+            "type": "string"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "defaultValue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defaultvalue"
+          },
+          "edited": {
+            "default": false,
+            "title": "Edited",
+            "type": "boolean"
+          },
           "source": {
             "default": "",
             "title": "Source",
@@ -1295,6 +1380,71 @@
         "title": "ProposalConstraints",
         "type": "object"
       },
+      "ProposalQuestion": {
+        "additionalProperties": false,
+        "description": "One assumption a proposal rests on, and the planner's answer (Phase 2).\n\n``scope`` discriminates the two kinds: ``PROPOSAL`` rows are properties of\none proposal (a reservoir and a paving slab have different footprints and\ndepths), and travel on ``InterventionProposal.questions``; ``SITE`` rows\nare properties of the site and travel once per batch on\n``AIPlanResponse.questions``.\n\n``answer`` is what the planner typed. ``answered_value`` is the\n**server's** parse of it, and is ``null`` when the answer is not numeric --\na client that sends a mismatched pair gets the server's number back and can\nsee the disagreement. The server's parse is the one that reaches ``params``.",
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer"
+          },
+          "answeredValue": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answeredvalue"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parameter": {
+            "title": "Parameter",
+            "type": "string"
+          },
+          "prompt": {
+            "default": "",
+            "title": "Prompt",
+            "type": "string"
+          },
+          "scope": {
+            "default": "PROPOSAL",
+            "title": "Scope",
+            "type": "string"
+          },
+          "status": {
+            "default": "OPEN",
+            "title": "Status",
+            "type": "string"
+          },
+          "unit": {
+            "default": "",
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "id",
+          "parameter"
+        ],
+        "title": "ProposalQuestion",
+        "type": "object"
+      },
       "ProposalRejection": {
         "additionalProperties": false,
         "description": "One refused proposal, in ``AIPlanResponse.rejected[]`` (§2.2).\n\nA refusal is a first-class object, not an error: it carries the closed\n``reasonCode`` so the UI can group refusals without parsing English, and a\nnon-empty ``warning`` that names the predicate in words.",
@@ -1408,6 +1558,113 @@
           }
         },
         "title": "ProposalSize",
+        "type": "object"
+      },
+      "RevalidateRequest": {
+        "additionalProperties": false,
+        "description": "The proposals as the client currently holds them, plus any answers.\n\n``instruction`` is carried for the audit trail the response echoes; it does\nnot re-drive the model, so a revalidate cannot change which provider was\nused or what it proposed.",
+        "properties": {
+          "answeredQuestions": {
+            "items": {
+              "$ref": "#/components/schemas/AnsweredQuestion"
+            },
+            "title": "Answeredquestions",
+            "type": "array"
+          },
+          "instruction": {
+            "default": "",
+            "title": "Instruction",
+            "type": "string"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/InterventionProposal"
+            },
+            "title": "Proposals",
+            "type": "array"
+          }
+        },
+        "title": "RevalidateRequest",
+        "type": "object"
+      },
+      "RevalidateResponse": {
+        "additionalProperties": false,
+        "description": "What the edit did, split by whether it could move geometry (R15).\n\n``geometry_affecting_parameters`` is empty on the edit path this endpoint\nexists for, and it is returned as an explicit empty list rather than\nomitted so the client **renders** the distinction instead of inferring it\nfrom a missing field. ``values_affecting_only`` names the parameters whose\nchange touched no cell.\n\n``explicit_storage_added_m3`` and ``net_storage_capacity_change_m3`` are\nrecomputed for the edited set so the consequence is visible before Apply --\nand they are the *gross* and *net* figures, never conflated, because the\nrun's own net capacity change also credits the storage the ground gave up.",
+        "properties": {
+          "explicitStorageAddedM3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Explicitstorageaddedm3"
+          },
+          "geometryAffectingParameters": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Geometryaffectingparameters",
+            "type": "array"
+          },
+          "netStorageCapacityChangeM3": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Netstoragecapacitychangem3"
+          },
+          "proposals": {
+            "items": {
+              "$ref": "#/components/schemas/InterventionProposal"
+            },
+            "title": "Proposals",
+            "type": "array"
+          },
+          "provider": {
+            "default": "revalidate",
+            "title": "Provider",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalQuestion"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "rejected": {
+            "items": {
+              "$ref": "#/components/schemas/ProposalRejection"
+            },
+            "title": "Rejected",
+            "type": "array"
+          },
+          "status": {
+            "default": "SCREENING_PROPOSAL_REVALIDATED",
+            "title": "Status",
+            "type": "string"
+          },
+          "valuesAffectingOnly": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Valuesaffectingonly",
+            "type": "array"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "title": "RevalidateResponse",
         "type": "object"
       },
       "RunRequest": {
@@ -2603,6 +2860,59 @@
         "summary": "Apply Ai Plan",
         "tags": [
           "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/ai-plan/revalidate": {
+      "post": {
+        "description": "Re-check edited proposals without saving them.\n\nThe confirm gate's third call: the client holds the proposals, the planner\nedits a parameter, and this reports what the edit did. It persists nothing,\nstarts no run and calls no model, so it is safe to call on every keystroke\nthat changes the set.\n\nA depth outside the accepted range is a **422**, not a constraint refusal:\nthe closed `reasonCode` set carries placement predicates on geometry, and a\nclient typo is not one of those (R20).",
+        "operationId": "revalidate_plan_api_scenes__scene_id__ai_plan_revalidate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevalidateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevalidateResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revalidate Plan",
+        "tags": [
+          "ai"
         ]
       }
     },

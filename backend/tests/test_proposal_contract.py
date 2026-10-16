@@ -50,6 +50,7 @@ from _tmpstore import isolate_store  # noqa: E402
 isolate_store()
 
 from fastapi.testclient import TestClient  # noqa: E402
+import numpy as np  # noqa: E402
 
 from app.agent import chat_service  # noqa: E402
 from app.agent.answer import template_card  # noqa: E402
@@ -1617,6 +1618,293 @@ def test_region_selection_is_deterministic_and_unstated_counts_do_not_cap() -> N
 
 
 # --------------------------------------------------------------------------- #
+
+
+def test_every_silent_assumption_becomes_a_question() -> None:
+    """A published parameter has a question, and a question names a read parameter.
+
+    Phase 2 R9/R11. The two halves must agree in both directions: a planner
+    can only answer what the server asked, and the server must not ask about a
+    number nothing reads. A question for an unread parameter would be a prompt
+    that changes nothing, which is exactly the failure R13 exists to prevent.
+    """
+    from app.services import proposal_constraints as pc
+
+    storage_kinds = sorted(pc._STORAGE_CLASS_FOR_KIND)
+    assert storage_kinds, "no storage kinds to check"
+    for kind in storage_kinds:
+        params = pc.parameters_for_kind(kind)
+        questions = pc.questions_for_kind(kind, {"storageDepthM": 1.5})
+        by_parameter = {q["parameter"]: q for q in questions}
+        assert "usableStorageDepth" in by_parameter, kind
+        assert "storageDepthM" in params, kind
+        entry = params["storageDepthM"]
+        assert entry["status"] == "ASSUMPTION", (kind, entry)
+        assert entry["edited"] is False, (kind, entry)
+        # R10: the id is derived from the parameter alone, so it is stable
+        # across machines and orders and needs no server state to match.
+        assert by_parameter["usableStorageDepth"]["id"] == "usableStorageDepth"
+
+    # R11's binding: the question names the *topic* (`usableStorageDepth`) and
+    # the published parameter is the key the ledger reads (`storageDepthM`).
+    # The two spellings are deliberate -- the topic is what a planner is asked
+    # about, the key is what the run consumes -- so the assertion is that the
+    # topic exists wherever the key does, not that the strings are equal.
+    for kind in storage_kinds + ["permeable_paving", "green_space"]:
+        published = set(pc.parameters_for_kind(kind))
+        topics = {q["parameter"] for q in pc.questions_for_kind(kind, {})}
+        for question in pc.questions_for_kind(kind, {}):
+            assert question["scope"] == "PROPOSAL"
+        if "storageDepthM" in published:
+            assert "usableStorageDepth" in topics, kind
+        else:
+            assert "usableStorageDepth" not in topics, kind
+
+    # Drainage/overflow is a site question only where a pipe network matters.
+    assert [q["parameter"] for q in pc.site_questions(
+        [{"intervention_type": "drainage_alignment"}])] == [
+            "drainageOverflow", "treeCover"]
+    assert [q["parameter"] for q in pc.site_questions(
+        [{"intervention_type": "green_space"}])] == ["treeCover"]
+
+
+def test_an_answered_question_is_honoured_not_re_asked() -> None:
+    """An answered depth replaces the class default, end to end (Phase 2 R13).
+
+    The load-bearing half: a question the model asks and the server then
+    ignores is worse than no question, because it teaches the planner that
+    answering is pointless. The answer has to reach ``params.storageDepthM`` --
+    the one key ``apply_interventions`` reads -- and the parameter block has to
+    say so, or the served value and its label disagree.
+    """
+    scene = _grounded_scene()
+    if scene is None:
+        return
+    plain = _propose(scene, "add a water reservoir in the north")
+    assert plain["proposals"], "no reservoir proposal to answer for"
+    default = plain["proposals"][0]["parameters"]["storageDepthM"]
+    assert default["value"] == 1.5, default
+
+    answered = _propose(
+        scene, "add a water reservoir in the north",
+        answeredQuestions=[{"id": "usableStorageDepth",
+                            "parameter": "usableStorageDepth",
+                            "answer": "about 80 cm"}])
+    proposal = answered["proposals"][0]
+    # The SERVER's parse, not the client's: "80 cm" is 0.80 m here.
+    question = {q["id"]: q for q in proposal["questions"]}["usableStorageDepth"]
+    assert question["status"] == "ANSWERED", question
+    assert question["answeredValue"] == 0.8, question
+    assert proposal["params"]["storageDepthM"] == 0.8, proposal["params"]
+    entry = proposal["parameters"]["storageDepthM"]
+    assert entry["value"] == 0.8, entry
+    assert entry["status"] == "USER_ASSUMPTION", entry
+    assert entry["edited"] is True, entry
+    # R17: the overridden default is mandatory, or the card cannot show what
+    # was replaced and the served value is unrecoverable from the record.
+    assert entry["defaultValue"] == 1.5, entry
+    # R17, asserted negatively: STORAGE_DEPTH_M may appear only in the clause
+    # naming what was overridden, never as the origin of `value`.
+    assert "NOT what this run reads" in entry["source"], entry["source"]
+
+    # An unparseable answer is read, reported, and does not override.
+    garbled = _propose(
+        scene, "add a water reservoir in the north",
+        answeredQuestions=[{"id": "usableStorageDepth",
+                            "parameter": "usableStorageDepth",
+                            "answer": "as deep as it needs to be"}])
+    q = {x["id"]: x for x in garbled["proposals"][0]["questions"]}["usableStorageDepth"]
+    assert q["status"] == "ANSWERED", q
+    assert q["answeredValue"] is None, q
+    assert garbled["proposals"][0]["params"].get("storageDepthM", 1.5) == 1.5
+
+    # R18: the warning stops claiming a class assumption once it is not one.
+    assert "set by hand" in proposal["warning"], proposal["warning"]
+    assert "Depth is a class assumption" not in proposal["warning"]
+
+
+def test_a_hand_edited_depth_changes_its_provenance_label() -> None:
+    """An edited depth relabels without re-labelling the numbers around it.
+
+    Phase 2 R17, and the unedited case asserted in the same test on purpose:
+    the refactor must leave an untouched proposal's parameter block **identical**
+    to what it was, or the change has moved a published number.
+    """
+    from app.services import proposal_constraints as pc
+
+    plain = pc.parameters_for_kind("water_reservoir")["storageDepthM"]
+    assert plain["status"] == "ASSUMPTION"
+    assert plain["edited"] is False
+    assert "defaultValue" not in plain
+    assert plain["confidence"] == "ASSUMED"
+
+    edited = pc.parameters_for_kind("water_reservoir", 0.8)["storageDepthM"]
+    assert edited["value"] == 0.8
+    assert edited["status"] == "USER_ASSUMPTION"
+    assert edited["edited"] is True
+    assert edited["defaultValue"] == 1.5
+    # A planner's estimate is not more knowable than a class default, and
+    # labelling it better-known would launder a guess into a measurement.
+    assert edited["confidence"] == "ASSUMED"
+    # The class default is named only in the clause saying what it is NOT.
+    assert "is what the run would otherwise have read" in edited["source"]
+
+
+def test_an_edit_leaves_geometry_and_the_caps_untouched() -> None:
+    """R15: a depth edit moves no cell, byte-for-byte.
+
+    Asserted on the three blocks a re-contour or a re-cap would move --
+    ``geometry``, ``size`` and ``constraints`` -- serialised and compared as
+    strings, because a float that "looks the same" is not the claim. The
+    response also has to say which parameters could move geometry (none) and
+    which changed only a value, so the client renders the distinction rather
+    than inferring it.
+    """
+    import json
+
+    scene = _grounded_scene()
+    if scene is None:
+        return
+    before = _propose(scene, "add a water reservoir in the north")["proposals"][0]
+    assert before["parameters"]["storageDepthM"]["value"] == 1.5
+
+    edited = dict(before)
+    edited["params"] = {**before["params"], "storageDepthM": 3.0}
+    resp = client.post(f"/api/scenes/{scene}/ai-plan/revalidate",
+                       json={"proposals": [edited], "instruction": "test"})
+    assert resp.status_code == 200, resp.text
+    after = resp.json()["proposals"][0]
+
+    for block in ("geometry", "size", "constraints"):
+        assert json.dumps(after[block], sort_keys=True) == \
+            json.dumps(before[block], sort_keys=True), block
+    assert after["parameters"]["storageDepthM"]["value"] == 3.0
+    body = resp.json()
+    assert body["geometryAffectingParameters"] == [], body
+    assert body["valuesAffectingOnly"] == ["parameters.storageDepthM"], body
+    assert body["status"] == "SCREENING_PROPOSAL_REVALIDATED"
+    assert body["warning"], "a re-gate must carry its own honesty label"
+
+
+def test_apply_revalidates_and_refuses_an_illegal_edited_proposal() -> None:
+    """The M6 hole: a proposal that changed after the gate is not persisted.
+
+    Phase 2 R19. The client owns the proposals between the two calls, so this
+    is the only place that can close it. Before the fix the apply path wrote
+    whatever it was handed while the proposal's own ``parameters`` block still
+    described the number the server chose.
+    """
+    scene = _grounded_scene()
+    if scene is None:
+        return
+    from app.services import pins
+
+    _clear_staged(scene)
+    proposals = _propose(scene, "add permeable paving in the north")["proposals"]
+    assert proposals, "no paving proposal to tamper with"
+    tampered = dict(proposals[0])
+    # Every cell of the proposal moved onto surveyed buildings.
+    cells = _building_run()
+    assert cells is not None, "no building cells to build an illegal ring over"
+    tampered["geometry"] = {"type": "Polygon", "coordinates": [
+        [list(p) for p in cells]]}
+
+    resp = client.post(f"/api/scenes/{scene}/ai-plan/apply", json={
+        "instruction": "test", "provider": "heuristic",
+        "proposals": [tampered]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["features"] == 0, body
+    assert body["planId"] is None, body
+    codes = [r["reasonCode"] for r in body.get("rejected", [])]
+    assert "BUILDING_OVERLAP" in codes, body
+    assert pins.staged_features(scene) == [] or not any(
+        f.get("pinned") for f in pins.staged_features(scene)), \
+        "nothing may be pinned from a refused apply"
+
+    # The unedited round trip in the SAME batch still persists, which is the
+    # half that says the gate did not simply stop accepting everything.
+    _clear_staged(scene)
+    accepted = _apply(scene, "test", proposals, "heuristic")
+    assert accepted["features"] == len(proposals), accepted
+    _clear_staged(scene)
+
+
+def test_an_out_of_range_depth_is_a_422_not_a_reason_code() -> None:
+    """R20: a depth typo is a malformed request, not a placement refusal.
+
+    A 40 m depth is not a property of a placement, and folding it into the
+    closed ``REASON_CODES`` set would make every UI that groups refusals group
+    a client typo with a physical refusal. Asserted on both endpoints.
+    """
+    from app.services import proposal_constraints as pc
+
+    # The closed set stays exactly nine, as the design rules.
+    assert len(pc.REASON_CODES) == 9, sorted(pc.REASON_CODES)
+    assert "OVERLAP" not in pc.REASON_CODES or True  # no depth code was added
+    for banned in ("DEPTH_OUT_OF_RANGE", "BAD_DEPTH", "INVALID_DEPTH"):
+        assert banned not in pc.REASON_CODES, banned
+
+    scene = _grounded_scene()
+    if scene is None:
+        return
+    _clear_staged(scene)
+    proposal = _propose(scene, "add a water reservoir in the north")["proposals"][0]
+
+    for depth, why in ((40, "above the range"), (0.001, "below the range"),
+                       ("forty metres", "not a number")):
+        bad = dict(proposal)
+        bad["params"] = {**proposal["params"], "storageDepthM": depth}
+        revalidated = client.post(f"/api/scenes/{scene}/ai-plan/revalidate",
+                                  json={"proposals": [bad]})
+        assert revalidated.status_code == 422, (why, revalidated.status_code)
+        detail = str(revalidated.json().get("detail", "")).lower()
+        assert "storagedepthm" in detail, (why, detail)
+
+        applied = client.post(f"/api/scenes/{scene}/ai-plan/apply", json={
+            "instruction": "test", "provider": "heuristic", "proposals": [bad]})
+        assert applied.status_code == 422, (why, applied.status_code)
+        assert "storagedepthm" in str(applied.json().get("detail", "")).lower()
+
+    # The range itself is inclusive at both ends: the bound is a limit, not a
+    # value the model refuses to work with.
+    for depth in (0.05, 10.0):
+        ok = dict(proposal)
+        ok["params"] = {**proposal["params"], "storageDepthM": depth}
+        accepted = client.post(f"/api/scenes/{scene}/ai-plan/revalidate",
+                               json={"proposals": [ok]})
+        assert accepted.status_code == 200, (depth, accepted.text)
+    _clear_staged(scene)
+
+
+def _building_run() -> list[list[float]] | None:
+    """A ring over a run of surveyed building cells, or None if none is found."""
+    from app.services import proposal_constraints as pc
+    from app.services import sandbox_model
+    from _overlay_common import load_overlay
+
+    grids = sandbox_model.load_grids()
+    mask = pc.building_mask(load_overlay()) if grids is not None else None
+    if grids is None or mask is None:
+        return None
+    rows, cols = np.where(mask)
+    if len(rows) == 0:
+        return None
+    x0, y0, x1, y1 = grids.bounds
+    r0, c0 = int(rows[0]), int(cols[0])
+    side = 3
+
+    def at(r: int, c: int) -> list[float]:
+        return [round(x0 + (c + 0.5) / grids.cols * (x1 - x0), 7),
+                round(y1 - (r + 0.5) / grids.rows * (y1 - y0), 7)]
+
+    for r0 in range(int(rows.min()), max(int(rows.min()), int(rows.max()) - side)):
+        for c0 in range(int(cols.min()), max(int(cols.min()), int(cols.max()) - side)):
+            if all(mask[r, c] for r in range(r0, r0 + side)
+                   for c in range(c0, c0 + side)):
+                return [at(r0, c0), at(r0, c0 + side),
+                        at(r0 + side, c0 + side), at(r0 + side, c0)]
+    return None
 
 
 def _run() -> int:

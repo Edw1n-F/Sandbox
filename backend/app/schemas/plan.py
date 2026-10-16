@@ -18,8 +18,10 @@ from app.schemas.scene import (
     WireModel,
 )
 from app.schemas.intervention import (
+    AnsweredQuestion,
     InterventionIn,
     InterventionProposal,
+    ProposalQuestion,
     ProposalRejection,
 )
 
@@ -116,6 +118,12 @@ class AIPlanRequest(WireModel):
     # Plan v2 §8: a minimal template whitelist. When non-empty, the server
     # drops proposals outside this list. None/[] = no restriction (default).
     allowed_types: list[str] | None = None
+    # Phase 2 R13: the planner's answers to the questions a previous response
+    # asked, echoed back. Matched by question id (derived from the parameter
+    # alone), an in-range answer replaces the class default for that kind --
+    # so answering changes the run rather than merely silencing a prompt.
+    # Additive and defaulted: a pre-Phase-2 client is unaffected.
+    answered_questions: list[AnsweredQuestion] = Field(default_factory=list)
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]
@@ -150,6 +158,12 @@ class AIPlanResponse(WireModel):
     message: str | None = None
     proposals: list[InterventionProposal] = Field(default_factory=list)
     rejected: list[ProposalRejection] = Field(default_factory=list)
+    # Phase 2 R8: the SITE-scope questions, asked once per batch rather than
+    # once per proposal -- drainage and tree cover belong to the site, and
+    # repeating them on every row would be the duplication the `scope`
+    # discriminator exists to prevent. Each proposal carries its own
+    # PROPOSAL-scope rows.
+    questions: list[ProposalQuestion] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
     fallback_note: str | None = None
     model_config = {
@@ -193,6 +207,12 @@ class AIPlanApplyRequest(WireModel):
     # The input card's answers, one entry per proposal (Stage 4). A key left
     # out is one the user handed to the AI's estimate.
     values: list[dict[str, Any] | None] = Field(default_factory=list)
+    # Phase 2 R13: the planner's answers to the questions the gate asked. The
+    # answer is not persisted server-side (the gate is stateless, and the
+    # client carries it forward exactly as it carries the proposal), but an
+    # in-range numeric answer is honoured on this path too, so a depth entered
+    # as an answer and a depth typed into the field reach the run the same way.
+    answered_questions: list[AnsweredQuestion] = Field(default_factory=list)
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]

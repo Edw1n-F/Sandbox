@@ -173,8 +173,9 @@ def main() -> int:
             break
         tampered["params"] = {**(tampered.get("params") or {}), "storageDepthM": bad}
         refused = _apply([tampered], provider)
+        detail = str(refused.json().get("detail", "")).lower()
         check(f"a hand-set depth that is {why} is a 422, not a silent default",
-              refused.status_code == 422 and "storage depth" in str(refused.json().get("detail", "")).lower(),
+              refused.status_code == 422 and "storagedepthm" in detail,
               f"{bad!r} -> {refused.status_code} {refused.text[:90]}")
     clean, provider = _proposal("add a water reservoir in the north")
     if clean is not None:
