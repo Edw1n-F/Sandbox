@@ -387,10 +387,22 @@ this instruction"* — which **blames the instruction or the provider** for a ca
 
 **Class, stated once.** Same as the removal inversion: *an instruction the executor cannot honour, resolved by
 producing something from the pool instead of declining.* Removal's shape was `parse_intent`'s `(kind, count)`
-with no removal op; this one's is a forced tool with a closed kind enum. **The §10 audit takes the family to
-five instances** — the two measured here, `drop the trees` → three reservoirs, `floodable park` →
-`green_space`, and `wetland` → nothing at all (§10.2/§10.4). That count is the argument for the shared refusal
-path and for R-B, which fixes the *root* rather than the symptom.
+with no removal op; this one's is a forced tool with a closed kind enum.
+
+**The family, counted honestly (§10.5/§11.1).** Six instances are now **named**; **five reproduce on this
+HEAD** and **one no longer does**:
+
+| # | instruction | result | reproduces on this HEAD? |
+|---|---|---|---|
+| 1 | `remove the water reservoir near the south` | adds a 1,876-cell reservoir | **yes** (§3, M3) |
+| 2 | `add a school` | `green_space`, with a rationale justifying it | **yes** (§3B.1) |
+| 3 | `drop the trees` | *was* three water reservoirs | **no** — the vocabulary moved; `parse_intent` now returns `[]` (§11.1) |
+| 4 | `add a floodable park` | `green_space` (a ponding feature returns a park) | **yes** (§10.2) |
+| 5 | `add a wetland` | **nothing**, from a gate that opened cleanly | **yes** (§10.4) |
+| 6 | `add flood storage` | `water_reservoir` — a 14 m blue block for a flat floodable park | **yes** (§11.1, found by the enumeration) |
+
+That count is the argument for the shared refusal path — **and §11.2 shows R-B closes only two of the four
+*mechanisms*, and instance 6 not at all.** Do not read this table as "closed".
 
 ### 3B.2 RULING: refuse with **422**, from a guard that runs **before any provider is called**
 
@@ -1134,6 +1146,12 @@ One `POOL_FOR_KIND` entry plus one list on `Grounding`, built from the material 
 - The region filter (`sites_in_region`) and the §2.2 claimed filter apply to the new pool automatically,
   because both narrow whatever `load_grounding` produced.
 
+**R-A carries one extra line, found by the §11.1 enumeration: re-point `EN_ALIASES["flood storage"]` at
+`flood_storage`.** It currently maps to `water_reservoir`, so `add flood storage` returns a 14 m blue reservoir
+where the user asked for a flat floodable park — the sixth instance of the family, and one that neither R-A's
+pool nor R-B's rule would fix on its own (§11.1). It is legal only in the same commit as R-A, because before
+R-A it would point at a kind with no pool.
+
 **CONSEQUENCE, and it is a coordination item, not a detail:** this **flips test C3**, which the T03 engineer
 has just written — `assert "flood_storage" not in detail` and `assert KIND_WORD["flood_storage"] not in detail`.
 Those assertions encode §3B.3's *correction*, which was correct **for as long as the pool was absent**. R-A
@@ -1169,3 +1187,138 @@ guard's *placement* is load-bearing** (F2/risk 12, previously speculation), **on
 places and missing from a sixth** (F3), and **one crash-in-waiting in a kind-keyed test** (R-C). The lead's
 instinct that an unaudited fallback "is exactly the kind of thing that survives a walkthrough" was right: F1
 would survive one, because the proposal it returns is legal, in-bounds, well-sourced and the wrong feature.
+
+---
+
+## 11. The closure analysis, and the R-A / R-B / R-C task spec
+
+*(19 Oct 2026, in answer to the lead's two questions: does R-B **provably** close the family, and should R-B be
+folded into the region task? The answers are measured, and one of them is "no, it does not".)*
+
+### 11.1 The enumeration, and a sixth instance
+
+The multi-match mechanism (F1) can only fire where **one alias is a substring of another**. That relation is
+finite and I enumerated it exhaustively rather than sampling — **6 pairs across 29 aliases**:
+
+| shorter alias | kind | inside | kind | cross-kind? |
+|---|---|---|---|---|
+| `drain` | drainage | `drainage` | drainage | no |
+| **`park`** | **green_space** | **`floodable park`** | **flood_storage** | **YES** |
+| `basin` | water_reservoir | `retention basin` | water_reservoir | no |
+| `basin` | water_reservoir | `storage basin` | water_reservoir | no |
+| `reservoir` | water_reservoir | `water reservoir` | water_reservoir | no |
+| `wind` | wind | `windbreak` | wind | no |
+
+**Exactly one of the six crosses kinds.** So `add a floodable park` is not one of several F1s — it is *the
+only* one the current vocabulary can produce. That matters for the closure argument below.
+
+**And the enumeration found a 6th instance that no rule in this document closes.** `EN_ALIASES` maps **two**
+flood-storage nouns to **`water_reservoir`**:
+
+```
+flood storage   -> water_reservoir   (pool: reservoir_sites)   <-- hand-authored
+storage basin   -> water_reservoir   (pool: reservoir_sites)   <-- fine: a basin is a basin
+floodable park  -> flood_storage     (pool: None)              <-- correct noun, no pool
+wetland         -> flood_storage     (pool: None)              <-- correct noun, no pool
+```
+
+So **`add flood storage` returns a 14 m blue `water_reservoir`** where the user asked for a flat green
+floodable park — a different land-class `to` (`water` vs `floodable`), a different legend colour, and a
+different storage depth (the 1.5 m `water` default vs the 0.3 m `floodable` one). **There is no collision
+here**, so R-B's rule does not touch it, and R-A's pool does not either: the alias simply points at the wrong
+kind. It is a plain mapping error, and it is closed by re-pointing the alias — one line, in the same commit as
+R-A, because only after R-A does `flood_storage` have somewhere to go.
+
+**Also corrected: instance 3 is no longer reproducible.** `docs/TEST_PLAN_intervention_loop.md` records
+`drop the trees` → three water reservoirs. On this HEAD `parse_intent("drop the trees")` returns `[]` and the
+heuristic returns `[]` — the vocabulary has moved since. I had counted it as live in this doc; it is history.
+The honest live count is **five**.
+
+### 11.2 Does R-B **provably** close the family? No — it closes two of four mechanisms
+
+This is the answer the lead asked for, and the useful answer is the partition, not a verdict.
+
+| mechanism | what generates it | closed by R-B? | **provable?** |
+|---|---|---|---|
+| **A. multi-match** | one alias a substring of another (F1) | **yes** | **YES — provably.** The surface *is* the substring relation; it is finite, I enumerated all 6 pairs, exactly 1 crosses kinds, and longest-wins resolves it to the more specific phrase. It is a **one-line test over two literal dictionaries**: assert no cross-kind substring collision exists. A future alias cannot reintroduce it silently. |
+| **B. routed kind with no pool** | `EN_ALIASES ∩ KIND_WORD ⊄ POOL_FOR_KIND` (`wetland`, and after R-A nothing) | **yes**, via R-A | **YES — provably.** Both sides are literal constants, so `{k for k in EN_ALIASES.values() if k in KIND_WORD} ⊆ set(POOL_FOR_KIND)` is an exhaustive check by construction, and it is a one-line test. |
+| **C. no alias at all** | nothing matches → the LLM leg substitutes (§3B.1) | **no** | **NO.** Closed *at the router* and open *anywhere else*. It is a property of **which entry points pass through the guard** — a call-graph fact, not a vocabulary fact. No change to `parse_intent` can close it. |
+| **D. removal verb** | the executor has no removal op (§3) | **no** | **NO.** Same reason: it is the guard's placement, not the vocabulary. |
+
+**And instance 6 is closed by neither R-A nor R-B** — it is a hand-authored alias mapping, outside every
+mechanism.
+
+**So the honest statement is: R-B provably closes mechanism A; R-A provably closes mechanism B; mechanisms C
+and D are closed only where the guard is reachable; and instance 6 is closed by a third, separate one-line
+change.** "We fixed the ones we found" is **not** the same as "this class is closed", and I am deliberately not
+writing the second. The strongest honest claim available is: *two of the four mechanisms are closed with an
+exhaustive guard test, one instance is closed by an alias edit, and the remaining two mechanisms are structural
+— they can regress by adding a caller, which is why the guard must eventually live in the shared path rather
+than only in the router (risk 12).*
+
+### 11.3 Should R-B be folded into the region task? **No — and the reason is measured, not procedural**
+
+The lead offered this as a real choice. **R-A and R-B must land in ONE commit, in that order, and neither can
+ride the region task.** Measured:
+
+```
+heuristic("add a floodable park")  before R-A:  ['green_space']                    (1 proposal — wrong)
+heuristic("add a floodable park")  after  R-A:  ['flood_storage', 'green_space']   (2 proposals — one right, one wrong)
+```
+
+**R-A alone makes the defect worse.** Once `flood_storage` has a pool, `parse_intent`'s two kinds *both*
+resolve, and the user asking for a floodable park receives **two interventions — a floodable ground and a green
+space** — on overlapping ground. That is worse than one wrong kind: it is a silent double-proposal, and the
+second one then trips the overlap guard or the cumulative cap and produces a refusal the user cannot explain.
+
+So the ordering is forced:
+
+1. **R-B's rule must land with, or before, R-A's pool** — never after.
+2. **They must be one commit**, because either alone is a regression: R-B alone turns a wrong proposal into a
+   *silent nothing*; R-A alone turns one wrong proposal into **two** proposals.
+3. **Neither can be folded into the region task**, for the lead's own reasons plus one more: R-A moves the gate
+   count the region engineer is targeting (23 → 30), and **R-C crashes `test_every_proposal_kind_round_trips_through_ai_plan` with a `KeyError`** until a phrased instruction is added in the same commit. Two people editing toward two different gate totals in one file is how a suite goes red with no attributable cause.
+
+Also: R-B's correctness argument **depends on R-A's pool existing** (that is the whole point of point 1), so
+R-B cannot be specified as a self-contained change for someone else to carry — it is a *pair*.
+
+### 11.4 The task spec — **sequenced after the region branch lands**
+
+**Task R — close mechanisms A and B (`POOL_FOR_KIND` / `parse_intent`), one commit.**
+- **Branch:** cut from the region branch **after it lands**. Not before, not in parallel.
+- **Precondition, and it is a hard gate:** the region branch's `load_grounding(region=None, claimed=None)`
+  shape must be in place. **I do not pin line numbers for `parse_intent` in this spec** — the region engineer is
+  rewriting it (`parse_intent_counts`, line numbers moving) and an anchor written against today's file would be
+  wrong by the time it is used. The spec below is written as **invariants and tests** for that reason, and the
+  implementer pins the anchors at the moment they start.
+- **R-A — the pool.** Add `flood_storage` to `POOL_FOR_KIND`, and give `Grounding` the matching list built from
+  the material that already exists (`siting.park_candidates()`, which returns
+  `_sites(vegetated(), kind="flood_storage", why=…)`). Build it inside `load_grounding` so the region filter and
+  the §2.2 claimed filter apply to it automatically — a pool built anywhere else would silently bypass both.
+  Consequence to expect: `CHOOSE_TOOL`'s enum grows by itself (`sorted(set(POOL_FOR_KIND))`), and
+  `is_unsupported_capability` stops calling `wetland` / `floodable park` unsupported.
+- **R-B — the rule.** `parse_intent` must resolve **one kind per noun occurrence, longest alias wins** — the
+  same rule `_match_noun` already uses. The implementation anchor is to be pinned against the region
+  engineer's landed `parse_intent`, and must not be written against the current file.
+- **R-6 — the alias (closes instance 6).** Re-point `EN_ALIASES["flood storage"]` at `flood_storage`. Only
+  legal in the same commit as R-A, because before R-A it would point at a kind with no pool.
+- **R-C — the test that R-A will crash.** `test_every_proposal_kind_round_trips_through_ai_plan` builds a
+  kind-keyed `instructions` dict and indexes it while iterating `POOL_FOR_KIND`; a sixth kind raises
+  **`KeyError`**, not an assertion failure. The kind **and** a phrased instruction (e.g.
+  `"add a wetland in the north"`) must be added together.
+- **The two closure guards (this is the part that makes A and B *provable* rather than merely fixed):**
+  1. `test_no_cross_kind_alias_collision` — for every ordered pair of aliases, if one is a substring of the
+     other their kinds must be equal. Exhaustive over two literal dictionaries, so it holds for every alias
+     that will ever exist, not just today's 29.
+  2. `test_every_routed_kind_has_a_pool` — `{k for k in EN_ALIASES.values() if k in KIND_WORD} ⊆
+     set(POOL_FOR_KIND)`. Same property: exhaustive by construction.
+- **C3 flips in this commit, and it should be the same author.** `assert "flood_storage" not in detail` encodes
+  §3B.3's correction, which was **correct while the pool was absent**. R-A retires it — that is a deliberate
+  retirement by the change that causes it, which is why the lead's instruction to the T03/T03B engineer to
+  leave C3 alone for now is the right call and consistent with this spec.
+- **Must not regress:** `test_intent_parsing_reads_counts` (`parse_intent`'s outputs for the counted cases),
+  `test_intent_routing` 14/14, `test_every_proposal_kind_has_a_defined_ledger_effect` (`flood_storage` has an
+  `INTERVENTION_EFFECTS` entry, so it should pass), and the gate total the region branch establishes.
+- **Explicitly NOT in this task:** mechanisms C and D. They are structural (call-graph), they are already
+  covered by the §3B and §3 removal guards at the router, and the honest fix is risk 12 — move the guard into
+  the shared path — which is a separate decision.
