@@ -27,6 +27,7 @@ __all__ = [
     "GroundingReport",
     "StatItem",
     "template_card",
+    "unsupported_capability_card",
 ]
 
 
@@ -341,3 +342,58 @@ def _empty_card() -> AnswerCard:
         source="template",
         grounding=None,
     )
+
+
+def unsupported_capability_card(question: str, card: AnswerCard) -> AnswerCard:
+    """The card for a request the sandbox has no intervention to answer (§3B.5).
+
+    A sibling of :func:`_empty_card`, and the reason it exists is that
+    `_empty_card` dates the cause **wrongly**. For "add a school" it says
+    ``confidence.note = "No run in scope yet ..."`` and ``todo = "Press Run
+    Simulation ..."`` -- and both are false: a run may well exist, and pressing
+    Run Simulation does not help. Worse, with a run in scope the generic run card
+    answers a capability gap with "the run is unchanged from the baseline", which
+    reads as though the request were understood. This card states the true cause
+    -- a limit of what the endpoint can create -- and carries the capability
+    statement whose every clause is a fact about the system, never a claim about
+    the user's sentence (see :func:`app.agent.intent.capability_statement`).
+
+    `question` is accepted so the builder has the same signature at every call
+    site; the wording is deliberately independent of it, because echoing the
+    sentence back is how a message drifts into asserting we understood it.
+    """
+    # Imported here, not at module scope: `intent` imports this module (`AnswerCard`),
+    # so a top-level import would be circular -- the same reason `run_card` and
+    # `confidence` are imported lazily elsewhere in this file.
+    from app.agent.intent import capability_statement
+
+    del question  # interface stability only; the wording never reads it
+    return card.model_copy(update={
+        "kind": "general",
+        "title": "I could not match that to an intervention I can create",
+        "eyebrow": "Capability",
+        "sentence": ("That is not something this sandbox can turn into a proposal "
+                     "-- the cause is a limit of what the endpoint can create, "
+                     "not a missing run and not a missing model."),
+        "l1": "What this sandbox can create",
+        "cause": capability_statement(),
+        "l2": "What to do",
+        "todo": ("Name one of the interventions above (e.g. \"add a water "
+                 "reservoir in the north\"), or ask a question about the current "
+                 "run."),
+        "stats": [],
+        "caveats": [
+            "This states what the endpoint can create; it does not claim to have "
+            "understood the sentence, because a synonym can read as a miss.",
+        ],
+        "followups": [],
+        "source": "template",
+        "grounding": None,
+        "confidence": Confidence(
+            level="Low",
+            pct=30,
+            note=("No intervention this endpoint can create matches that request: "
+                  "the cause is a capability of the endpoint, not a missing run "
+                  "and not a missing model."),
+        ),
+    })
