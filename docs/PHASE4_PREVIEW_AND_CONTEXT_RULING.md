@@ -1401,7 +1401,9 @@ code. (The `T1/backend/.venv` interpreter also works for read-only auditing agai
 `cd <worktree>/backend && /path/to/T1/backend/.venv/bin/python -c …` — because `app` resolves from the cwd,
 which is how §9 and §10 were measured.)
 
-**C3 — In a shared worktree, `git add` and `git commit` must be ONE command.**
+**C3 — In a shared worktree, commit with the pathspec form: `git commit -m "<msg>" -- <path>`.**
+**Not** `git add` followed by a bare `git commit` — that sweeps whatever anyone has staged. The measurement is
+two paragraphs down.
 The main tree and the worktrees are separate checkouts of **shared branches**, and several people commit into
 them concurrently. A change that sits **staged** between one command and the next is visible to anybody else's
 `git commit`, so it rides along under their message. Measured, in this very file: a 108-line edit to this
@@ -1410,7 +1412,30 @@ document was staged, a teammate committed their test change, and **the doc edit 
 and an innocent-looking commit that appears to have been written by someone who did not write it.
 
 Nothing was lost and **history was not rewritten** (QA was running; rewriting a shared branch to fix
-provenance is a worse trade than recording it). But the rule is worth carrying: **`git add <file> && git
-commit …` in a single invocation**, never staged across commands. This is the same discipline §11.4 demands of
-R-A's two-test retirement for the opposite reason — there, two authors would leave a red suite with no owner;
-here, one staged file left a commit with no author.
+provenance is a worse trade than recording it).
+
+**The rule, corrected — and my first version of it was materially weaker.** I originally wrote *"`git add
+<file> && git commit` in a single invocation"*. **The T03/T03B implementer pointed out that this does not
+help when someone else has already staged something**, and I verified it in a scratch repository rather than
+taking either version on trust. With a teammate's change staged to `B.txt` and mine to `A.txt`:
+
+| form | files that landed in the commit |
+|---|---|
+| `git commit <msg> -- <path>` (the implementer's form) | **`A.txt` only** — `B.txt` left staged and untouched |
+| `git add <path> && git commit <msg>` (my first version) | **`A.txt`, `B.txt`, `C.txt`** — every staged change swept in |
+
+So use the **pathspec form**:
+
+```
+git commit -m "<msg>" -- <path>
+```
+
+It takes the path's **working-tree** content and **ignores the index entirely** for that commit, so it is
+immune to *another* person's staged change — which the `add && commit` form is not, because a bare `git commit`
+commits the whole index. My version only protected against my *own* leftover staging; this one protects
+against the case that actually happened.
+
+**Credit:** the implementer proposed this form and the reasoning behind it, and their last two commits used it.
+It is the form to hand to the other engineers. This is the same discipline §11.4 demands of R-A's two-test
+retirement, for the opposite reason — there, two authors would leave a red suite with no owner; here, one
+staged file left a commit with no author.
