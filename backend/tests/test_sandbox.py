@@ -259,6 +259,28 @@ def main() -> int:
     check("the constraint guard is untouched: a stale coordinate ask still refuses",
           _untouched_guard_refuses(), "")
 
+    # With every reservoir placed, the kind is exhausted -- and the sentence has
+    # to say that rather than blame the constraint engine or tell the planner to
+    # rebuild rasters that are present and correct.
+    remaining = _ai_plan("add a water reservoir in the north")["proposals"]
+    for extra in remaining:
+        _apply([extra], baseline["provider"])
+    exhausted = client.post(f"/api/scenes/{SCENE}/ai-plan",
+                            json={"instruction": "add a water reservoir in the north",
+                                  "provider": "heuristic", "apply": False})
+    check("an exhausted kind is not reported as missing data",
+          exhausted.status_code in (200, 422)
+          and "fetch_dem" not in exhausted.text
+          and "fetch_landcover" not in exhausted.text,
+          exhausted.text[:140])
+    check("and it names the reason: prior work claims the ground",
+          "already covered by work on the sandbox" in exhausted.text,
+          exhausted.text[:160])
+    # A kind the planner did NOT ask for must not be reported at all: the
+    # reservoirs are full, and that is a true sentence about the wrong thing.
+    for row in _staged_pinned():
+        client.post(f"/api/scenes/{SCENE}/pins/{row['id']}/unpin")
+
     print("preview: the effect of an uncommitted change")
     # Phase 4 T01. The preview must measure, never run: no runId, no overlay, no
     # card, nothing written, and the same answer twice.

@@ -521,11 +521,14 @@ def _drop_claimed_sites(g: "Grounding", claimed: Any, occupied: Any = None) -> N
     1,876 as a served placement, and the 2 building cells it sheds would
     otherwise read as free ground and keep a fully-claimed site in the pool.
 
-    A site is kept when **any** of its *servable* cells are free. A partly-claimed
-    site is still a legal site: the gate clips and the guard reports the overlap,
-    and dropping it would discard ground the user can still use. Wholly-claimed
-    sites go, and the note says how many, because a shorter pool with no
-    explanation reads exactly like a pool that was never that long.
+    A site is dropped when **any** of its servable cells are claimed, not only
+    when all of them are. The gate's overlap tolerance is zero cells -- one
+    shared cell is a refusal -- so a partly-claimed site is a site the gate will
+    refuse, and keeping it reproduces exactly the dead-end this filter exists to
+    remove: measured on this data, a staged reservoir shares a cell or two with
+    each green block, and the green kind came back empty with
+    ``OVERLAPS_STAGED`` twice. Suggesting only wholly-free candidates is the
+    same rule the suggestion path already applies.
     """
     from app.services.sandbox_model import _polygon_cells
 
@@ -578,7 +581,7 @@ def _drop_claimed_sites(g: "Grounding", claimed: Any, occupied: Any = None) -> N
                 kept.append(candidate)
                 continue
             served = cells - buildings
-            if served and not (served - taken):
+            if served and (served & taken):
                 dropped += 1
                 continue
             kept.append(candidate)
@@ -588,6 +591,56 @@ def _drop_claimed_sites(g: "Grounding", claimed: Any, occupied: Any = None) -> N
             f"{dropped} candidate site(s) already covered by work on the "
             f"sandbox were not offered; the proposer moved on to free ground "
             f"rather than proposing a placement that would be refused")
+
+
+def _claimed_empty_message(grounding: "Grounding",
+                           instruction: str = "") -> str | None:
+    """Why prior work emptied a pool, in the instruction's own terms (T04b).
+
+    ``None`` unless prior work is the reason something asked for has nothing:
+    the note the pool filter appended says how many candidates it dropped, and
+    a pool for a **kind the instruction actually named** is now empty. A kind
+    the instruction never mentioned is not reported -- "add green space" must
+    not be told that the reservoirs are full, which is a true sentence about
+    the wrong thing.
+
+    The generic "no candidate survived the constraints" blames the constraint
+    engine for ground that is simply taken, and the planner's next move is to
+    move or remove something rather than to pick a different kind -- so the
+    message names that, not just the fact.
+    """
+    if not any("already covered by work on the sandbox" in n
+               for n in grounding.notes):
+        return None
+
+    pools = {
+        "water_reservoir": ("water reservoir", grounding.reservoir_sites),
+        "green_space": ("green space", grounding.green_sites),
+        "urban_green": ("green space", grounding.green_sites),
+        "permeable_paving": ("permeable paving", grounding.paving_sites),
+    }
+    asked = [kind for kind, _count in parse_intent_counts(instruction)] if instruction else []
+    # Falls back to every empty pool when the instruction named no kind at all
+    # (or named one this map does not carry), so the sentence is never a claim
+    # about a kind nobody asked for while a relevant pool sits empty.
+    considered = asked or list(pools)
+    empty: list[str] = []
+    for kind in considered:
+        label, pool = pools.get(kind, (None, None))
+        if label is None or pool:
+            continue
+        if label not in empty:
+            empty.append(label)
+    if not empty:
+        return None
+    kinds = ", ".join(empty)
+    return (
+        f"No candidate site for the {kinds} was left to offer: the work "
+        "already on the sandbox -- the staged plan and the toggled projects -- "
+        "claims all of that ground, so nothing was proposed over it. Move or "
+        "remove one of them, and the free ground comes back. Nothing was "
+        "invented."
+    )
 
 
 def _ranked(rank: int) -> str:
@@ -2656,6 +2709,21 @@ def generate_proposals(
     # the backstop; this is prevention, not replacement.
     grounding = load_grounding(_claimed_for_pools(scene_id, plan_ids))
     if not grounding.any_available():
+        # Two different reasons land here, and they need different sentences.
+        # The pool filter can have emptied every pool because prior work claims
+        # all of it -- and "run fetch_dem.py" would then send the planner to
+        # rebuild rasters that are present and correct, while the real fix is to
+        # move or remove something on the sandbox. Only when prior work is *not*
+        # the cause is the missing-data sentence the true one.
+        if any("already covered by work on the sandbox" in n
+               for n in grounding.notes):
+            raise PlanGenerationError(
+                "every candidate site is already covered by work on the "
+                "sandbox -- the staged plan and the toggled projects claim all "
+                "of their ground, so nothing can be proposed over it. Move or "
+                "remove one of them and the free ground comes back. Refusing to "
+                "invent geometry."
+            )
         raise PlanGenerationError(
             "no grounded candidate sites are available. Run fetch_dem.py, "
             "fetch_landcover.py and make_wetgrid.py so proposals can be tied to "
@@ -2770,6 +2838,12 @@ def generate_proposals(
         # in the north). Said in its own terms instead of the generic sentence,
         # which named neither the region nor the reason.
         region_message = empty_region_message(effective_instruction, grounding)
+        # A pool emptied by prior work is a third reason, and the generic
+        # sentence blames the constraints for it. "Add a water reservoir" with
+        # all three basins already on the sandbox is not a constraint failure --
+        # the ground is taken, and the fix is to move or remove something, not
+        # to pick a different kind.
+        claimed_message = _claimed_empty_message(grounding, effective_instruction)
         return {
             "features": [],
             "rejected": rejected,
@@ -2781,7 +2855,7 @@ def generate_proposals(
                 "green": len(grounding.green_sites),
                 "paving": len(grounding.paving_sites),
             },
-            "message": region_message or (
+            "message": region_message or claimed_message or (
                 "Nothing could be placed: no candidate survived the "
                 "constraints, or no provider returned a usable answer for this "
                 "instruction. Nothing was invented."
