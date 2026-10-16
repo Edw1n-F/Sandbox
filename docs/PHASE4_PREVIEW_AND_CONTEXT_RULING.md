@@ -361,9 +361,13 @@ this sandbox has**, and nothing tells the user that.
 
 ### 3B.1 The mechanism is not "the noun falls back" — it is a forced tool with a closed enum
 
-Three compounding causes, **all on our side**. The heuristic provider is innocent: measured,
-`HeuristicProvider().propose()` returns **0 features** for every one of the five building phrasings. The
+Three compounding causes, **all on our side**. The heuristic provider is innocent **for buildings**: measured,
+`HeuristicProvider().propose()` returns **0 features** for every one of the five building phrasings, so the
 substitution happens on the **LLM leg only**, and it is forced.
+
+**SCOPE CORRECTION (19 Oct, §10.2).** That clearance is **specific to this noun class, not general.** The
+`EN_ALIASES → POOL_FOR_KIND` audit found a substitution **in the heuristic**: `"add a floodable park"` yields a
+`green_space`. I am narrowing the claim here rather than letting the earlier wording stand — see §10.
 
 | # | Cause | Where | Measured |
 |---|---|---|---|
@@ -383,8 +387,10 @@ this instruction"* — which **blames the instruction or the provider** for a ca
 
 **Class, stated once.** Same as the removal inversion: *an instruction the executor cannot honour, resolved by
 producing something from the pool instead of declining.* Removal's shape was `parse_intent`'s `(kind, count)`
-with no removal op; this one's is a forced tool with a closed kind enum. The family is what matters — it has
-now appeared twice with the same signature, and §3B.6 rules one shared refusal path because of it.
+with no removal op; this one's is a forced tool with a closed kind enum. **The §10 audit takes the family to
+five instances** — the two measured here, `drop the trees` → three reservoirs, `floodable park` →
+`green_space`, and `wetland` → nothing at all (§10.2/§10.4). That count is the argument for the shared refusal
+path and for R-B, which fixes the *root* rather than the symptom.
 
 ### 3B.2 RULING: refuse with **422**, from a guard that runs **before any provider is called**
 
@@ -444,11 +450,18 @@ message that lies. `/ai-plan`'s message must be **generated from `POOL_FOR_KIND`
 ### 3B.4 The message's shape, and the false positive it must not create
 
 The detector is *"a creation verb is present, **no supported noun matches**, and the turn is not
-interrogative"*. That predicate is **also true of phrasings whose intent IS supported but whose noun is a
-synonym** — four of them are already pinned in `test_proposal_contract.py` as `PROPOSAL_SHAPED_GAPS`:
-*"plant a green corridor along the riverfront"*, *"put a permeable plaza in the centre"*, *"dig a basin in the
-north"*, *"create a wetland in the east"*. Those users want green space or a reservoir. A message that told
-them their request is unsupported would be **worse than today's silence.**
+interrogative"*. That predicate is **also true of phrasings whose intent IS supported but whose noun is not in
+the vocabulary yet** — and a message that told such a user their request is unsupported would be **worse than
+today's silence.**
+
+**CORRECTION (19 Oct, measured).** This paragraph originally offered the four `PROPOSAL_SHAPED_GAPS` phrasings
+as the demonstration. **That is now stale, and the T03 engineer measured it first:** three of the four —
+*"green corridor"*, *"permeable plaza"*, *"basin"* — are now in `ai_plan.EN_ALIASES`, so `_match_noun` finds
+them, `classify_turn` routes them, and **the guard does not fire at all**. Only *"wetland"* still reaches the
+guard, and it reaches it for a different reason — it maps to `flood_storage`, which has no pool (§10).
+So the false positive is **not** demonstrated by those four, and test **C4 must assert on a genuinely
+unrecognised synonym** instead. The *message shape* below is still the right ruling; only the illustration was
+wrong.
 
 **Ruling — every clause must be a fact about the *system*, never a claim about the *user's sentence*:**
 
@@ -1027,3 +1040,132 @@ only — no `ai_plan.py`, no proposal selection. Parallel-safe with the region w
    does **not** set `heightReference` for polygons in 1.146 (the run above shows `heightReference === undefined`
    after a load with that option), so it is not a second source of the warning, and I have not ruled it
    changed. Noted so a future reader does not assume it is inert for every geometry type.
+
+---
+
+## 10. The `EN_ALIASES → POOL_FOR_KIND` audit (residual risk 10, discharged)
+
+*(19 Oct 2026. Promised in §3B.7 risk 10 as "worth one pass before the pitch". Done exhaustively rather than
+by sampling, and it found a **fifth** instance of the family — in the leg I had cleared.)*
+
+### 10.1 The inventory, measured
+
+`EN_ALIASES` holds **29 aliases across 8 kinds**. Three kinds have no pool:
+
+| kind | aliases | `POOL_FOR_KIND` | router noun (`KIND_WORD`) | style |
+|---|---|---|---|---|
+| `water_reservoir` | 7 | ✓ | ✓ | ✓ |
+| `green_space` | 6 | ✓ | ✓ | ✓ |
+| `drainage` | 4 | ✓ | ✓ | ✓ |
+| `permeable_paving` | 3 | ✓ | ✓ | ✓ |
+| `road` | 3 | ✓ | ✓ | ✓ |
+| **`flood_storage`** | **2** (`wetland`, `floodable park`) | **✗** | ✓ | ✓ |
+| **`wind`** | **3** (`wind`, `windbreak`, `ventilation`) | ✗ | ✗ | ✗ |
+| **`podium`** | **1** | ✗ | ✗ | ✗ |
+
+Then the decisive sweep — **every** alias driven through `HeuristicProvider().propose("add a <alias>")` and
+compared with the kind its own alias declares:
+
+- **23 aliases produce the right kind.**
+- **5 produce nothing:** `wetland`, `wind`, `windbreak`, `ventilation`, `podium`.
+- **1 produces the wrong kind: `floodable park` → `green_space`.**
+
+### 10.2 F1 — the fifth instance, in the **heuristic**, and I was wrong about that leg
+
+In §3B.1 I cleared the heuristic: *"the heuristic is innocent — measured, it returns 0 features for every one
+of the five building phrasings."* **That is true for buildings and it is not true in general.** Here is the
+counter-example:
+
+```
+parse_intent("add a floodable park")   ->  [('green_space', 1), ('flood_storage', 1)]
+HeuristicProvider().propose(...)       ->  green_space  |  "the largest contiguous vegetated block…"
+```
+
+`parse_intent` matches **every** alias as a **substring**, so `park` (→ `green_space`) matches alongside
+`floodable park` (→ `flood_storage`); the flood-storage half has no pool, the green half does, and the user
+asking for **a ponding feature gets a park** — with a plausible evidence string attached. **A floodable park is
+a ponding feature; a green space is not one**, and nothing in the response says the request changed.
+
+### 10.3 F2 — two parsers give two answers for one sentence, and only the guard hides it
+
+```
+_match_noun("add a floodable park")        ->  ('floodable park', 'flood_storage')   longest alias wins
+is_unsupported_capability(...)             ->  True      (flood_storage ∉ POOL_FOR_KIND)
+parse_intervention_intent(...)             ->  "add floodable ground in the whole area"
+parse_intent("add a floodable park")       ->  [('green_space',1), ('flood_storage',1)]
+```
+
+So on **one sentence** the router says *flood_storage, which I cannot create* and the proposer says
+*green_space, which I can*. **Today the guard masks this**, because T03 places it in the router **before**
+`generate_proposals` — which is exactly residual risk 12, and this is the concrete instance proving it is not
+hypothetical. `generate_proposals` and `HeuristicProvider.propose` are directly reachable (the LLM-rescue
+fallback at `generate_proposals`, `generate_plan`, and every test that calls the provider directly). **Two
+parsers disagreeing about one sentence is the "two opinions" pattern this project forbids for geometry; it is
+no better for a noun.**
+
+### 10.4 F3 — `flood_storage` is supported by five subsystems and uncreatable by the sixth
+
+| subsystem | supports `flood_storage`? |
+|---|---|
+| `KIND_WORD` — the router's nouns | **yes** |
+| `STYLE_FOR_KIND` — the legend's row | **yes** |
+| `INTERVENTION_EFFECTS` — the ledger applies it | **yes** |
+| `_DEPTH_KINDS` — the input card asks for its depth | **yes** |
+| `siting.park_candidates()` — real candidates, `_sites(vegetated(), kind="flood_storage")` | **yes** |
+| **`POOL_FOR_KIND` — proposable by `/ai-plan`** | **NO** |
+
+And `suggest.suggest()` **can emit it** (measured: `suggest kinds = ['flood_storage', 'green_space',
+'permeable_paving', 'underground_tank', 'water_reservoir']`). So **the suggestion route can create a floodable
+ground that the chat route never can** — which contradicts `cbd4cef`'s own claim that both routes *"end in one
+place"*. The ledger, the legend, the input card and the candidate builder all agree the capability exists; one
+dictionary disagrees.
+
+### 10.5 RULINGS
+
+**R-A — add the `flood_storage` pool. Do not withdraw the advertisement.**
+One `POOL_FOR_KIND` entry plus one list on `Grounding`, built from the material that **already exists**
+(`siting.park_candidates()`). Why this direction:
+- The capability is real and already shipped in **five of six** subsystems, including the suggestion route.
+  Withdrawing it would mean deleting a legend row, a working suggestion kind, and two aliases — and the aliases
+  are on the **three-way vocabulary pin**, so the deletion would propagate to the client.
+- Adding it **removes a whole instance of the family**: the router can no longer advertise a noun the proposer
+  cannot serve, and `is_unsupported_capability` stops calling `wetland` / `floodable park` unsupported.
+- `CHOOSE_TOOL`'s enum is `sorted(set(POOL_FOR_KIND))`, so it grows by itself — no second edit to keep in sync.
+- The region filter (`sites_in_region`) and the §2.2 claimed filter apply to the new pool automatically,
+  because both narrow whatever `load_grounding` produced.
+
+**CONSEQUENCE, and it is a coordination item, not a detail:** this **flips test C3**, which the T03 engineer
+has just written — `assert "flood_storage" not in detail` and `assert KIND_WORD["flood_storage"] not in detail`.
+Those assertions encode §3B.3's *correction*, which was correct **for as long as the pool was absent**. R-A
+retires it deliberately. **Tell the engineer; do not let a green suite go red on them.** C3 becomes: the
+message names all `POOL_FOR_KIND` kinds — including floodable ground, once it is one of them — and still omits
+nothing it can create.
+
+**R-B — fix the parser disagreement; do not rely on the guard's placement.**
+`parse_intent` must resolve **one kind per noun occurrence, longest alias wins** — the same rule `_match_noun`
+already uses — so the proposer and the router cannot answer differently about one sentence. Reasons: the guard
+sits at a single point (risk 12, now proven); F1 is reachable wherever the provider is called directly; and a
+"will this be created?" question must have one answer. This is the *root* fix for F1; the guard is the
+belt-and-braces.
+
+**R-C — a regression flag that will otherwise be discovered by a red suite.**
+`test_every_proposal_kind_round_trips_through_ai_plan` builds a **kind-keyed** dict —
+`instructions = {kind: sentence}` for the five pool kinds (lines 322-330) — and then does
+`for kind in sorted(ai_plan.POOL_FOR_KIND): instructions[kind]`. **Adding `flood_storage` to `POOL_FOR_KIND`
+raises `KeyError: 'flood_storage'`** — it does not fail an assertion, it crashes the suite. R-A must add the
+kind **and** a phrased instruction for it (e.g. `"add a wetland in the north"`) in the same commit.
+
+**R-D — `wind` (3 aliases) and `podium` (1) need no change.**
+They are not router nouns, not pools, not styles, so `_match_noun` returns `None` and §3B's guard fires with
+the capability statement — correct behaviour for a capability that genuinely does not exist. They remain a
+*latent* hazard only in the sense R-B covers: `parse_intent("add a windbreak")` still returns `[('wind',1)]`
+and silently yields nothing if ever called without the guard.
+
+### 10.6 What this audit cost, and what it was worth
+
+One pass, exhaustive over 29 aliases and 8 kinds — not sampled. It found: **one live substitution in the leg I
+had cleared** (F1, and I have corrected §3B.1's scope rather than quietly widening it), **one proof that a
+guard's *placement* is load-bearing** (F2/risk 12, previously speculation), **one capability shipped in five
+places and missing from a sixth** (F3), and **one crash-in-waiting in a kind-keyed test** (R-C). The lead's
+instinct that an unaudited fallback "is exactly the kind of thing that survives a walkthrough" was right: F1
+would survive one, because the proposal it returns is legal, in-bounds, well-sourced and the wrong feature.
