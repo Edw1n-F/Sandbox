@@ -96,6 +96,19 @@ jobs:
             if grep -q '__main__' "$f"; then
               python "$f" || failed="$failed $f"
             else
+              # No __main__ guard, so pytest is the runner. That is only correct
+              # for a file that defines tests -- and pytest exits 5 ("no tests
+              # collected") for one that does not, which reads as an opaque red
+              # job. tests/test_intervention_geometry.py shipped that way: a
+              # plain script with `check(...)` calls at module level and no
+              # guard, every assertion passing under `python`, and a 0-check
+              # exit-5 failure under pytest. Name the real problem here.
+              if ! grep -qE '^def test_' "$f"; then
+                echo "::error file=$f::$f has no __main__ guard and defines no 'def test_*', so pytest collects nothing and exits 5. Give it a main() and a __main__ guard (see tests/test_suggest.py), or write it with 'def test_*' functions (see tests/test_overlay_masking.py)."
+                failed="$failed $f"
+                echo "::endgroup::"
+                continue
+              fi
               python -m pytest -q "$f" || failed="$failed $f"
             fi
             echo "::endgroup::"

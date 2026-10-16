@@ -348,6 +348,15 @@ functions, so `pytest tests/` reports "no tests ran" for it and the standalone
 script is the only way to run it. Two suites, two runners; run both, or one of
 them silently reports nothing.
 
+**The runner is chosen by the `__main__` guard, so a script-style suite must have
+one.** CI runs `python <file>` when the guard is present and `pytest <file>` when
+it is not — and pytest exits **5** ("no tests collected") for a script with no
+`__main__` and no `def test_*`, which reads as an opaque red backend job.
+`test_intervention_geometry.py` shipped that way on 16 Oct: 18/18 under `python`,
+0 checks and exit 5 under pytest, so CI failed a suite whose every assertion
+passed. It now has a `main()` and a guard, and CI's loop says so by name if
+another suite is ever written this way.
+
 On Windows set `PYTHONUTF8=1`, or three suites crash on a cp950 decode error
 before running a check.
 

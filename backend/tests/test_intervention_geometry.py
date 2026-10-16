@@ -5,8 +5,16 @@ The load-bearing assertion is the round-trip: a contour ring fed to
 returns exactly the component's own cells. Everything else (closed rings,
 holes, diagonal behaviour, determinism) is in service of that identity.
 
-Written as a plain script, like the rest of the suites: run
-``cd backend && ./.venv/bin/python tests/test_intervention_geometry.py``.
+Written as a script with a ``main()`` and a ``__main__`` guard, the shape every
+other suite here uses: run
+``cd backend && python tests/test_intervention_geometry.py``, or let CI's loop
+pick the runner from that guard.
+
+The guard is load-bearing, not decoration. CI chooses ``python <file>`` for a
+suite that has one and ``pytest <file>`` for a suite that does not, and this file
+defines no ``def test_*``, so under pytest it collected nothing and exited 5
+("no tests collected") -- a red backend job for a suite whose own checks all
+passed. Keep the guard if you refactor this file.
 """
 
 from __future__ import annotations
@@ -58,128 +66,134 @@ def rectangle(r0: int, c0: int, height: int, width: int) -> list[tuple[int, int]
     return [(r, c) for r in range(r0, r0 + height) for c in range(c0, c0 + width)]
 
 
-# --------------------------------------------------------------------------- #
-# One cell
-# --------------------------------------------------------------------------- #
+def main() -> int:
+    # --------------------------------------------------------------------------- #
+    # One cell
+    # --------------------------------------------------------------------------- #
 
-geometry, enclosed, of_component = contour_ring(
-    [(12, 20)], bounds=BOUNDS, rows=ROWS, cols=COLS)
-ring = geometry["coordinates"][0]
-check("a single cell contours to a closed ring",
-      geometry["type"] == "Polygon" and len(ring) >= 4 and ring[0] == ring[-1],
-      f"{geometry['type']} with {len(ring)} points")
-check("a single cell's diamond encloses exactly its own cell",
-      enclosed == 1 and of_component == 1, f"{enclosed}/{of_component}")
-check("a single cell round-trips through the ledger rasteriser",
-      rasterise(geometry) == {(12, 20)}, f"{rasterise(geometry)}")
-
-
-# --------------------------------------------------------------------------- #
-# A solid block: the contour is the mask, not a bounding box
-# --------------------------------------------------------------------------- #
-
-cells = rectangle(6, 8, 12, 8)
-geometry, enclosed, of_component = contour_ring(
-    cells, bounds=BOUNDS, rows=ROWS, cols=COLS)
-check("a solid block encloses every one of its cells",
-      enclosed == of_component == len(cells), f"{enclosed}/{of_component}")
-check("a solid block round-trips through the ledger rasteriser",
-      rasterise(geometry) == set(cells),
-      f"extra={rasterise(geometry) - set(cells)} missing={set(cells) - rasterise(geometry)}")
+    geometry, enclosed, of_component = contour_ring(
+        [(12, 20)], bounds=BOUNDS, rows=ROWS, cols=COLS)
+    ring = geometry["coordinates"][0]
+    check("a single cell contours to a closed ring",
+          geometry["type"] == "Polygon" and len(ring) >= 4 and ring[0] == ring[-1],
+          f"{geometry['type']} with {len(ring)} points")
+    check("a single cell's diamond encloses exactly its own cell",
+          enclosed == 1 and of_component == 1, f"{enclosed}/{of_component}")
+    check("a single cell round-trips through the ledger rasteriser",
+          rasterise(geometry) == {(12, 20)}, f"{rasterise(geometry)}")
 
 
-# --------------------------------------------------------------------------- #
-# An irregular shape: the whole point of the contour
-# --------------------------------------------------------------------------- #
+    # --------------------------------------------------------------------------- #
+    # A solid block: the contour is the mask, not a bounding box
+    # --------------------------------------------------------------------------- #
 
-# An L: a 14-wide bar with a 6-wide foot. Its bounding box claims 14x10 =
-# 140 cells; the mask is 84. The old five-point box would have applied the
-# intervention to 56 cells nobody proposed.
-l_shape = rectangle(4, 4, 3, 14) + rectangle(7, 4, 8, 6)
-geometry, enclosed, of_component = contour_ring(
-    l_shape, bounds=BOUNDS, rows=ROWS, cols=COLS)
-ring = geometry["coordinates"][0]
-bbox_ring_cells = rectangle(4, 4, 11, 14)
-
-check("an L encloses every one of its cells",
-      enclosed == of_component == len(l_shape), f"{enclosed}/{of_component}")
-check("an L round-trips through the ledger rasteriser",
-      rasterise(geometry) == set(l_shape),
-      f"extra={len(rasterise(geometry) - set(l_shape))} "
-      f"missing={len(set(l_shape) - rasterise(geometry))}")
-check("an L contour is not the bounding box it used to be",
-      len(ring) > 5, f"{len(ring)} points -- that is a box, not a shape")
-check("an L claims far less than its bbox did",
-      len(rasterise(geometry)) < len(bbox_ring_cells),
-      f"{len(rasterise(geometry))} vs {len(bbox_ring_cells)} bbox cells")
+    cells = rectangle(6, 8, 12, 8)
+    geometry, enclosed, of_component = contour_ring(
+        cells, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    check("a solid block encloses every one of its cells",
+          enclosed == of_component == len(cells), f"{enclosed}/{of_component}")
+    check("a solid block round-trips through the ledger rasteriser",
+          rasterise(geometry) == set(cells),
+          f"extra={rasterise(geometry) - set(cells)} missing={set(cells) - rasterise(geometry)}")
 
 
-# A plus sign, as a second irregular case with four arms.
-plus = sorted(set(
-    rectangle(10, 8, 2, 12)
-    + rectangle(8, 13, 10, 2)
-    + rectangle(8, 16, 2, 2)
-))
-geometry, enclosed, of_component = contour_ring(
-    plus, bounds=BOUNDS, rows=ROWS, cols=COLS)
-check("a plus sign encloses every one of its cells",
-      enclosed == of_component == len(plus), f"{enclosed}/{of_component}")
-check("a plus sign round-trips through the ledger rasteriser",
-      rasterise(geometry) == set(plus),
-      f"extra={rasterise(geometry) - set(plus)} missing={set(plus) - rasterise(geometry)}")
+    # --------------------------------------------------------------------------- #
+    # An irregular shape: the whole point of the contour
+    # --------------------------------------------------------------------------- #
+
+    # An L: a 14-wide bar with a 6-wide foot. Its bounding box claims 14x10 =
+    # 140 cells; the mask is 84. The old five-point box would have applied the
+    # intervention to 56 cells nobody proposed.
+    l_shape = rectangle(4, 4, 3, 14) + rectangle(7, 4, 8, 6)
+    geometry, enclosed, of_component = contour_ring(
+        l_shape, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    ring = geometry["coordinates"][0]
+    bbox_ring_cells = rectangle(4, 4, 11, 14)
+
+    check("an L encloses every one of its cells",
+          enclosed == of_component == len(l_shape), f"{enclosed}/{of_component}")
+    check("an L round-trips through the ledger rasteriser",
+          rasterise(geometry) == set(l_shape),
+          f"extra={len(rasterise(geometry) - set(l_shape))} "
+          f"missing={len(set(l_shape) - rasterise(geometry))}")
+    check("an L contour is not the bounding box it used to be",
+          len(ring) > 5, f"{len(ring)} points -- that is a box, not a shape")
+    check("an L claims far less than its bbox did",
+          len(rasterise(geometry)) < len(bbox_ring_cells),
+          f"{len(rasterise(geometry))} vs {len(bbox_ring_cells)} bbox cells")
 
 
-# --------------------------------------------------------------------------- #
-# Holes: an island in a basin is not part of the basin
-# --------------------------------------------------------------------------- #
-
-donut = rectangle(20, 10, 9, 9)
-hole = rectangle(23, 13, 3, 3)
-donut = [cell for cell in donut if cell not in hole]
-
-rings = contour_rings(donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
-donut_geometry, enclosed, of_component = contour_ring(
-    donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
-check("a donut comes back as a polygon with a hole",
-      len(donut_geometry["coordinates"]) == 2 and len(rings) == 1,
-      f"{len(donut_geometry['coordinates'])} rings, {len(rings)} entries")
-check("a donut encloses exactly its own cells",
-      enclosed == of_component == len(donut), f"{enclosed}/{of_component}")
-check("a donut's hole is NOT converted by the ledger rasteriser",
-      rasterise(donut_geometry) == set(donut),
-      f"island cells wrongly enclosed: {rasterise(donut_geometry) & set(hole)}")
+    # A plus sign, as a second irregular case with four arms.
+    plus = sorted(set(
+        rectangle(10, 8, 2, 12)
+        + rectangle(8, 13, 10, 2)
+        + rectangle(8, 16, 2, 2)
+    ))
+    geometry, enclosed, of_component = contour_ring(
+        plus, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    check("a plus sign encloses every one of its cells",
+          enclosed == of_component == len(plus), f"{enclosed}/{of_component}")
+    check("a plus sign round-trips through the ledger rasteriser",
+          rasterise(geometry) == set(plus),
+          f"extra={rasterise(geometry) - set(plus)} missing={set(plus) - rasterise(geometry)}")
 
 
-# --------------------------------------------------------------------------- #
-# A diagonal-only connection: two parts, and the count says so
-# --------------------------------------------------------------------------- #
+    # --------------------------------------------------------------------------- #
+    # Holes: an island in a basin is not part of the basin
+    # --------------------------------------------------------------------------- #
 
-diagonal = [(30, 30), (31, 31)]
-rings = contour_rings(diagonal, bounds=BOUNDS, rows=ROWS, cols=COLS)
-geometry, enclosed, of_component = contour_ring(
-    diagonal, bounds=BOUNDS, rows=ROWS, cols=COLS)
-check("a diagonal pair yields two parts",
-      len(rings) == 2, f"{len(rings)} entries")
-check("a diagonal pair's largest part encloses only itself",
-      enclosed == 1 and of_component == 2, f"{enclosed}/{of_component}")
-check("a diagonal pair round-trips through the ledger rasteriser",
-      rasterise(geometry) == {(30, 30)}, f"{rasterise(geometry)}")
+    donut = rectangle(20, 10, 9, 9)
+    hole = rectangle(23, 13, 3, 3)
+    donut = [cell for cell in donut if cell not in hole]
+
+    rings = contour_rings(donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    donut_geometry, enclosed, of_component = contour_ring(
+        donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    check("a donut comes back as a polygon with a hole",
+          len(donut_geometry["coordinates"]) == 2 and len(rings) == 1,
+          f"{len(donut_geometry['coordinates'])} rings, {len(rings)} entries")
+    check("a donut encloses exactly its own cells",
+          enclosed == of_component == len(donut), f"{enclosed}/{of_component}")
+    check("a donut's hole is NOT converted by the ledger rasteriser",
+          rasterise(donut_geometry) == set(donut),
+          f"island cells wrongly enclosed: {rasterise(donut_geometry) & set(hole)}")
 
 
-# --------------------------------------------------------------------------- #
-# Determinism
-# --------------------------------------------------------------------------- #
+    # --------------------------------------------------------------------------- #
+    # A diagonal-only connection: two parts, and the count says so
+    # --------------------------------------------------------------------------- #
 
-again, _, _ = contour_ring(donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
-check("the same cells contour to the same polygon, exactly",
-      again == donut_geometry, "geometry differs between calls")
+    diagonal = [(30, 30), (31, 31)]
+    rings = contour_rings(diagonal, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    geometry, enclosed, of_component = contour_ring(
+        diagonal, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    check("a diagonal pair yields two parts",
+          len(rings) == 2, f"{len(rings)} entries")
+    check("a diagonal pair's largest part encloses only itself",
+          enclosed == 1 and of_component == 2, f"{enclosed}/{of_component}")
+    check("a diagonal pair round-trips through the ledger rasteriser",
+          rasterise(geometry) == {(30, 30)}, f"{rasterise(geometry)}")
 
-# --------------------------------------------------------------------------- #
 
-print()
-if FAILURES:
-    print(f"{len(FAILURES)} FAILED:")
-    for failure in FAILURES:
-        print(f"  - {failure}")
-    sys.exit(1)
-print("all intervention-geometry checks passed")
+    # --------------------------------------------------------------------------- #
+    # Determinism
+    # --------------------------------------------------------------------------- #
+
+    again, _, _ = contour_ring(donut, bounds=BOUNDS, rows=ROWS, cols=COLS)
+    check("the same cells contour to the same polygon, exactly",
+          again == donut_geometry, "geometry differs between calls")
+
+    # --------------------------------------------------------------------------- #
+
+    print()
+    if FAILURES:
+        print(f"{len(FAILURES)} FAILED:")
+        for failure in FAILURES:
+            print(f"  - {failure}")
+        return 1
+    print("all intervention-geometry checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
