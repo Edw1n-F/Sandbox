@@ -726,6 +726,132 @@
         "title": "LLMConfigUpdate",
         "type": "object"
       },
+      "ParameterCard": {
+        "additionalProperties": false,
+        "description": "`GET /api/scenes/{sceneId}/parameter-card` response.\n\n``sources`` names the rasters the numbers came from, so a reader can tell\nwhether they are looking at the committed analysis or a synthetic fallback\nwithout reading any individual row. ``inputs`` echoes the four values the\ncaller chose (or the defaults), because a card whose inputs are not visible\ncannot be compared against another card.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/ParameterCardEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "inputs": {
+            "additionalProperties": true,
+            "title": "Inputs",
+            "type": "object"
+          },
+          "planId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Planid"
+          },
+          "sceneId": {
+            "default": "",
+            "title": "Sceneid",
+            "type": "string"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "object"
+          },
+          "status": {
+            "default": "SCREENING_PARAMETER_CARD",
+            "title": "Status",
+            "type": "string"
+          },
+          "warning": {
+            "default": "",
+            "title": "Warning",
+            "type": "string"
+          }
+        },
+        "title": "ParameterCard",
+        "type": "object"
+      },
+      "ParameterCardEntry": {
+        "additionalProperties": false,
+        "description": "One row of the card.\n\n``key`` is stable and machine-readable; ``label`` is the human phrase. Both\nare always present even when ``value`` is ``None``, so a row that cannot be\nfilled still appears and states why.",
+        "properties": {
+          "confidence": {
+            "default": "UNAVAILABLE",
+            "enum": [
+              "MEASURED",
+              "DERIVED",
+              "ASSUMED",
+              "UNAVAILABLE"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Date"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          },
+          "source": {
+            "default": "",
+            "title": "Source",
+            "type": "string"
+          },
+          "status": {
+            "default": "DERIVED",
+            "title": "Status",
+            "type": "string"
+          },
+          "unit": {
+            "default": "",
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "ParameterCardEntry",
+        "type": "object"
+      },
       "ParameterEntry": {
         "additionalProperties": false,
         "description": "One parameter the run reads for a kind, with its honesty label (§2.2).\n\n``status`` is the assumption label (e.g. ``ASSUMPTION``) and ``source``\nnames where the number came from, so a proposal never carries a parameter\nthat cannot say what it is.",
@@ -3045,6 +3171,113 @@
           }
         },
         "summary": "Get Ledger",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/parameter-card": {
+      "get": {
+        "description": "GET /api/scenes/{sceneId}/parameter-card -- the brief's section 2 table.\n\nThe numbers a reader needs *before* trusting any result: the site's extent,\nits land cover, the inputs the run assumed, and -- the rows that matter\nmost -- the things this project does not know. Soil group, heat preset and\ntree cover carry no value and say why; they are not zeros.\n\nA GET, because the card computes nothing the caller chose beyond the four\ninputs, is idempotent, and is a read of a scenario in exactly the sense\n``GET /ledger`` is. It takes the same optional parameters with the same\ndefaults as its sibling, so the two always describe the same scenario.\n\nEvery figure is read from the dicts ``ledger_for_scenario`` just computed\nfor this same request (R1). The card never re-sums the raster, so it cannot\ndisagree with a run: a disagreement would require one dict to hold two\nvalues for one key.",
+        "operationId": "get_parameter_card_api_scenes__scene_id__parameter_card_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "plan_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Plan Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "rainfall_mm",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rainfall Mm"
+            }
+          },
+          {
+            "in": "query",
+            "name": "temperature_c",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Temperature C"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tide_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tide State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParameterCard"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Parameter Card",
         "tags": [
           "scenes"
         ]

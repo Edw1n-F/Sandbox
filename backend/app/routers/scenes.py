@@ -20,6 +20,7 @@ from app.schemas.plan import (
     PlanListRead,
 )
 from app.schemas.intervention import InterventionProposal
+from app.schemas.parameter_card import ParameterCard
 from app.schemas.scene import (
     RunRequest,
     SceneCreate,
@@ -287,6 +288,16 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     features = proposed["features"]
+    # `generate_proposals` returns the refusals alongside the accepted features,
+    # and every one carries a `reasonCode` and a written reason. They are passed
+    # through at all three response sites below: a user who is told "3 sites"
+    # and shown no reason has no way to learn that six options were considered
+    # and refused, which is indistinguishable from a proposal list that was
+    # never exhaustive. The field is already declared on `AIPlanResponse` and
+    # its docstring already promises "a refusal is carried, never dropped" --
+    # this makes the code match that promise rather than widening the contract.
+    rejected = proposed.get("rejected", [])
+
     if not payload.apply:
         proposals = [InterventionProposal.from_feature(f) for f in features]
         return AIPlanResponse.model_validate({
@@ -297,17 +308,22 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
             "groundingNotes": proposed.get("groundingNotes", []),
             "message": proposed.get("message"),
             "proposals": [p.model_dump(by_alias=True) for p in proposals],
+            "rejected": rejected,
             "candidateCounts": proposed.get("candidateCounts", {}),
             "fallbackNote": proposed.get("fallbackNote"),
         })
 
     if not features:
+        # The branch where refusals are *most* numerous: nothing survived, so
+        # `rejected` is the entire content of the answer and dropping it would
+        # leave the user with a bare "nothing could be placed" and no reason.
         return AIPlanResponse.model_validate({
             "planId": None,
             "features": 0,
             "provider": proposed["provider"],
             "groundingNotes": proposed.get("groundingNotes", []),
             "message": proposed.get("message"),
+            "rejected": rejected,
         })
 
     try:
@@ -328,6 +344,7 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
         "provider": applied["provider"],
         "types": applied.get("types", []),
         "groundingNotes": applied.get("groundingNotes", []),
+        "rejected": rejected,
         "fallbackNote": proposed.get("fallbackNote"),
     })
 
@@ -610,6 +627,69 @@ def get_ledger(scene_id: str, rainfall_mm: float | None = None,
         "run scripts/make_wetgrid.py --sensitivity for the band it implies."
     )
     return result
+
+
+@router.get("/scenes/{scene_id}/parameter-card",
+            response_model=ParameterCard)
+def get_parameter_card(scene_id: str,
+                       plan_id: str | None = None,
+                       rainfall_mm: float | None = None,
+                       temperature_c: float | None = None,
+                       tide_state: str | None = None) -> ParameterCard:
+    """GET /api/scenes/{sceneId}/parameter-card -- the brief's section 2 table.
+
+    The numbers a reader needs *before* trusting any result: the site's extent,
+    its land cover, the inputs the run assumed, and -- the rows that matter
+    most -- the things this project does not know. Soil group, heat preset and
+    tree cover carry no value and say why; they are not zeros.
+
+    A GET, because the card computes nothing the caller chose beyond the four
+    inputs, is idempotent, and is a read of a scenario in exactly the sense
+    ``GET /ledger`` is. It takes the same optional parameters with the same
+    defaults as its sibling, so the two always describe the same scenario.
+
+    Every figure is read from the dicts ``ledger_for_scenario`` just computed
+    for this same request (R1). The card never re-sums the raster, so it cannot
+    disagree with a run: a disagreement would require one dict to hold two
+    values for one key.
+    """
+    from app.services import parameter_card as _card
+    from app.services.sandbox_model import (
+        DEFAULT_RAINFALL_MM,
+        load_grids,
+        ledger_for_scenario,
+    )
+
+    scene_service.get_scene(scene_id)
+
+    grids = load_grids()
+    if grids is None:
+        raise HTTPException(
+            status_code=422,
+            detail=("no analysis on disk: run scripts/fetch_dem.py, "
+                    "scripts/fetch_landcover.py and scripts/make_wetgrid.py"),
+        )
+
+    chosen = plan_id or request_plan_id(scene_id)
+    features = intervention_features(chosen)
+    ledger = ledger_for_scenario(
+        grids, features,
+        rainfall_mm=rainfall_mm if rainfall_mm else DEFAULT_RAINFALL_MM,
+    )
+    # The gross row needs the plan's served extent and the depth the ledger
+    # resolved for it, both derived by the ledger's own rules
+    # (`parameter_card.served_extent`) rather than re-derived here. Without them
+    # the row is permanently `UNAVAILABLE` and R4's "two numbers side by side"
+    # is never actually delivered -- the card would print the net figure and a
+    # sentence explaining the absence of the other, which is not the same thing.
+    extent = _card.served_extent(grids, features)
+    return _card.build(
+        grids, ledger,
+        scene_id=scene_id, plan_id=chosen,
+        temperature_c=temperature_c, tide_state=tide_state,
+        served_cells=extent["servedCells"] or None,
+        storage_depth_m=extent["storageDepthM"],
+    )
 
 
 @router.get("/scenes/{scene_id}/sea-level")

@@ -1,222 +1,121 @@
 # Remaining work — Hack4SDG / T1, branch `feature/intervention-loop`
 
-Audited 16 Oct 2026 against the tree after merging main (`611ef13`) and landing the
-intervention-loop work. Every item says what exists today and what is missing, so the
-two are never confused.
-
-Follow-up audit **17 Oct 2026**: the push unblocked (branch `feature/intervention-loop`
-is at `2ad7176` on `origin`, tree clean). F1/F2/F3 are closed. P0-1 is **wired** — the
-constraint engine is now called from `generate_proposals` and `rejected[]` flows through
-`/ai-plan`; `test_proposal_contract` rose 14 → **15/18**. The three remaining reds are now
-the only thing between P0-1 and green, and they are characterized below. Everything else
-(P0-2/3/4, P1, P2) is unchanged from the 16 Oct audit.
-
-Audit **16 Oct 2026 (later) — P0-1 is CLOSED at `cd7a87a`, 18/18.** All three reds landed.
-Their recorded root causes were **wrong** and are corrected below. New state:
-
-- **F4 — `contracts/openapi.json` was stale against the pinned pydantic. FIXED here.**
-  The committed contract had been generated under pydantic 2.9.2; `requirements.txt` pins
-  **2.13.5**, which renders `additionalProperties: true` for every free-form
-  `dict[str, Any]` field. Local runs passed because `backend/.venv` is stale at 2.9.2;
-  the `contract` CI job regenerates with the pinned version and saw 47 differing lines.
-  Regenerated with the pinned version — the diff is **only** those `additionalProperties`
-  keys, which is how you tell a version drift from a real schema change. **Lesson recorded
-  in `requirements.txt`: generate the contract with the pinned versions, never with whatever
-  the local interpreter carries, and check `pip show pydantic` before trusting a green run.**
-- **P0-2 / P0-3 / P0-4 remain open** — designed in `docs/PHASE2_DESIGN.md` (rulings R1–R23),
-  not yet implemented. Note R19: `apply_proposals` must run `validate_batch` before
-  `create_plan`, because a client can already write `params.storageDepthM` and have the
-  ledger score it while the published provenance still claims the class default.
-- **`rejected[]` still does not reach the wire** (`routers/scenes.py:289-302`), so
-  `test_PENDING_proposals_do_not_overlap_each_other` skips instead of testing. Phase 2, R21.
-- **`siting.py:150-152` still uses the loose bounding-box mask**, so the catalog/suggester
-  path can still site on a real polygon-exact building cell. `load_grounding` is unified as
-  of Phase 2 T05; `siting.py` is deferred to Phase 3 — **do not let this be lost.**
-- **`clip_window` under-reports `clippedCells` on the coordinate path** (it contours only the
-  largest ring, so a stranded fragment is not counted). Same class as the site-path defect QA
-  found and fixed in Phase 1, different path. Needs its own ticket.
-
-Legend: **P0** = pitch-critical (blocks the loop on screen) · **P1** = makes an
-intervention honest and shaped · **P2** = the loop's edges · **FIX** = must land before
-any push · **DNR** = deliberately not started, do not pick up by reflex.
+**Re-scoped 16 Oct 2026 (evening) after the owner's review.** The first 30 lines of this
+file were written against a misunderstanding of what a "plan project" is, and that
+misunderstanding shaped the whole remaining-work list. It is corrected here, at the top,
+where the next reader will see it before the task tables.
 
 ---
 
-## FIX — before the next push
+## The correction that changes everything: what a "plan project" is
 
-| # | Item | State |
+A **plan project** is a **government-planned project to be built** — the HSK MTR station is
+the one modelled today (`backend/data/projects/mtr-station.json`, a real footprint, a real
+GLB, project-supplied effects). It is **not** a user intervention and never was.
+
+It is the **application scenario example**: the thing the sandbox exists to help plan. The
+product question is *"how do we use AI to plan these government projects better?"*, and the
+**user intervention loop** is the mechanism — a planner describes an intervention in natural
+language, the AI proposes a specific sited footprint with provenance, the planner edits and
+confirms, and the ledger scores it against the plan project already on the ground.
+
+Two things in the tree got this wrong and are being removed:
+
+1. **The four-project "catalog"** (`backend/data/projects.json`, served by
+   `GET /api/scenes/{id}/project-catalog`, rendered by `frontend/src/components/ProjectCatalog.tsx`).
+   These are screening-level candidate parcels derived from rasters — `detention-reservoir`,
+   `underground-tank`, `green-retrofit`, `blue-green-park`. They are **not** planned projects
+   and they are **not** the application scenario. `STATUS.md` already recorded them as a
+   placeholder ("four hardcoded projects whose phases are English sentences piped through
+   `ai_plan` on every click… do not demo it as a working feature"). **Removing them** — see
+   R1 below.
+2. **`suggest.py` as a standalone HUD panel** (`SuggestionsPanel.tsx`, ranked candidate sites
+   per axis). Its content is good and deterministic; its *placement* is wrong. AI advice
+   belongs **under the result card inside the AI chat**, where the conversation that produced
+   it is still on screen — see R2.
+
+---
+
+## Rulings for the re-scope (R1–R5)
+
+| # | Ruling |
+|---|---|
+| **R1** | **Remove the four-project catalog.** Delete `GET /api/scenes/{id}/project-catalog` (the route in `app/routers/scenes.py:98-124`), `backend/app/services/project_catalog.py`, `backend/data/projects.json`, `frontend/src/components/ProjectCatalog.tsx`, `frontend/src/api/catalogApi.ts`, and the tests that exist only to serve it (`tests/test_project_catalog.py`, `frontend/src/api/catalogApi.test.ts`). **Note: `scripts/make_project_catalog.py` does not exist** — the generator is not in this tree, so `data/projects.json` is hand-maintained or came from elsewhere; check `git log` for it before assuming a regeneration step. The planned-project machinery (`data/projects/<id>.json`, `terrain.projects`, the seeded MTR station plan) is **untouched** — that is the scenario, not the thing being removed. |
+| **R2** | **Move suggestions into the AI chat, under the result card.** `SuggestionsPanel.tsx` leaves the HUD. Its ranked per-axis candidates become a section rendered beneath the answer card in `ChatPanel.tsx`, fetched for the turn just asked. **The flow gains LLM participation**: the model names which axis it is advising on and why, in its own words, with the deterministic ranking underneath as the evidence it must agree with. A suggestion the model cannot justify is not shown. |
+| **R3** | **The NL → intervention path is the priority, and it already exists end-to-end on the server.** Verified live on 16 Oct: `POST /chat` with "add a water reservoir in the north" returns `answer.intent = "intervention"` with a hint; `POST /ai-plan` (apply=false) returns a served proposal (1,876 cells, provenance, constraints). What is missing is the **frontend path being usable and visible** — see D1. |
+| **R4** | **Every number keeps its provenance.** The card prints gross *and* net storage side by side and refuses to value soil group, heat preset and tree cover. Nothing in the re-scope may soften that. |
+| **R5** | **Honesty invariants are unchanged:** no combined score across heat/wind/drainage; no pass/fail verdict; a `status` + non-empty `warning` on every AI output; provenance (`source`/`date`/`confidence`) on every number. |
+
+---
+
+## D — defects to clear first
+
+| # | Defect | State |
 |---|---|---|
-| F1 | **`contracts/intent_vocabulary.json` lost its `version` key** when the fixture was regenerated (rewritten with only five vocabulary keys). **FIXED**: regenerated with `version` + `note`; `backend/tests/test_intent_routing.py::test_the_fixture_matches_the_backend_vocabulary` passes; the TS mirror (`frontend/src/api/intentVocabulary.ts`) carries `version` + all six vocabulary keys; frontend is 98/98 again. | done |
-| F2 | **`git push` was blocked by the network** (`Empty reply from server` / `CONNECT tunnel failed, response 502`). **RESOLVED**: `feature/intervention-loop` is pushed to `origin` at `2ad7176` (HEAD == origin/feature/intervention-loop; working tree clean). | done |
-| F3 | **Other integration workflows.** Only `.github/workflows/ci.yml` exists; it carries `pull-requests: read` so `dorny/paths-filter` can list PR files. No other workflows to grant. | done |
+| **D1** | **`project-catalog` and `suggestions` are unusable in the browser with console errors.** Measured: both endpoints return **200 with correct data** against the live server (`project-catalog` → the four projects; `suggestions` → `drainage`/`heat`/`runoff`, `status: SITES_FROM_MEASURED_RASTERS`), and `/ai-plan` and `/chat` both work. So this is a **frontend runtime fault, not a backend one**, and it could not be reproduced without a browser (Playwright is not installed in `frontend/node_modules`, so `verify-*` harnesses cannot run). **Needs the actual console error text from the owner** — the fastest path to the truth, and guessing has already cost more than asking would. |
+| **D2** | **The parameter card's gross row was permanently `UNAVAILABLE`.** `GET /parameter-card` never passed `served_cells`/`storage_depth_m` to `parameter_card.build()`, so R4's "two numbers side by side" printed one number and a sentence explaining the absence of the other. **FIXED** in this working tree: `parameter_card.served_extent()` derives both from the plan's features using the ledger's own depth-resolution rules, and the test now asserts the card's gross equals an independently computed figure. Verified by breaking the service's multiplication and watching the test fail. |
+| **D3** | **`classAreaM2` broke two suites.** `_area_stats` now publishes a *dict*-valued key, and `test_published_scenarios` / `test_building_fit` both did `{k: round(v, 1) for k, v in stats.items()}` → `TypeError: type dict doesn't define __round__`. **FIXED** with `sandbox_model._rounded_stats()`, which rounds scalars and passes structured values through, naming the rule rather than swallowing it. |
 
 ---
 
-## P0 — close the loop visibly and deterministically
+## Phase 2 — where the code actually is (uncommitted, blocked on a stale git lock)
 
-| # | Item | What exists | What is missing |
-|---|---|---|---|
-| P0-1 | **Wire the constraint engine into proposal generation** (the todo's "add coordinate selection and size constraints"). | `proposal_constraints.py` built+verified (39→`TOO_SMALL`, 40→accept, 4,329→accept, 4,330→`OVER_SINGLE_CAP`; served==requested pre-clip; `validate_batch` owns `claimed \|= cells`). **Now wired**: `generate_proposals` calls `validate_batch` and returns `rejected[]` through `/ai-plan` (`AIPlanResponse.rejected`, `ai_plan.py:2154/2171/2182/2201`); a paving site at 39.4% is now rejected `OVER_SINGLE_CAP` instead of silently proposed; suite rose 14→15/18. | **Still owed (2 minor):** (a) the constraint echo in `/run` — `run_service.py` has no `rejected`/`constraint` handling, so a run can't show *why* a staged proposal was rejected; (b) the optional `placement` block on `CHOOSE_TOOL.selections[]` (`intent.py` has no such block). **The 3 reds are CLOSED at `cd7a87a` (18/18)** — see the acceptance section below. Still owed: the two minor items at (a) and (b). |
-| P0-2 | **§2 parameter card** (open item 5). | The ledger reads `params.storageDepthM` and validates 0.05–10 m; proposals carry a `parameters` block (value/unit/status/source). | No `parameter_card.py` and no endpoint. The brief's card is specific: total site area; pond/water/wetland/tank retained *or removed*; green/tree retained or removed; new impervious share; bare ground created; explicit storage added; storage = area × depth; rainfall; heat preset; outlet level; soil group — **each with source, date and confidence**. Those numbers are still scattered across the ledger and stats dict. |
-| P0-3 | **§6 the AI asks for missing assumptions.** | `InterventionProposal` carries `rationale` and `basis`. | No `questions[]` anywhere. Today the AI silently assumes a default (location, footprint, surface replaced, usable storage depth, drainage/overflow, tree cover) instead of asking. |
-| P0-4 | **§6 review, edit and confirm.** | The confirm gate exists (accept/reject proposals). | A planner cannot *edit* an assumption. "Usable storage depth" — the field the brief calls out — cannot be set by hand. |
+Phase 2 (P0-2 parameter card, P0-3 `questions[]`, P0-4 editable assumptions) is **partially
+implemented and fully green**, but **not committed** — a stale `.git/index.lock` left by a
+crashed process is blocking every write, and the sandbox will not permit its removal.
 
-### P0-1 acceptance — the 3 `test_proposal_contract` reds — **CLOSED at `cd7a87a`, 18/18**
+| Task | State |
+|---|---|
+| **T01** `rejected[]` reaches the wire | **Done.** All three `AIPlanResponse.model_validate` sites in `app/routers/scenes.py` now pass it, hoisted into one local so they cannot drift. The skipping `test_PENDING_proposals_do_not_overlap_each_other` is **deleted** and replaced by two tests that build their own fixtures and fail loudly. Gate 18 → **19**. |
+| **T02** parameter card | **Done.** `app/services/parameter_card.py` + `app/schemas/parameter_card.py` + `GET /api/scenes/{id}/parameter-card`; `_area_stats` gains `classAreaM2`; gross/net printed side by side; soil group, heat preset and tree cover refuse a value with a reason; `date` is `null` unless a real acquisition date exists. D2 and D3 fixed on the way. Gate → **21**. |
+| **T03** `questions[]` | **Not started.** |
+| **T04** editable assumptions + `apply_proposals` validates | **Not started.** The disclosure hole this closes is **live and verified**: `POST /ai-plan/apply` with a client-set `params.storageDepthM = 3.5` returns **200, persists, and is read back as 3.5**, while the server's own `parameters` block on that same proposal claims `value: 1.5, status: "ASSUMPTION", source: "…STORAGE_DEPTH_M['water'] (class default)"`. The served value and its provenance label disagree with no user action. |
+| **T05** mask unification + docs | **Not started.** |
 
-All three landed in `cd7a87a`. **The root causes originally recorded here were wrong**; the
-corrected diagnosis, measured against the live grid, is what the code comments now record.
-
-**1. `test_PENDING_proposals_avoid_existing_buildings`** — the recorded cause (a
-`water_reservoir` overlapping 2 building cells because `contour_rings` closes the ring over
-a 1-cell gap) was **WRONG**. Every candidate pool has **zero** overlap against the authority
-the pools already subtract, so there was no ring-closure leak. The real cause: **one dataset,
-two rasterisers.** `building_footprint_mask` routes through `rasterise_height`, which stamps
-a bounding **rectangle** per footprint (7,789 cells); the true footprint **polygon** is 3,222
-cells. That approximation misses **23** real building cells and over-claims **4,590** phantom
-ones. Fixed by unioning both rasters in `proposal_constraints.building_mask` (7,812 cells) —
-a union, so the gate is never *looser* than the pool filter that produced the candidate —
-plus a site-path clip guard that subtracts buildings and re-contours the survivors. The guard
-is **load-bearing, not hardening**: without it the stricter gate empties the proposal list
-and this test passes vacuously.
-
-**2. `test_every_proposal_kind_has_a_defined_ledger_effect`** — `drainage` and `road` are in
-`POOL_FOR_KIND` with no `INTERVENTION_EFFECTS` entry, so the ledger skipped them with "no
-land-cover effect is defined", which reads as an oversight. **Fixed by disclosure, not
-removal:** both take the `drainage_alignment` shape `{"to": None, "why": ...}`, so they are
-skipped *with the reason*. Neither borrows `permeable_paving`'s CN 72 — inventing a runoff
-coefficient would claim a number this model cannot compute. `POOL_FOR_KIND` and
-`STYLE_FOR_KIND` unchanged, so no legend row is orphaned. `NO_GRID_EFFECT_KINDS` and the
-line-280 test needed **no** edit. This also closes P2-3.
-
-**3. `test_every_proposal_kind_round_trips_through_ai_plan`** — `permeable_paving` emitted
-nothing because its only candidate was 6,821 cells against the 4,329 single cap. **Fixed** by
-`ai_plan._split_under_cap`: row-coherent banding, then 4-connected components within each
-band, with `[:3]` applied to the **emitted sub-sites** rather than the pre-split components.
-Naive row-major chunking was measured and rejected — it slices the component into slivers
-whose contour closes across the gaps. The split is **not** optional because of the authority
-change: with the corrected mask the largest paved component grows 6,821 → 11,224 cells,
-breaching the cap by more.
-
-Two defects QA found in review were fixed before the commit: a site-path clip that dropped a
-bisected fragment while under-reporting `clippedCells`, and a `bandIndex` label describing
-one sub-site but not its sibling. The same label defect pre-existed in `green_sites` (all
-three "largest", actual ranks 1/2/3 — now fixed) and worse in `reservoir_sites` ("deepest"
-while the pool is ordered by area — now fixed too).
+**Verification already done on this tree (all under the *pinned* dependency set, not the stale
+`backend/.venv`):** `test_proposal_contract` **21/21**, every other backend suite green,
+`test_overlay_masking` 3/3 under pytest, frontend `tsc` + `lint` + **98/98** + `build` clean,
+`contracts/openapi.json` regenerated with pydantic 2.13.5 (233 added lines) and
+`test_openapi_contract` 5/5.
 
 ---
 
-## P1 — honest and shaped
+## The re-scope work, in order
 
-| # | Item | What exists | What is missing |
-|---|---|---|---|
-| P1-1 | **§5 preliminary / user-defined labelling.** | Proposals carry `params.status: draft_pending_human_review` and `source: "ai"` on the wire; the PRD's honesty section requires both on screen. | Nothing in the *results* distinguishes a user-authored intervention from an AI-proposed one, so a preliminary, assumption-dependent number can read as measured. |
-| P1-2 | **§5 proposal fields: short name + evidence status.** | Type, location, rationale, basis, area (`size.areaHa`), depth (`parameters.storageDepthM`) are all present. | No short human **name** for a proposal, and no **distinct evidence status** (there is a `basis` string, not a status). |
-| P1-3 | **`remove` op + undo** (open items 4, 11). | `REMOVAL_VERBS` are recognised by the classifier (`agent/intent.py`); `DELETE /api/scenes/{id}/interventions/{id}` exists on main; `pins.unpin` takes a feature out of a run. | No `remove` op in the NL parser, no undo stack. A planner can add but not take away, and an unpin is not a removal. |
-| P1-4 | **The second real project** (Stage 3). | `backend/data/projects/mtr-station.json`, `scripts/seed_projects.py`, and main's `terrain.projects` machinery — adding a second project is now a data edit, not a code change. | The second project itself does not exist. STATUS: "What is still missing is the **second real project**." |
-
----
-
-## P2 — the loop's edges
-
-| # | Item | State |
-|---|---|---|
-| P2-1 | **NL loop owned end to end** (open item 4): expose the ops as chat-callable; extend the vocabulary to retain / plant / permeate / remove; make an addition *shaped* rather than extruded. |
-| P2-2 | **Orphan endpoints** (open item 12): decided **API-only** in `docs/PRD_loop_closeout.md` §1.1. Still owed: state that verdict in `docs/RUNG_AND_BUSINESS.md`, which currently claims three of them as delivered features. |
-| P2-3 | **`drainage` / `road` are emittable but the ledger cannot apply them** — they are in `POOL_FOR_KIND` with no `INTERVENTION_EFFECTS` entry. Decide: add effects or drop them from the pool. (`test_proposal_contract.py` reports it; the design accepts no-effect kinds *only if disclosed at the gate*.) |
-| P2-4 | **End-to-end verification (T04)**: `backend/tests/test_proposal_end_to_end.py` (the three "to verify" items as executable checks) and `backend/tests/test_legend_parity.py` (legend rows == `STYLE_FOR_KIND`, must go red when a row is deleted). |
-| P2-5 | **`STATUS.md` is stale**: it still records Stage 4 as "Not started" and the catalog as "a placeholder". Both are now false. T04 owns the correction. |
-| P2-6 | **Demo narrative / validation / pitch (Stage 5)**: `docs/DEMO_SCRIPT.md` was assigned and never written — no file exists. |
-| P2-7 | **Browser harnesses not run since the merge**: `verify-3d` (40), `verify-ux` (20), `verify-chat`, `verify-nav`. They are excluded from CI by design; they need a local run before any rendering change is merged. |
-| P2-8 | **Follow-up F1** — a per-intervention `curveNumber` in `sandbox_model.py`. Deferred deliberately: it moves published numbers, so it needs its own decision, not a drive-by edit. (Today `curveNumber` is reported as *unread*.) |
-| P2-9 | **Follow-up F2** — `route_tools` forces `MASSING_TOOL` on height words, so "add a green space and make the blocks taller" never reaches the proposal path. One precedence line; recorded, not scheduled. |
-| P2-10 | **Follow-up F4** — `tests/test_scenario.py:438,444` use absolute wall-clock bounds (`< 1.0 s`) while `STATUS.md:229` claims timing uses host-measured ratios. One of the two is wrong; settle it from the sibling suites. Unassigned. |
-| P2-11 | **Unit coverage gaps** (open item 9): `frontend/src/view/onlineProps.ts` and `frontend/src/view/interventionLayer.ts` have none. |
-| P2-12 | **Paid model id** (open items 6–7): one `backend/.env` line. Env-only and the human's call — not an agent task. The acceptance criterion is that the demo passes with **no key at all** (heuristic, labelled not-AI). |
-| P2-13 | **Survey mode is unreachable** from a labelled button (STATUS, "The user flow, today"); `viewModes.ts` still has it. |
+1. **Clear D1** — get the console error text from the owner, fix the frontend runtime fault.
+   Nothing else in the UI can be trusted until the panels render.
+2. **R1 — remove the four-project catalog** (files listed above). Keep `test_project_catalog`
+   only for what it still legitimately covers, or delete it with the generator.
+3. **R3 — make the NL → intervention path visible and usable.** The server side is done and
+   verified; this is a frontend task: the chat must reach the confirm gate, show the proposal
+   with its provenance, and let the planner accept/reject. Then P0-3/P0-4 finish the loop.
+4. **R2 — move suggestions under the chat result card**, with the LLM naming the axis it
+   advises on and the deterministic ranking as the evidence it must agree with.
+5. **T03 → T04 → T05** from Phase 2 above, then P1 and P2 as previously listed.
 
 ---
 
-## DNR — deliberately not started; do not pick up reflexively
+## Deferred defects — do not lose these
 
-- Water-pour animation (the wet grid is a static PNG swap).
-- PostGIS / object store (the seam is `app/db.py` + `scene_service.py` only).
-- CFD, comfort indices, kappa validation, InVEST, typhoon surge.
-- Procedural massing of the existing district; re-opening the dormant `place` op as a front-door capability.
-- New physics: proposals, parameters and suggestions reuse the ledger's arithmetic.
-- Model-authored polygons / free-hand ring drawing.
+- **`siting.py:150-152` and `ai_plan.load_grounding` still use the loose bounding-box mask**,
+  so the catalog/suggester path can still site a feature on a real polygon-exact building
+  cell. The proposal gate now uses the stricter union and refuses such a site, so the
+  user-visible guarantee holds; the residual risk is a site offered then rejected.
+- **`clip_window` under-reports `clippedCells`** on the coordinate path (it contours only the
+  largest ring, so a stranded fragment is not counted). Same class as the site-path defect
+  fixed in Phase 1, different path.
+- **The two rainfall defaults differ** (`RunRequest.rainfall_mm = 50.0` vs
+  `DEFAULT_RAINFALL_MM = 450.0`). Deliberately not unified: it would move published run
+  numbers and deserves its own decision.
+- **`STATUS.md` is stale** — Stage 4 is recorded "Not started" and the catalog as "a
+  placeholder". Both are now false, and the catalog is being deleted outright.
+- **`docs/DESIGN_intervention_proposals.md:84`** still describes `building_mask` as
+  `building_footprint_mask(...)`, which is no longer true.
+- **P2-8** `curveNumber` is reported as *unread*; a per-intervention override would move
+  published numbers and needs its own decision.
 
----
+## DNR — deliberately not started
 
-## Reference: what this branch already closed
-
-These are **done** and should not reappear on a to-do list:
-
-- **Open item 1** — fixed project catalog from the rasters (`data/projects.json` + `scripts/make_project_catalog.py`, every phase validated through the ledger's own coverage guard before it is written), `GET /scenes/{id}/project-catalog`, frontend reads it instead of re-deriving a sentence per click.
-- **Open item 2** — `intervention_geometry.py` contours the true cell mask (holes included, no new dependency) instead of the axis-aligned box.
-- **Open item 3** — `suggest.py` + `GET /scenes/{id}/suggestions` (per-axis ranking, per-cell arithmetic shown, refusals named); `pins.py` + three pin routes + the staged plan; `pinned` travels on `InterventionProperties` so an unpinned row is not scored.
-- **Open item 13** — `FIT_TOOL` dropped from `route_tools` (endpoint and tests kept).
-- Plan items P0.1, P0.2, P0.3, P1.1.
-- Two defects found and fixed on the way: the generator-expression neighbour list in `connected_components` (8-connected components collapsed to singletons; `place` appended zero envelopes — `test_scenario` 65/65), and the grounding pools that never subtracted buildings (a site could sit on a roof — now 7,789 cells excluded, reservoir splits 1 → 3 sites).
-- Routing: a deterministic classifier raises proposal-shaped turns to `intent="intervention"` with no model key; `/chat` and `/chat/stream` now agree; plurals and four missing synonyms reach the gate.
-
----
-
-## Continuation prompt (for re-dispatching the team, or the lead continuing)
-
-**Goal.** Continue `feature/intervention-loop` from `cd7a87a` (Phase 1 landed, 18/18) to a
-pitch-ready, fully honest intervention loop. P0-1 is **done**. What remains: **Phase 2**
-(P0-2/3/4, designed in `docs/PHASE2_DESIGN.md`, rulings R1–R23), then **Phase 3** (P1) and
-**Phase 4** (P2). Every change must keep `test_proposal_contract` green-or-better and
-preserve the honesty invariants: **no combined score across heat/wind/drainage, no pass/fail
-verdict, a `status` + non-empty `warning` on every AI output, and provenance
-(`source`/`date`/`confidence`) on every number.**
-
-**Frozen references (read before touching anything):**
-- `docs/DESIGN_intervention_proposals.md` — Part D decisions, §2.1/§2.2 window semantics,
-  §4 frozen interface. This is the contract; do **not** invent a second geometry or score
-  definition.
-- `docs/PRD_proposals.md` — the product honesty requirements (§5 labelling, §6 questions +
-  edit/confirm, §2 parameter card).
-- `docs/PHASE2_DESIGN.md` — the Phase 2 rulings of record (R1–R23) plus the ordered task
-  list T01–T05 and the 11 named new tests.
-- `docs/PHASE1_RED_RULING.md` / `docs/PHASE1_QA_REPORT.md` — why Phase 1 went the way it did.
-
-**Test & submission conventions (non-negotiable):**
-- Backend tests are plain scripts: `cd T1/backend && ./.venv/bin/python tests/test_x.py`.
-  No pytest, except `test_overlay_masking.py`, which has no `__main__` and is run under
-  pytest in CI. Python 3.10.9 in `backend/.venv`. No new deps. scipy stays `<1.14`.
-- **`backend/.venv` is stale: it carries pydantic 2.9.2 while `requirements.txt` pins
-  2.13.5.** A green local run therefore proves nothing about `contracts/openapi.json`.
-  Regenerate the contract with the **pinned** version, and never hand-edit it.
-- `test_proposal_contract.py` is the gating suite — at **18/18**, never regress. Phase 2
-  should RAISE it to 29/29.
-- Frontend vocab pin: `contracts/intent_vocabulary.json` is the single source; regenerate
-  it from `app/agent/intent.py` (keep all 7 keys: `version`, `note`, `interventionVerbs`,
-  `removalVerbs`, `nouns`, `kinds`, `regions`), then mirror to
-  `frontend/src/api/intentVocabulary.ts`. `backend/tests/test_intent_routing.py` and
-  `frontend/src/api/intentVocabulary.test.ts` both assert equality — breaking one breaks
-  the pin.
-
-**Phase 2 — P0-2/3/4 (designed, not implemented).** Follow T01–T05 in
-`docs/PHASE2_DESIGN.md`. The load-bearing items:
-- **T01** `rejected[]` must actually reach the wire (`routers/scenes.py`, three
-  `AIPlanResponse` sites) and the overlap guard must stop skipping.
-- **T04 / R19 is the important one:** `apply_proposals` must run `validate_batch` before
-  `create_plan`. A client can already write `params.storageDepthM` and have the ledger score
-  it while the published provenance still claims the class default. Provenance labels must
-  change SHAPE on edit (`ASSUMPTION` → `USER_ASSUMPTION` + `defaultValue`), and
-  `_accepted_warning`'s unconditional "Depth is a class assumption" sentence must stop
-  being emitted once a planner sets the depth by hand.
-
-**Phase 3 — P1:** preliminary/user-defined labelling in results; short name + distinct
-evidence status; `remove` op + undo stack; the second real project (a data edit under
-`backend/data/projects/`). Also **unify `siting.py`'s mask** — deferred from Phase 2 T05.
-
-**Phase 4 — P2:** end-to-end suites (`test_proposal_end_to_end.py`, `test_legend_parity.py`);
-`STATUS.md` correction; `DEMO_SCRIPT.md`; browser harnesses run locally; frontend unit
-coverage for `onlineProps.ts` / `interventionLayer.ts`. Keep the DNR list DNR. `P2-3` is
-closed by Phase 1's Red 2.
-
-**Definition of done for a phase:** relevant backend scripts pass, frontend vocab pin intact,
-honesty invariants preserved, and a commit per phase on `feature/intervention-loop` (push
-only when connectivity is confirmed). Report each commit hash.
+Water-pour animation · PostGIS/object store · CFD, comfort indices, kappa validation, InVEST,
+typhoon surge · procedural massing of the existing district · re-opening the dormant `place`
+op · model-authored polygons / free-hand ring drawing.

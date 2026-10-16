@@ -30,6 +30,7 @@ from app.services.sandbox_model import (
     LAND_CLASSES,
     BuildingContext,
     Grids,
+    _rounded_stats,
     storage_ledger,
 )
 
@@ -253,7 +254,7 @@ def score_candidates(
         "weights": weights,
         "constraints": cons.to_dict(),
         "rainfallMm": rainfall_mm,
-        "baseline": {k: round(v, 3) for k, v in base.items()},
+        "baseline": _rounded_stats(base, 3),
         "candidates": scored,
         "candidatesEvaluated": len(scored),
         "feasibleCount": len(feasible),

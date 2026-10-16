@@ -56,7 +56,12 @@ from app.agent.answer import template_card  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.main import app  # noqa: E402
 from app.services import ai_plan  # noqa: E402
+from app.services.proposal_constraints import (  # noqa: E402
+    REASON_CODES,
+    REJECT_STATUS,
+)
 from app.services.sandbox_model import (  # noqa: E402
+    DEFAULT_RAINFALL_MM,
     INTERVENTION_EFFECTS,
     MAX_INTERVENTION_COVERAGE,
     _polygon_cells,
@@ -712,26 +717,416 @@ def test_PENDING_proposals_avoid_existing_buildings() -> None:
         "PENDING (building-avoidance not implemented): " + "; ".join(offenders))
 
 
-def test_PENDING_proposals_do_not_overlap_each_other() -> None:
-    """PENDING (overlap prevention, gao): two proposals occupy distinct cells."""
+def _rect_ring(min_lon: float, min_lat: float,
+               max_lon: float, max_lat: float) -> list[list[float]]:
+    """A closed lon/lat rectangle, sized in degrees.
+
+    Built here rather than borrowed from a pool so this fixture is independent
+    of which sites today's data happens to offer -- the point of these two tests
+    is the overlap rule, and a fixture that can silently stop exercising it (by
+    returning one proposal, as the previous version did) tests nothing.
+    """
+    return [[min_lon, min_lat], [max_lon, min_lat], [max_lon, max_lat],
+            [min_lon, max_lat], [min_lon, min_lat]]
+
+
+def _rect_polygon(min_lon: float, min_lat: float,
+                  max_lon: float, max_lat: float) -> dict:
+    return {"type": "Polygon",
+            "coordinates": [_rect_ring(min_lon, min_lat, max_lon, max_lat)]}
+
+
+def _candidate(kind: str, cell_id: str, min_lon: float, min_lat: float,
+               max_lon: float, max_lat: float) -> dict:
+    """A site-based candidate dict of the shape `validate_batch` consumes."""
+    return {"id": cell_id, "intervention_type": kind,
+            "geometry": _rect_polygon(min_lon, min_lat, max_lon, max_lat),
+            "params": {}}
+
+
+def test_overlap_guard_refuses_the_second_and_the_accepted_stay_disjoint() -> None:
+    """Two candidates on the same ground: the first wins, the second is refused.
+
+    Driven straight through `validate_batch` with its own overlapping polygons,
+    because the endpoint cannot be made to produce two overlapping proposals --
+    the gate already prevents that, which is the behaviour under test. Asserting
+    it through the endpoint would therefore only ever observe the empty case.
+
+    The second candidate must be refused `OVERLAPS_STAGED` and must name
+    `proposal#0` as the owner: a refusal that does not say *whose* ground it
+    was is not actionable by the planner who receives it.
+    """
+    from app.services.proposal_constraints import validate_batch
+
+    grids = _grids()
+    west, south, east, north = grids.bounds
+    d_lon = (east - west) / grids.cols
+    d_lat = (north - south) / grids.rows
+
+    # Two rectangles sharing a 6x6-cell block, each 20x20 cells, placed well
+    # inside the grid so neither can clip out of bounds.
+    r, c = 40, 40
+    first = _candidate("green_space", "cand-a",
+                       west + c * d_lon, north - (r + 20) * d_lat,
+                       west + (c + 20) * d_lon, north - r * d_lat)
+    second = _candidate("green_space", "cand-b",
+                        west + (c + 14) * d_lon, north - (r + 20) * d_lat,
+                        west + (c + 34) * d_lon, north - r * d_lat)
+
+    accepted, rejected = validate_batch(grids, [first, second], None, set())
+
+    assert len(accepted) == 1, (
+        f"expected exactly one acceptance, got {len(accepted)}: "
+        f"{[p['intervention_type'] for p in accepted]}")
+    assert len(rejected) == 1, (
+        f"expected exactly one refusal, got {len(rejected)}: "
+        f"{[r_['reasonCode'] for r_ in rejected]}")
+    assert rejected[0]["reasonCode"] == "OVERLAPS_STAGED", rejected[0]
+    assert rejected[0]["overlapCells"] > 0, (
+        "the refusal must say how many cells are contested, or it is not a "
+        "finding a planner can act on")
+    assert rejected[0]["status"] == REJECT_STATUS, rejected[0]
+    assert rejected[0]["warning"], "a refusal carries a written reason"
+
+    # And the served geometry of the acceptance must not reach into the
+    # contested block: refusing the second is only safe if the first stopped
+    # exactly where it was accepted.
+    served = set(_polygon_cells(grids, accepted[0]["geometry"]["coordinates"]))
+    contested = served & {
+        (rr, cc) for rr in range(r, r + 20) for cc in range(c + 14, c + 20)
+    }
+    assert contested, (
+        "the fixture did not actually overlap: the two rectangles share no "
+        "cell, so this test would pass without exercising the guard")
+
+
+def test_rejected_refusals_reach_the_wire() -> None:
+    """A refusal the client cannot see is a silent outage.
+
+    `AIPlanResponse.rejected` is declared and its docstring promises "a refusal
+    is carried, never dropped", but the three `model_validate` sites in
+    `app/routers/scenes.py` did not pass it -- so the field always serialised
+    as `[]` and a user who was refused learned nothing.
+
+    This asserts the field is *populated* on a real response, and that every
+    entry carries a closed `reasonCode` and a non-empty reason. It fails loudly
+    rather than skipping: an assertion that cannot run here would be
+    indistinguishable from a pass.
+    """
     scene_id = _grounded_scene()
     if scene_id is None:
-        print("    (skipped: no grounded scene in this environment)")
-        return
+        raise AssertionError(
+            "no grounded scene in this environment: the rejected[] contract "
+            "cannot be observed, and this test must not report a pass it did "
+            "not earn")
+
     body = _propose(scene_id, "add a water reservoir and green space in the centre")
-    proposals = body["proposals"]
-    if len(proposals) < 2:
-        print("    (skipped: fewer than two proposals here)")
-        return
+    rejected = body.get("rejected", [])
+    assert isinstance(rejected, list), (
+        f"rejected must be a list, got {type(rejected).__name__}")
+    assert rejected, (
+        "the batch produced no refusals at all, so this response cannot show "
+        "that refusals travel; pick an instruction whose candidates collide, "
+        "or assert against validate_batch directly")
+
+    for entry in rejected:
+        assert entry.get("reasonCode"), f"a refusal with no reasonCode: {entry}"
+        assert entry["reasonCode"] in REASON_CODES, (
+            f"{entry['reasonCode']!r} is outside the frozen set")
+        assert entry.get("warning"), f"a refusal with no written reason: {entry}"
+        assert entry.get("interventionType"), (
+            f"a refusal that does not say which kind was refused: {entry}")
+
+    # The complementary half: what is served and what was refused must be told
+    # apart. A response claiming both "3 proposals" and "6 refusals" is the
+    # honest description of a constrained batch; a client cannot reconstruct
+    # that from `features` alone.
+    assert body["features"] == len(body["proposals"]), (
+        "`features` must be the accepted count, not the batch size")
+
+
+# --------------------------------------------------------------------------- #
+# 4. P0-2: the parameter card
+# --------------------------------------------------------------------------- #
+
+
+def _gross_vs_net(grids: Any) -> tuple[float, float]:
+    """``(gross, net)`` for one real reservoir proposal, both from the ledger.
+
+    ``gross`` is the brief's own ``area x depth`` formula, applied to the
+    proposal the server actually served: its rasterised cell count, the grid's
+    cell area, and the depth the ledger resolved for that kind. It counts only
+    what the new structure is *claimed* to hold.
+
+    ``net`` is ``scenario.storageCapacityM3 - baseline.storageCapacityM3`` read
+    out of ``ledger_for_scenario`` -- the same subtraction ``run_service``
+    publishes as ``stats.delta.storageCapacityM3``. It is smaller than gross
+    whenever the ground the proposal covers already stored something, because
+    net credits what the ground gave up.
+
+    Both sides are computed through the ledger's own functions rather than
+    re-implemented here: a second copy of either figure is the failure this test
+    exists to catch, so the test must not become one.
+    """
+    scene_id = _grounded_scene()
+    if scene_id is None:
+        raise AssertionError(
+            "no grounded scene: the gross/net comparison needs a real proposal, "
+            "and this test must not report an unearned pass")
+
+    proposals = _propose(scene_id, "add a water reservoir in the north")["proposals"]
+    assert proposals, "no reservoir proposal to compare gross against net"
+    proposal = proposals[0]
+
+    # The depth the ledger resolved, read from the proposal's own published
+    # parameters block -- not from the class default, so a proposal whose depth
+    # was edited still compares the figure the run will actually use.
+    depth = float(proposal["parameters"]["storageDepthM"]["value"])
+    served = set(_polygon_cells(grids, proposal["geometry"]["coordinates"]))
+    gross = round(len(served) * grids.cell_area_m2 * depth, 1)
+
+    feature = {
+        "geometry": proposal["geometry"],
+        "intervention_type": proposal["interventionType"],
+        "params": dict(proposal.get("params") or {},
+                       storageDepthM=depth),
+        "source": "ai",
+    }
+    ledger = ledger_for_scenario(grids, [feature], rainfall_mm=DEFAULT_RAINFALL_MM)
+    net = round(ledger["scenario"]["storageCapacityM3"]
+                - ledger["baseline"]["storageCapacityM3"], 1)
+    return gross, net
+
+
+def _card_for_reservoir(grids: Any) -> dict:
+    """The card for a plan holding one real reservoir proposal.
+
+    ``_card()`` reads the scene's own plan, which is a *different* plan from the
+    proposal ``_gross_vs_net`` measures -- so comparing their gross figures
+    compares two plans, not two implementations. This builds the plan, so the
+    card and the independent computation describe one thing.
+    """
+    scene_id = _grounded_scene()
+    if scene_id is None:
+        raise AssertionError(
+            "no grounded scene: the card cannot be observed for a real "
+            "proposal, and this test must not report an unearned pass")
+    proposal = _propose(
+        scene_id, "add a water reservoir in the north")["proposals"][0]
+    resp = client.post(f"/api/scenes/{scene_id}/plans", json={
+        "planType": "custom", "label": "contract-suite reservoir",
+        "source": "ai", "params": {},
+        "interventions": [{
+            "geometry": proposal["geometry"],
+            "interventionType": proposal["interventionType"],
+            "source": "ai",
+            "params": dict(proposal.get("params") or {}),
+            "style": proposal.get("style") or {},
+        }],
+    })
+    assert resp.status_code == 201, resp.text
+    plan_id = resp.json()["planId"]
+    card = client.get(f"/api/scenes/{scene_id}/parameter-card",
+                      params={"plan_id": plan_id})
+    assert card.status_code == 200, card.text
+    return card.json()
+
+
+def _card() -> dict:
+    """The card for the seeded scene, or a loud failure.
+
+    No skipping: a card assertion that cannot run here would report a pass it
+    did not earn, which is the same defect R21 exists to remove from the
+    overlap guard.
+    """
+    scene_id = _grounded_scene()
+    if scene_id is None:
+        raise AssertionError(
+            "no grounded scene in this environment: the parameter card cannot "
+            "be observed, and this test must not report an unearned pass")
+    resp = client.get(f"/api/scenes/{scene_id}/parameter-card")
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _card_entry(card: dict, key: str) -> dict:
+    for entry in card["entries"]:
+        if entry["key"] == key:
+            return entry
+    raise AssertionError(
+        f"the card has no {key!r} row; rows are "
+        f"{[e['key'] for e in card['entries']]}")
+
+
+def test_every_card_number_matches_the_ledger() -> None:
+    """Every number on the card is the ledger's own number, read not recomputed.
+
+    The card is only useful if it cannot disagree with a run. This recomputes
+    each row through the functions the ledger uses and asserts equality, so a
+    second implementation of any figure fails here rather than in a client's
+    head.
+
+    R4 is the load-bearing assertion: gross explicit storage (the brief's
+    ``area x depth``) must be **>= net** storage capacity change, because net
+    credits the storage the ground gave up. If gross ever fell below net, the
+    card would be quoting a gross figure that flattered a proposal built on
+    ground which already stored something.
+    """
+    from app.services.proposal_constraints import cells_to_area_ha
+    from app.services.sandbox_model import ledger_for_scenario
+
     grids = _grids()
-    cell_sets = [set(_polygon_cells(grids, p["geometry"]["coordinates"]))
-                 for p in proposals]
-    for i in range(len(cell_sets)):
-        for j in range(i + 1, len(cell_sets)):
-            shared = cell_sets[i] & cell_sets[j]
-            assert not shared, (
-                "PENDING (overlap prevention not implemented): proposals "
-                f"{i} and {j} share {len(shared)} cell(s)")
+    scene_id = _grounded_scene()
+    features: list[dict] = []
+    if scene_id is not None:
+        from app.routers.scenes import intervention_features, request_plan_id
+        chosen = request_plan_id(scene_id)
+        features = intervention_features(chosen) if chosen else []
+    ledger = ledger_for_scenario(grids, features, rainfall_mm=DEFAULT_RAINFALL_MM)
+    card = _card()
+
+    baseline = ledger["baseline"]
+    scenario = ledger["scenario"]
+
+    # Site area: the same helper the ledger's own size block uses.
+    assert _card_entry(card, "siteAreaHa")["value"] == cells_to_area_ha(
+        grids.rows * grids.cols, grids.cell_area_m2)
+
+    # Per-class areas: read from the one sum `_area_stats` computes.
+    for key, cls in (("waterAreaHa", "water"), ("wetlandAreaHa", "wetland"),
+                     ("greenAreaHa", "green")):
+        expected = round(baseline["classAreaM2"][cls] / 10_000.0, 2)
+        assert _card_entry(card, key)["value"] == expected, (
+            f"{key}: card says {_card_entry(card, key)['value']}, ledger says "
+            f"{expected}")
+
+    # Signed deltas, scenario minus baseline.
+    bare = round((scenario["classAreaM2"]["bare"]
+                  - baseline["classAreaM2"]["bare"]) / 10_000.0, 2)
+    assert _card_entry(card, "bareGroundCreatedHa")["value"] == bare
+    impervious = round(scenario["imperviousShare"]
+                       - baseline["imperviousShare"], 4)
+    assert _card_entry(card, "imperviousShareChange")["value"] == impervious
+    net = round(scenario["storageCapacityM3"]
+                - baseline["storageCapacityM3"], 1)
+    assert _card_entry(card, "netStorageCapacityChangeM3")["value"] == net
+
+    # R4: gross >= net, and both are present as distinct rows. Checked on a real
+    # reservoir rather than on the empty plan, because on an empty plan gross is
+    # legitimately absent and the assertion would pass without testing anything.
+    gross_entry = _card_entry(card, "explicitStorageAddedM3")
+    net_entry = _card_entry(card, "netStorageCapacityChangeM3")
+    assert gross_entry["key"] != net_entry["key"], (
+        "gross and net must be two rows; one number cannot be both")
+    assert "GROSS" in gross_entry["note"], (
+        "the gross row must label itself gross, or a reader will take it for "
+        "the run's figure")
+    assert "NET" in net_entry["note"], (
+        "the net row must label itself net")
+
+    gross, net = _gross_vs_net(grids)
+    assert gross >= net, (
+        f"gross {gross} < net {net}: the brief's area x depth formula cannot be "
+        "smaller than the ledger's own capacity change, which also credits "
+        "what the ground gave up")
+
+    # The row must actually CARRY the figure, not merely describe its absence.
+    # R4 asks for two numbers side by side; a card that prints the net figure
+    # and a sentence explaining why gross is missing has delivered one of the
+    # two. Compared against a card built for the SAME proposal, so the two
+    # figures describe one plan rather than two.
+    plan_card = _card_for_reservoir(grids)
+    gross_row = _card_entry(plan_card, "explicitStorageAddedM3")
+    assert gross_row["value"] is not None, (
+        "the gross row carries no value on a plan that has storage: R4's "
+        "'two numbers side by side' is not delivered, only described")
+    assert gross_row["value"] == gross, (
+        f"card gross {gross_row['value']} != the independently computed {gross}: "
+        "the card's area x depth is a second implementation of the brief's "
+        "formula, which is the failure this test exists to catch")
+
+    # Rainfall is the number the ledger was run at, not a card-side default.
+    assert card["inputs"]["rainfallMm"] == ledger["rainfallMm"]
+
+
+def test_card_states_the_things_this_project_cannot_know() -> None:
+    """Three rows must REFUSE a value, and no date may be invented.
+
+    This is the honesty core of the card. Each of these rows is a number a
+    reader would reasonably expect and this project does not have:
+
+    - **soil group**: ``CURVE_NUMBER_HSG_D`` is a table merely *named* HSG D;
+      no soil survey exists. It is the largest single lever on every runoff
+      figure here.
+    - **heat preset**: ``SCENARIO_PRESETS`` exists and has **no caller in
+      ``app/``**; the run takes a raw ``temperature_c``. A card printing
+      "extreme heatwave" for 30.0 C would be the exact failure this project
+      exists to prevent.
+    - **tree cover**: the raster has no tree class -- ``green`` aggregates ESA
+      tree/shrub/grassland.
+
+    R7: ``date`` is ``null`` unless a real acquisition date exists. Only the
+    canonical Landsat scene yields one, and it dates the LST scene alone.
+    """
+    card = _card()
+    keys = {e["key"] for e in card["entries"]}
+
+    # -- soil group: no value, and the absence is sourced -------------------
+    soil = _card_entry(card, "soilGroup")
+    assert soil["value"] is None, (
+        "soilGroup must carry no value: this project holds no soil survey")
+    assert "no survey exists" in soil["source"].lower(), (
+        f"the soil row's source must state that no survey exists, got: "
+        f"{soil['source']!r}")
+    assert soil["confidence"] == "UNAVAILABLE", soil
+
+    # -- heat: a number, and no preset claim --------------------------------
+    heat = _card_entry(card, "temperatureC")
+    assert isinstance(heat["value"], (int, float)), (
+        "the heat row must report the number the run actually used")
+    assert "SCENARIO_PRESETS" in heat["source"], (
+        "the heat row must say the presets exist and are not wired, or a "
+        f"reader will assume one was chosen: {heat['source']!r}")
+    assert not any(word in str(heat["value"]).lower()
+                   for word in ("mean_summer", "hot_day", "extreme")), (
+        "the heat row must not present a preset name as the value")
+
+    # -- tree cover: absent, and said to be absent --------------------------
+    assert "treeAreaHa" not in keys, (
+        "the raster has no tree class; publishing a tree area would invent one")
+    green = _card_entry(card, "greenAreaHa")
+    assert green["value"] is not None, "green area itself IS measurable"
+    assert "aggregate" in green["note"].lower(), (
+        f"the green row must say the ESA class aggregates tree/shrub/grass, "
+        f"got: {green['note']!r}")
+
+    # -- R7: no invented date ----------------------------------------------
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    lst_date = _card_entry(card, "temperatureC")["date"]
+    for entry in card["entries"]:
+        assert entry["date"] is None or entry["date"] == lst_date, (
+            f"{entry['key']} carries date {entry['date']!r}; only the canonical "
+            "Landsat scene has a real acquisition date")
+        assert entry["date"] != today, (
+            f"{entry['key']} carries today's date, which is a fabrication and "
+            "breaks determinism")
+
+    # The one real date must be the LST scene's, derived not typed.
+    assert lst_date == "2022-09-03", (
+        f"the LST acquisition date must come from CANONICAL_SCENE_ID, got "
+        f"{lst_date!r}")
+
+    # Every row is fully populated: the shape itself is part of the contract.
+    for entry in card["entries"]:
+        for field in ("key", "label", "unit", "status", "source", "confidence"):
+            assert entry.get(field) is not None, (
+                f"{entry['key']} is missing {field}")
+        assert entry["confidence"] in (
+            "MEASURED", "DERIVED", "ASSUMED", "UNAVAILABLE"), (
+            f"{entry['key']} has confidence {entry['confidence']!r}, outside "
+            "the closed enum")
 
 
 # --------------------------------------------------------------------------- #

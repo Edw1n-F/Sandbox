@@ -498,16 +498,45 @@ def _runoff_and_unstored(
     return runoff_m, unstored_m
 
 
+def _rounded_stats(stats: Mapping[str, Any], places: int) -> dict[str, Any]:
+    """``stats`` with every scalar rounded and every structured value kept.
+
+    The stats dict is no longer flat: ``_area_stats`` publishes
+    ``classAreaM2`` as a **dict** keyed by class name, because a per-class
+    breakdown is a structure, not a number. A consumer that does
+    ``{k: round(v, 1) for k, v in stats.items()}`` therefore raises
+    ``TypeError: type dict doesn't define __round__`` the moment that key
+    exists -- which is exactly what ``test_published_scenarios`` and
+    ``test_building_fit`` did when the key landed.
+
+    So the rounding is explicit about what it rounds: ``int``/``float`` are
+    rounded, and anything else -- a nested dict, a list, ``None`` -- passes
+    through untouched. Rounding a nested dict would be a category error, and
+    skipping it silently is worse than naming the rule here.
+    """
+    out: dict[str, Any] = {}
+    for key, value in stats.items():
+        if isinstance(value, bool):
+            # A bool is an int in Python; rounding it would turn `True` into 1
+            # and lose the flag, so it passes through as itself.
+            out[key] = value
+        elif isinstance(value, (int, float)):
+            out[key] = round(float(value), places)
+        else:
+            out[key] = value
+    return out
+
+
 def _area_stats(grids: Grids,
                 land_class: np.ndarray,
                 storage_over: dict[tuple[int, int], float] | None = None,
-                ) -> dict[str, float]:
+                ) -> dict[str, Any]:
     """The area and capacity terms the stats panel needs.
 
     Factored so :func:`storage_ledger` and :func:`_ledger_from_cn` report the
-    *same* three extra figures. They are two entry points to one ledger, and a
-    second copy of the impervious-share sum is exactly how the panel and the
-    number would come to disagree.
+    *same* figures. They are two entry points to one ledger, and a second copy
+    of the impervious-share sum is exactly how the panel and the number would
+    come to disagree.
 
     - ``storageCapacityM3`` -- total available storage, i.e. the sum of every
       cell's assumed usable depth times its area. This is the "remaining explicit
@@ -521,6 +550,16 @@ def _area_stats(grids: Grids,
     - ``greenWaterAreaM2`` -- green + water + wetland + floodable, the brief's
       "green-and-water area". Floodable counts here because it is landscaped
       ground, which is the whole reason it is not `water`.
+    - ``classAreaM2`` -- each land class's area, keyed by class name. This is
+      the *one* per-class sum in the project: ``greenAreaM2`` and
+      ``pavedAreaM2`` are read back out of it (see :func:`storage_ledger`) rather
+      than computed a second time, so the published names and the parameter card
+      can never disagree about how much green there is.
+
+      It lives here rather than in the parameter card for the reason the rest of
+      this function exists: a card assembled from its own grid pass would be a
+      second opinion about the same raster, and two opinions is how a panel and
+      a number come to disagree.
     """
     cell_area = grids.cell_area_m2
     total = float(land_class.size)
@@ -538,10 +577,33 @@ def _area_stats(grids: Grids,
         for name in ("green", "water", "wetland", "floodable")
     )
 
+    # One sum per class, computed once. `class_area_exact` feeds the two
+    # long-standing published keys (`greenAreaM2`, `pavedAreaM2`) so their values
+    # do not move by a rounding step; `class_area_m2` is the rounded dict the
+    # parameter card reads.
+    #
+    # Both come from the same expression evaluated once, so this is still one
+    # computation per class -- not a second sum over the raster. The split is a
+    # presentation choice, and it is deliberate: rounding the published keys
+    # would silently move `greenAreaM2` from 60946.3097... to 60946.3, i.e. a
+    # published value changes on a change that was ruled "additive only".
+    class_area_exact = {
+        name: float((land_class == LAND_CLASSES.index(name)).sum()) * cell_area
+        for name in sorted(LAND_CLASSES)
+    }
+    class_area_m2 = {name: round(area, 1) for name, area in class_area_exact.items()}
     return {
         "storageCapacityM3": float(storage_m.sum() * cell_area),
         "imperviousShare": float(paved_cells / total) if total else 0.0,
         "greenWaterAreaM2": float(green_water_cells * cell_area),
+        # `sorted` so the key order is a function of the class table rather than
+        # of dict iteration: the key set is published on the wire, so its order
+        # must not vary with how the dict was built (invariant 7).
+        "classAreaM2": class_area_m2,
+        # Not published; read back by the two entry points below so
+        # `greenAreaM2`/`pavedAreaM2` keep their exact values. Prefixed to say
+        # so, and popped by the caller, rather than being a second sum.
+        "_classAreaExact": class_area_exact,
     }
 
 
@@ -570,15 +632,21 @@ def storage_ledger(
     for name, value in HEAT_INDEX.items():
         heat[land_class == LAND_CLASSES.index(name)] = value
 
-    green_idx = LAND_CLASSES.index("green")
-    paved_idx = LAND_CLASSES.index("paved")
+    area_stats = _area_stats(grids, land_class, storage_over)
+    # The per-class sum is computed once, in `_area_stats`. These two names are
+    # published on the wire (`StatsPanel` reads them; `test_run`/`test_ledger`
+    # assert them) and the parameter card reads `classAreaM2`, so all three must
+    # come from that one computation rather than three sums over the raster.
+    # The exact (unrounded) values are used here so the published numbers do not
+    # move; `classAreaM2` carries the rounded form for display.
+    class_area = area_stats.pop("_classAreaExact")
     return {
         "runoffM3": float(runoff_m.sum() * cell_area),
         "unstoredM3": float(unstored_m.sum() * cell_area),
         "heatMean": float(heat.mean()),
-        "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
-        "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
-        **_area_stats(grids, land_class, storage_over),
+        "greenAreaM2": float(class_area["green"]),
+        "pavedAreaM2": float(class_area["paved"]),
+        **area_stats,
     }
 
 
@@ -1569,15 +1637,21 @@ def _ledger_from_cn(grids: Grids, land_class: np.ndarray, cn: np.ndarray,
     for name, value in HEAT_INDEX.items():
         heat[land_class == LAND_CLASSES.index(name)] = value
 
-    green_idx = LAND_CLASSES.index("green")
-    paved_idx = LAND_CLASSES.index("paved")
+    area_stats = _area_stats(grids, land_class, storage_over)
+    # The per-class sum is computed once, in `_area_stats`. These two names are
+    # published on the wire (`StatsPanel` reads them; `test_run`/`test_ledger`
+    # assert them) and the parameter card reads `classAreaM2`, so all three must
+    # come from that one computation rather than three sums over the raster.
+    # The exact (unrounded) values are used here so the published numbers do not
+    # move; `classAreaM2` carries the rounded form for display.
+    class_area = area_stats.pop("_classAreaExact")
     return {
         "runoffM3": float(runoff_m.sum() * cell_area),
         "unstoredM3": float(unstored_m.sum() * cell_area),
         "heatMean": float(heat.mean()),
-        "greenAreaM2": float((land_class == green_idx).sum() * cell_area),
-        "pavedAreaM2": float((land_class == paved_idx).sum() * cell_area),
-        **_area_stats(grids, land_class, storage_over),
+        "greenAreaM2": float(class_area["green"]),
+        "pavedAreaM2": float(class_area["paved"]),
+        **area_stats,
     }
 
 
@@ -1846,8 +1920,8 @@ def apply_published_scenario(
         "assumptionNote": scenario.get("assumptionNote"),
         "assumedConversion": split,
         "rainfallMm": rainfall_mm,
-        "baseline": {k: round(v, 1) for k, v in base.items()},
-        "scenario": {k: round(v, 1) for k, v in scen.items()},
+        "baseline": _rounded_stats(base, 1),
+        "scenario": _rounded_stats(scen, 1),
         "bufferDeficitM3": round(base["unstoredM3"], 1),
         "scenarioDeficitM3": round(scen["unstoredM3"], 1),
         "deltaUnstoredM3": round(d_unstored, 1),
