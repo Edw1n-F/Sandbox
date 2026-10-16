@@ -1520,6 +1520,103 @@ def test_the_guard_does_not_fire_on_a_question() -> None:
 # --------------------------------------------------------------------------- #
 # Minimal runner (pytest is not installed in this environment)
 # --------------------------------------------------------------------------- #
+# T01: the region filter
+# --------------------------------------------------------------------------- #
+
+
+def test_a_named_region_is_honoured_by_site_selection() -> None:
+    """A named region must narrow the pool, not be ignored.
+
+    Before this was fixed, all five regions returned **the same geometry** -- one
+    sha256 across north/south/east/west/centre -- because `parse_intent` returns
+    `(kind, count)` and discards the region, and `HeuristicProvider.propose` then
+    took `sites[:count]` with `count` defaulting to 1. The confirm gate was a
+    checklist with one item, and the owner's report was "the generated proposals
+    are all repeated".
+
+    Measured today: north 3, south 0, east 1, west 2, centre 1.
+    """
+    grounding = ai_plan.load_grounding()
+    heuristic = ai_plan.HeuristicProvider()
+
+    sets: dict[str, list[str]] = {}
+    for region in ("north", "south", "east", "west", "centre"):
+        features = heuristic.propose(
+            f"add a water reservoir in the {region}", grounding)
+        sets[region] = [
+            json.dumps(f["geometry"], sort_keys=True) for f in features
+        ]
+
+    assert len({tuple(v) for v in sets.values()}) > 1, (
+        "every region returned the same site: the requested region is being "
+        "ignored, which is the bug this test exists to catch")
+
+    # Filter, never rank. A region with no candidate must return nothing, not
+    # the nearest out-of-region site -- the precedent is `resolve_scope`, whose
+    # docstring calls that fallback "the exact bug this function exists to
+    # remove". A site silently returned for the wrong region is worse than a
+    # refusal a planner can act on.
+    assert sets["south"] == [], (
+        "south has no reservoir candidate and must stay empty; returning an "
+        "out-of-region site would present a re-sited proposal as the one "
+        "that was asked for")
+
+
+def test_the_region_filter_preserves_each_sites_original_pool_index() -> None:
+    """Narrowing the pool must not renumber it.
+
+    `site_id` is `f"{kind}#{i}"` over `enumerate(pool)`, and both `_materialise`
+    and `resolve_scope` resolve an id by indexing the **full** pool. A narrowed
+    list that is re-enumerated silently re-points every id to a different
+    geometry -- the most dangerous possible version of this bug, because the
+    response looks correct and the geometry is wrong.
+
+    So: the geometry a narrowed site carries must be the geometry at its
+    original index in the untouched pool.
+    """
+    grounding = ai_plan.load_grounding()
+    pool = list(getattr(grounding, ai_plan.POOL_FOR_KIND["water_reservoir"], []))
+    assert len(pool) >= 2, "the fixture needs a pool of at least two sites"
+
+    narrowed = ai_plan.sites_in_region(pool, "west", grounding.bounds)
+    assert narrowed, "west has no candidate: this test would pass vacuously"
+
+    full_geometries = [json.dumps(s["geometry"], sort_keys=True) for s in pool]
+    for index, site in narrowed:
+        assert 0 <= index < len(pool), (
+            f"index {index} is outside the full pool: the narrowed list was "
+            "renumbered, so every site_id now resolves to the wrong geometry")
+        assert json.dumps(site["geometry"], sort_keys=True) == full_geometries[index], (
+            f"site at index {index} does not match the full pool's geometry at "
+            "that index: the filter re-pointed an id")
+
+
+def test_region_selection_is_deterministic_and_unstated_counts_do_not_cap() -> None:
+    """The same sentence must select the same sites, twice and forever.
+
+    The fix is deliberately a pure predicate over an ordered list: no distance
+    sort (a float key with real ties is how this gets written wrong), no
+    `time`, no `random`. And "a reservoir" must not mean "exactly one" --
+    `parse_intent`'s `words` maps `"a " -> 1`, which conflates *what* is wanted
+    with *how many*; reading it as a count is half of the owner's complaint.
+    """
+    grounding = ai_plan.load_grounding()
+    heuristic = ai_plan.HeuristicProvider()
+
+    first = heuristic.propose("add a water reservoir in the north", grounding)
+    second = heuristic.propose("add a water reservoir in the north", grounding)
+    assert [json.dumps(f["geometry"], sort_keys=True) for f in first] == [
+        json.dumps(f["geometry"], sort_keys=True) for f in second
+    ], "the same instruction selected different sites on a second call"
+
+    # An unstated count offers every eligible candidate in the region, so the
+    # gate is a checklist rather than a single take-it-or-leave-it offer.
+    assert len(first) > 1, (
+        "an unstated count must offer every eligible candidate in the region; "
+        "capping it at one is the 'no new individual proposals' complaint")
+
+
+# --------------------------------------------------------------------------- #
 
 
 def _run() -> int:
