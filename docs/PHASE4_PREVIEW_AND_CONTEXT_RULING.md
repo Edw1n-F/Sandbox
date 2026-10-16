@@ -493,12 +493,14 @@ error in this paragraph was proving a shape claim with a **count** — and a cou
 vocabulary silently goes stale, which is the same failure the message rule exists to prevent, one level up.
 **So do not rebuild the demonstration on a fixed list; state the invariant.**
 
-**Credit where it is due: the implementer's C4 is better than what this paragraph asked for.** It asserts each
-phrasing **routes** *and* that at least one **fires** — `assert refused >= 1`, with the message *"no
-PROPOSAL_SHAPED_GAP fires the detector, so this test exercised nothing; if the vocabulary learned every synonym
-that is fine, but say so rather than passing vacuously"*. That is the anti-vacuity discipline this project has
-needed more than once (a guard that never executes, a suite that passes because it skipped). It is also why
-**R-A cannot simply delete the last firing phrasing** — see §10.5.
+**Credit where it is due: the implementer's C4 is better than what this paragraph asked for.** It now checks
+**two families** — (i) a **genuinely unlearned synonym** (`"add a rain garden in the north"`, `_match_noun →
+None`) must fire the guard and its message must hold §3B.4's line, with a self-describing failure *("if the
+vocabulary learned it, pick another unlearned synonym here")*; and (ii) the pinned four must **not** be falsely
+refused, `continue`ing when nothing fires. **That is the anti-vacuity discipline this project has needed more
+than once** (a guard that never executes, a suite that passes because it skipped) — and crucially it is
+**vocabulary-independent**, so it does not go stale the way a count does. Which is this section's own lesson,
+applied by the person who was told to apply it.
 
 **Ruling — every clause must be a fact about the *system*, never a claim about the *user's sentence*:**
 
@@ -1185,17 +1187,22 @@ commit itself, by the same author**, so the red suite has exactly one owner.
    encode §3B.3's correction, which was right **for as long as the pool was absent**. C3 becomes: the message
    names every `POOL_FOR_KIND` kind — including floodable ground, once it is one — and omits nothing it can
    create.
-2. **C4 loses its non-vacuity assertion, and this one is easy to miss.** C4 ends with
-   `assert refused >= 1` over `PROPOSAL_SHAPED_GAPS`. **Measured: exactly one member of that list fires the
-   guard today (`create a wetland in the east`), and R-A drops `flood_storage`'s absence, so it becomes zero.**
-   The assertion then fails — deliberately, with the message *"say so rather than passing vacuously"*. The fix
-   is **not** to delete the assertion: C4 must gain a **genuinely unrecognised synonym** (a noun that is in no
-   alias), so the guard stays exercised. Deleting it would convert a live guard test into a vacuous pass, which
-   is the failure mode the assertion exists to prevent.
+2. **C4 — RESOLVED BY THE IMPLEMENTER, and it no longer moves under R-A. Recording the history because my
+   first reading of it was wrong.** As originally written, C4 ended with `assert refused >= 1` over
+   `PROPOSAL_SHAPED_GAPS`; measured, exactly **one** member fires the guard today (`create a wetland in the
+   east`), and R-A would have taken that to **zero** — turning the anti-vacuity assertion into the red one. In
+   the same delivery the implementer **restructured C4** so the non-vacuity guarantee no longer depends on the
+   vocabulary at all: it now asserts that a **genuinely unlearned synonym** (`"add a rain garden in the north"`,
+   `_match_noun → None`) fires the guard, and keeps `PROPOSAL_SHAPED_GAPS` **only** as a *"must not be falsely
+   refused"* pin that `continue`s when nothing fires. **R-A therefore leaves C4 green**, because the half that
+   carries the guarantee is independent of `POOL_FOR_KIND`. Credit: this is exactly the shape recommended here,
+   and strictly better than it — a vocabulary-independent guarantee cannot go stale the way a count can
+   (§3B.4's own lesson, applied by the person who was told to apply it).
 
 **So R-A's commit touches: `POOL_FOR_KIND`, `load_grounding`, `parse_intent` (R-B), `EN_ALIASES["flood
-storage"]` (R-6), the `instructions` dict (R-C), **and both C3 and C4**.** That list is why it cannot be split
-across two authors.
+storage"]` (R-6), the `instructions` dict (R-C), **and C3**.** Not C4 — see above. C3 remains the single test
+that must be retired by the same author, for the reason the lead gave: a test that is correct-today-and-retired-
+later should be retired by the change that retires it.
 
 **R-B — fix the parser disagreement; do not rely on the guard's placement.**
 `parse_intent` must resolve **one kind per noun occurrence, longest alias wins** — the same rule `_match_noun`
@@ -1350,14 +1357,15 @@ R-B cannot be specified as a self-contained change for someone else to carry —
      that will ever exist, not just today's 29.
   2. `test_every_routed_kind_has_a_pool` — `{k for k in EN_ALIASES.values() if k in KIND_WORD} ⊆
      set(POOL_FOR_KIND)`. Same property: exhaustive by construction.
-- **C3 and C4 both move in this commit, same author.** C3's `assert "flood_storage" not in detail` encodes
-  §3B.3's correction, which was correct **while the pool was absent**, and R-A retires it deliberately. C4 is
-  the easy one to miss: its closing `assert refused >= 1` over `PROPOSAL_SHAPED_GAPS` is currently satisfied by
-  **exactly one** member (`create a wetland in the east`) and R-A drops that to **zero** — so C4 needs a
-  genuinely unrecognised synonym, **not** the deletion of the assertion, or a live guard test becomes a vacuous
-  pass. Measured counts and both assertions are in §10.5. This is also why the lead's instruction to the
-  T03/T03B engineer to leave C3 alone for now is right: a test that is correct-today-and-retired-later should
-  be retired by the change that retires it.
+- **C3 moves in this commit, and only C3. Same author.** Its `assert "flood_storage" not in detail` encodes
+  §3B.3's correction, which was correct **while the pool was absent**, and R-A retires it deliberately — one
+  line, `in detail` instead of `not in detail`, with the implementer's NOTE comment already marking the spot.
+  **C4 does not move** (§10.5 item 2): the implementer restructured it so its non-vacuity guarantee rides a
+  **genuinely unlearned synonym** rather than a count over `PROPOSAL_SHAPED_GAPS`, which makes it independent of
+  `POOL_FOR_KIND` — so R-A leaves it green. I had this wrong on the first pass and corrected it.
+- **C3 is a one-author change; R-A as a whole is still not splittable across authors**, because the pool, the
+  parser rule, the alias and the `instructions` dict must land together (R-A alone is *worse* than the bug —
+  §11.3).
 - **Must not regress:** `test_intent_parsing_reads_counts` (`parse_intent`'s outputs for the counted cases),
   `test_intent_routing` 14/14, `test_every_proposal_kind_has_a_defined_ledger_effect` (`flood_storage` has an
   `INTERVENTION_EFFECTS` entry, so it should pass), and the gate total the region branch establishes.
