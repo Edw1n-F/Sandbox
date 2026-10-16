@@ -1439,3 +1439,233 @@ against the case that actually happened.
 It is the form to hand to the other engineers. This is the same discipline §11.4 demands of R-A's two-test
 retirement, for the opposite reason — there, two authors would leave a red suite with no owner; here, one
 staged file left a commit with no author.
+---
+
+## 13. RULING — interrogative semantics, and the two coupled defects (T03/T03B FAIL)
+
+*(19 Oct 2026, on QA's report and the lead's five questions. Branch frozen at `7531441`; nothing here is
+implemented. Every claim below is measured on that commit.)*
+
+### 13.0 The spine — the principle that answers all five questions
+
+**Form detection is for ROUTING. A refusal may only assert what is true of every sentence that reaches it.**
+
+Those two halves resolve 1–4 as one decision, and they resolve them *differently* from the symmetric fix the
+brief anticipated — because the defect is not that the two detectors disagree about `_is_interrogative`. It is
+that **one of them inspects form and the other asserts about the sentence**, and neither belongs to a refusal.
+
+### 13.1 Reproduced, plus one measurement that decides question 2
+
+QA's three findings all reproduce. My own runs add three facts the report did not have, and the third is
+decisive.
+
+**(a) The guards' asymmetry is real, and the endpoint fires on the bare verb regardless of routing.**
+`is_unsupported_capability` tests `_is_interrogative`; `is_removal_instruction` is `_REMOVAL_RE.search(...)`
+and nothing else. Driven at `/ai-plan`, **all six** of QA's F1 sentences return 422 — including
+`what happens if I remove the paving?`, which `classify_turn` grades as a **question**:
+
+| instruction | `classify_turn` intent | `/ai-plan` |
+|---|---|---|
+| `should I remove the reservoir?` | intervention | 422 |
+| `what happens if I remove the paving?` | **question** | **422** |
+| `what would happen if I remove the road?` | intervention | 422 |
+| `explain why we cannot remove the pond` | intervention | 422 |
+| `can we remove the reservoir` | intervention | 422 |
+| `we should remove the reservoir` | intervention | 422 |
+
+**(b) The `?` bypass is real but is an API-integrity hole, not a client-visible one.** The client defends
+twice — `looksLikeIntervention` has its own `if (/\?\s*$/.test(trimmed)) return false`
+(`intentVocabulary.ts:147`) and `classify_turn`'s rule 4 grades a trailing `?` as a question. So a hedge never
+reaches the gate **from our client**; F3's `200`s are what a *direct* caller gets. That lowers F3's severity
+below F1's — and it does **not** lower the priority, because the endpoint's own contract is at stake.
+
+**(c) DECISIVE FOR Q2 — the client posts the NORMALISED HINT, so no interrogative marker ever reaches the
+guard.** Measured:
+
+```
+parse_intervention_intent("should I remove the reservoir?")   -> 'remove the water reservoir near the whole area'
+parse_intervention_intent("explain why we cannot remove the pond") -> 'remove the water reservoir near the whole area'
+```
+
+The gate POSTs **that string** — an imperative, with no `?` and no question word. So **making
+`is_removal_instruction` consult `_is_interrogative` cannot fix F1's client-visible half at all**: by the time
+the guard sees anything, the evidence is gone. Any form-based decision must be made on the **original
+sentence**, which is where routing already looks.
+
+And note the second line: the hint **inverts the polarity**. `"why we cannot remove the pond"` becomes
+`"remove the water reservoir …"` — a bag-of-words matcher has now discarded the sentence's form, its negation
+and its clause structure. **That is the reason the fix belongs upstream of the hint, not downstream of it.**
+
+### 13.2 Q1 — what `?` means: it routes, and it does not exempt
+
+**Ruling: `?` keeps its full meaning for *routing* and loses all meaning for *refusal*.**
+
+The brief proposed demoting `?`: *"the `endswith("?")` clause needs to stop being sufficient on its own, and
+the leading-word list carries the load."* **I am ruling the stronger version, because the weaker one still
+leaves a typographic signal doing a syntactic job.** A leading wh/aux word means the sentence is *formed* as a
+question; a trailing `?` means only that the writer was unsure. F3 is the proof that the second cannot carry an
+exemption — one character defeats the guard — but the fix is not to make `?` *weaker*; it is to stop asking it
+to grant anything.
+
+And there is a positive reason, not just a defensive one: **the capability statement is true of every sentence,
+so there is nothing to exempt.** `add a school`, `add a school?` and `can I add a school?` all deserve the same
+answer — *"I cannot create that; here I can create drainage, green space, permeable paving, road, water
+reservoir."* Exempting a form would mean *withholding a correct answer* from some phrasings and *giving a wrong
+one* (a substitution) to others.
+
+So: `_is_interrogative` is **unchanged** and stays the routing predicate (`classify_turn` rule 4), which is why
+`test_intent_routing` 14/14 is untouched by this ruling. **The guards stop importing it.**
+
+### 13.3 Q2 — the removal detector: **do not** make it consult form. Fix the routing and the message instead.
+
+**Ruling, in two parts, and the explicit answer to `remove the pond?` is: it is refused — and that is
+correct.**
+
+**(i) The client-visible half is a ROUTING defect, and (c) proves it.** `classify_turn`'s precedence puts the
+parser hint (rule 1b) **above** the interrogative check (rule 4), so an interrogative with a matching noun is
+dragged to the gate and the hint — an imperative — is posted. **Ruling: an interrogative must not be routed to
+the gate, except as a *polite request to the agent*.** The exception is required, not optional: measured,
+
+```
+can you add a water reservoir in the north?  -> intervention, hint 'add a water reservoir in the north'   (preserve)
+could you add green space in the centre?     -> intervention                                              (preserve)
+can we remove the reservoir                  -> intervention        <- must become a question
+should I remove the reservoir?                -> intervention        <- must become a question
+```
+
+so the discriminator is **second person**: `can|could|would|will (+ you)` is a request *to us*; `should I` /
+`can we` / `what if I` is deliberation. No test currently pins the polite form, so this must be **pinned by the
+fix** — `docs/TEST_PLAN_intervention_loop.md` records it as ✅ working, and a fix that regresses it would trade
+one defect for another. Proposed predicate: `_is_request_to_agent(t) = ^\s*(can|could|would|will)\s+you\b`,
+and rule 1 applies only when `not _is_interrogative(question) or _is_request_to_agent(question)`.
+
+**(ii) `remove the pond?` is REFUSED, deliberately — and the reason is that the guard must not consult form.**
+The brief warned that symmetry would make the answer "fall out of the code". My ruling makes it explicit:
+**the removal guard keeps its verb-only predicate.** Three reasons:
+
+1. **It cannot work on the client path** ((c)) — the guard sees a `?`-free imperative. A form check there
+   would be dead code on the path that matters and live code only for direct callers. That is the worst of both.
+2. **The verb-only predicate is load-bearing for a reason the docstring already gives**: *"a removal with no
+   supported known noun ('remove the masts') must still be refused rather than quietly created."* Adding a form
+   test narrows a guard whose whole job is to be un-narrowable — and the failure it prevents (a removal silently
+   becoming a creation) is the destructive-direction one.
+3. **With the message corrected (§13.5) a form test is no longer needed for honesty.** A question that trips
+   the removal guard receives *"I cannot take anything away on this endpoint; removals are handled at POST
+   …/sandbox/resolve-removal"* — **true of every sentence**, question or instruction. The false claim, not the
+   refusal, was the defect.
+
+So `remove the pond?` → **refused**, and the refusal says only what it can: this endpoint cannot remove, and
+here is where removal lives. That is a non-answer to a question, and it is honest; the *client* never produces
+it because (i) keeps the question away from the gate.
+
+### 13.4 Q3 — how much load a lexical test may carry: **none, for refusal**
+
+**Ruling: the capability detector drops its interrogative test entirely.** Its predicate becomes exactly
+*"a creation verb is present and no proposable noun matches."*
+
+This **dissolves** Q3 rather than answering it: F2's five phrasings (`explain how to…`, `tell me how to…`,
+`I wonder if…`, `any way to…`, `if I add a school what happens`) were only a problem because a lexical list was
+being asked to recognise a question. Once refusal is form-independent, they all receive the **same correct
+capability statement** — which is the right answer to "explain how to add a school" as much as to "add a
+school". **The 23-word list is not grown, and it must not be**: adding `explain`, `tell`, `wonder`, `any` would
+be an unbounded list doing syntactic work by vocabulary, and it would make the answer *worse* for the phrasings
+it caught by withholding a true statement. This is the same reasoning by which the lead and I earlier refused to
+widen `intent` when the missing thing was a reason rather than a route — here the missing thing is a statement
+of capability, and every one of these phrasings wants exactly that.
+
+**Consequence, stated so it is not a surprise:** `add a school?` and `can I add a school?` posted **directly**
+to `/ai-plan` now both return 422 with the capability statement. On the client path neither reaches the gate
+(`classify_turn` grades both as questions, and §13.3(i) makes that robust), so they are answered by the chat
+card. A 422 is defensible for the direct caller because the message *is* the answer, and because a 422 makes
+the response not-an-AI-output — the §3B.2.1 reasoning, which is unaffected by any of this.
+
+### 13.5 Q4 — the removal message: apply §3B.4 to it
+
+The offending clause is verbatim from `removal_refusal_detail` (`intent.py:378-381`):
+
+> *"I cannot take anything away on this endpoint: /ai-plan only creates interventions, **so a removal here
+> would build the very thing you asked to remove**."*
+
+**That is a claim about the user's request, which §3B.4 forbids, and it is measured false**: the identical
+`detail` is returned for `explain why we cannot remove the pond` — a sentence that did not ask to remove
+anything (`identical detail? True`). The user is told what they asked for, wrongly.
+
+**Ruling: the clause is deleted and the sentence is reduced to a fact about the system.** Something like
+*"I cannot take anything away on this endpoint: /ai-plan only creates interventions."* — and then the route and
+the created-kinds list, both of which are already generated from their owning constants. This is
+**independent of 1–3** and should land in the same commit, because it is what lets §13.3(ii) stand.
+
+**The test is the same shape as C4's**: the removal detail must not contain any phrase that claims what the
+user asked for, and — the sharper assertion — **the detail must be byte-identical for a genuine removal and for
+a question that merely mentions one.** That is what "a fact about the system" means operationally, and it is
+checkable without a word list.
+
+### 13.6 Q5 — a partly-unhandled instruction: **disclose, do not refuse** — and it needs **no wire change**
+
+Measured: `add a school and a reservoir` → **200, `features=1`, `types=['water_reservoir']`, `rejected=0`,
+`message=null`**, and the only place "school" appears in the response is the echoed `params.instruction`. **The
+guard refuses only when NO proposable noun matches, so the unsupported half is dropped with no signal at all.**
+QA is right, and it is a milder instance of the substitution class: the short list looks exhaustive.
+
+**Ruling: execute the supported half and name the unhandled half. No schema change, no openapi regeneration.**
+
+I expected to have to rule a wire change here too; I do not. `AIPlanResponse` already carries `message`
+(`str | None`) and `grounding_notes` (`list[str]`), and both are unused in this case. So the disclosure is
+**zero-wire-change**: the unhandled clause goes in `message` (user-facing, which is what "a short list must
+never look exhaustive" requires) **and** in `groundingNotes` (technical provenance). **This is deliberately not
+a new field** — a new field would cost an openapi regeneration for something the existing shape can say.
+
+**Which half to name, and why that is `refusal`-free:** split the instruction into clauses on `and` / `,`;
+a clause with a creation verb and no proposable noun is *unhandled*, and the message **echoes the user's own
+clause text** rather than trying to name a noun. Echoing claims nothing about the sentence; naming a noun would
+require a vocabulary we do not have. The created-kinds list is the generated one (§3B.3).
+
+**Why refuse for the mixed add+remove case (§3.2) but disclose here — the line, stated:** *refuse when the
+unhandled part would be done **wrongly**; execute-and-disclose when it would merely be left **undone**.* For
+add+remove, executing the addition while the removal silently becomes a creation is wrong in the destructive
+direction. For supported+unsupported, the supported half is done **correctly** and the other half is simply not
+done. That asymmetry is deliberate, not inconsistent, and it is the same test the lead and QA applied to the
+mixed-removal 422 they both agreed with.
+
+### 13.7 What this ruling does NOT close — and I am not writing it as closed
+
+**`explain why we cannot remove the pond` still reaches the gate.** It is not interrogative by `?` or by the
+leading-word list, its "remove" sits in a subordinate clause, and the clause is **negated** — and the hint
+fabricated from it inverts the polarity (§13.1(c)). No lexical predicate we have detects that, and I am not
+ruling one in: a negation-aware, clause-aware matcher is a different project, and inventing one now would put an
+untested parser in front of the destructive-direction guard.
+
+**What the ruling does do is reduce it from *a false claim delivered as an error* to *a true refusal that is
+merely unhelpful*.** After §13.5 the user is told only that this endpoint cannot remove and where removal
+lives. That is honest and boring rather than wrong. **Which of the two it is must be measured again after the
+fix, not asserted** — and the honest statement to carry forward is: *the routing fix removes every
+interrogative the vocabulary can recognise; what remains is a sentence form the vocabulary cannot see.*
+
+### 13.8 Tests this ruling requires
+
+The two the brief flagged as **absent** are in scope here, because F1 lives in that branch:
+`test_a_removal_instruction_is_refused_by_ai_plan_not_inverted` and `…refusal_names_the_removal_route`
+(ruling B1/B2). Naming them so they are not lost again.
+
+| # | test | pins |
+|---|---|---|
+| D1 | `test_a_question_is_not_routed_to_the_gate` | the five F1 sentences → `classify_turn` intent != `intervention` (§13.3i) |
+| D2 | `test_a_polite_request_to_the_agent_still_reaches_the_gate` | `can you add …?` / `could you add …?` → `intervention` with a clean hint — the exception is load-bearing and currently unpinned |
+| D3 | `test_an_interrogative_does_not_bypass_the_capability_guard` | `add a school?`, `add a school???`, `add school?` → 422, same as `add a school.` (§13.2) |
+| D4 | `test_every_capability_phrasing_gets_the_same_answer` | F1's original F2 five + `add a school` → identical `detail`; asserts form-independence rather than a list |
+| D5 | `test_the_removal_refusal_asserts_nothing_about_the_sentence` | the removal `detail` is **byte-identical** for `remove the water reservoir near the south` and `explain why we cannot remove the pond`, and contains no "you asked to remove"-shaped clause (§13.5) |
+| D6 | `test_a_partly_unhandled_instruction_discloses_the_unhandled_half` | `add a school and a reservoir` → 200, ≥1 feature, **and** the unhandled clause echoed in `message` + `groundingNotes`; and `rejected` still `[]` (nothing was refused) |
+
+**B1/B2 remain the headline:** F1 is the live half of §3.2, and §3.2's user-visible feature has no endpoint
+test. That is the lead's to route; it is recorded here because the ruling is where the requirement lives.
+
+### 13.9 Ordering and conflict
+
+All of it is `backend/app/agent/intent.py` — **`intent.py`'s routing** (`classify_turn` precedence and the
+polite-request predicate), the two detector predicates, and one message string. **No `ai_plan.py`, no router,
+no schema, no `contracts/openapi.json`** (Q5 needs no wire change, §13.6). So it is **conflict-free with
+`feature/region-selection`** and independent of task R.
+
+**One commit**, because §13.2 and §13.4 are one change (the capability guard stops consulting form) and
+§13.3(ii) depends on §13.5 (the form test is only unnecessary *because* the message became form-neutral).
+Splitting them would leave a window in which `remove the pond?` is refused for a reason that is still false.
