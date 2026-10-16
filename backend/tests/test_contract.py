@@ -24,6 +24,14 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# This suite creates scenes and plans, and `/ai-plan/apply` now pins into the
+# scene's staged plan: run against the real store, it would leave that plan
+# behind. A temp copy, like every other suite that writes.
+from _tmpstore import isolate_store  # noqa: E402
+
+isolate_store()
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -428,15 +436,16 @@ def test_ai_plan_apply_persists_proposals() -> None:
     assert applied.status_code == 200, applied.text
     data = applied.json()
     plan_id = data["planId"]
-    try:
-        assert plan_id is not None
-        assert data["features"] == len(proposals)
-        plans_after = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
-        assert len(plans_after) == len(plans_before) + 1
-    finally:
-        if plan_id:
-            # Clean up the plan we just created so the store survives the suite.
-            scene_service._delete_plan_files(plan_id)
+    assert plan_id is not None
+    assert data["features"] == len(proposals)
+    # Applied proposals join the sandbox -- the scene's one staged plan -- rather
+    # than becoming a plan of their own, so at most one plan appears (the staged
+    # plan, the first time anything is staged) and every proposal is pinned in it.
+    plans_after = client.get(f"/api/scenes/{scene_id}/plans").json()["plans"]
+    assert len(plans_after) <= len(plans_before) + 1
+    staged = client.get(f"/api/scenes/{scene_id}/pins").json()
+    assert staged["planId"] == plan_id
+    assert sum(1 for f in staged["features"] if f["pinned"]) >= len(proposals)
 
 
 # --------------------------------------------------------------------------- #

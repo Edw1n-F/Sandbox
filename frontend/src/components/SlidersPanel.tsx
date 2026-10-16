@@ -13,6 +13,7 @@ import Typography from '@mui/material/Typography'
 
 import HudPanel from '@/components/HudPanel'
 import { usePlanStore } from '@/state/planStore'
+import { runPlanIds, useSandboxStore } from '@/state/sandboxStore'
 import { useSceneStore } from '@/state/sceneStore'
 import SliderField from './SliderField'
 
@@ -26,6 +27,9 @@ export default function SlidersPanel() {
   // brief's goal is cumulative effect, and the backend composes this list into
   // one scenario.
   const selectedPlanIds = usePlanStore((s) => s.selectedPlanIds)
+  // What the user has placed. The run scores it with the toggled projects.
+  const sandbox = useSandboxStore()
+  const placed = sandbox.features.length
 
   // Rainfall is intensity (mm/hr) × duration (hr) → storm-total depth, which is
   // what SCS-CN consumes. The presets are the HKO rainstorm-signal thresholds,
@@ -221,7 +225,7 @@ export default function SlidersPanel() {
           variant="contained"
           fullWidth
           disabled={!scene || running}
-          onClick={() => void run(selectedPlanIds)}
+          onClick={() => void run(runPlanIds(selectedPlanIds, sandbox))}
           sx={{ mt: 0.5 }}
         >
           {running ? (
@@ -243,9 +247,14 @@ export default function SlidersPanel() {
           )}
         </Button>
 
-        {selectedPlanIds.length === 0 && !running && (
+        {selectedPlanIds.length === 0 && placed === 0 && !running && (
           <Typography variant="caption" color="text.secondary">
             No projects selected — this scores today's land cover.
+          </Typography>
+        )}
+        {placed > 0 && !running && (
+          <Typography variant="caption" color="text.secondary">
+            Includes {placed} placed intervention{placed === 1 ? '' : 's'}.
           </Typography>
         )}
         {running && (

@@ -2373,16 +2373,67 @@ def apply_proposals(
     provider: str,
     grounding_notes: list[str],
     candidate_counts: dict[str, int],
+    values: list[dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
-    """Persist a confirmed subset of proposals as a draft plan (plan v2 §5).
+    """Put a confirmed subset of proposals on the sandbox (Stage 4).
 
-    Features are what `generate_proposals` emitted (or the subset the UI
-    accepted at the confirm gate); their shape matches `_feature()`'s dict
-    so this function stays a thin wrapper over `scene_service.create_plan`
-    rather than a second validation pipeline.
+    The features are pinned into the scene's **staged plan** -- the one plan
+    the Interventions panel lists and every run composes -- rather than written
+    as a new plan of their own. A plan per confirmation was never added to the
+    run's selection, so "Applied. Run again to see the effect" ran without it;
+    and it could not be listed or removed alongside everything else the user
+    had added.
 
-    Returns the standard create-plan response augmented with `types` so the
-    client can summarise what landed.
+    ``values[i]`` are the input card's answers for ``features[i]``; a key the
+    user left out goes to the AI's estimate, and which was which is recorded in
+    the feature's ``params.inputSources``.
+
+    Returns ``planId`` (the staged plan), ``features`` and ``types``.
+    """
+    from app.services import sandbox
+
+    if not features:
+        raise PlanGenerationError("no features to apply")
+    try:
+        staged = sandbox.stage(
+            scene_id,
+            [{
+                "geometry": f["geometry"],
+                "interventionType": f["intervention_type"],
+                "source": f.get("source", "ai"),
+                "params": {**(f.get("params") or {}),
+                           "provenance": {"source": "ai-plan",
+                                          "provider": provider,
+                                          "instruction": instruction[:200]}},
+                "style": f.get("style") or {},
+            } for f in features],
+            values,
+            source="ai",
+        )
+    except sandbox.InputError as exc:
+        raise PlanGenerationError(str(exc)) from exc
+    return {
+        "planId": staged["planId"],
+        "features": staged["features"],
+        "provider": provider,
+        "types": staged["types"],
+        "groundingNotes": grounding_notes,
+        "candidateCounts": candidate_counts,
+    }
+
+
+def _legacy_apply_as_new_plan(
+    scene_id: str,
+    instruction: str,
+    features: list[dict[str, Any]],
+    provider: str,
+    grounding_notes: list[str],
+    candidate_counts: dict[str, int],
+) -> dict[str, Any]:
+    """Persist proposals as a plan of their own: the pre-sandbox behaviour.
+
+    Kept only for ``generate_plan``, the legacy one-shot path some older test
+    suites still drive. Nothing in the app calls it.
     """
     from app.schemas.plan import PlanCreate
     from app.services import scene_service
@@ -2462,7 +2513,7 @@ def generate_plan(
             "message": result.get("message"),
         }
 
-    applied = apply_proposals(
+    applied = _legacy_apply_as_new_plan(
         scene_id,
         instruction,
         features,

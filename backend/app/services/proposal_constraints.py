@@ -252,6 +252,10 @@ def _owner_map(
         for feature in (doc.get("interventions") or []):
             if not isinstance(feature, Mapping):
                 continue
+            # An unpinned row is off the sandbox: the run does not compose it,
+            # so it must not block new ground either.
+            if feature.get("pinned") is False:
+                continue
             coords = (feature.get("geometry") or {}).get("coordinates")
             if not coords:
                 continue

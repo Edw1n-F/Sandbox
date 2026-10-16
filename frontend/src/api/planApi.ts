@@ -159,10 +159,10 @@ export async function createAiPlan(
 }
 
 /**
- * `POST /api/scenes/{sceneId}/ai-plan/apply` -- persist a confirmed subset.
+ * `POST /api/scenes/{sceneId}/ai-plan/apply` -- put a confirmed subset on the sandbox.
  *
- * The accepted proposals are echoed back verbatim; the server rewraps them in
- * a `PlanCreate` and stores a draft plan through the standard pipeline. No
+ * The accepted proposals are echoed back verbatim and pinned into the scene's
+ * staged plan, which the Interventions panel lists and every run composes. No
  * server-held list bridges the two calls: the proposals live only in the
  * client until a user accepts (plan v2 §5.1).
  */
@@ -174,6 +174,8 @@ export async function applyAiPlan(
     proposals: InterventionProposal[]
     groundingNotes?: string[]
     candidateCounts?: Record<string, number>
+    /** The input card's answers, one per proposal; an absent key is the AI's estimate. */
+    values?: Array<Record<string, number>>
   },
 ): Promise<AiPlanResult> {
   const { data } = await http.post<AiPlanResult>(
@@ -184,6 +186,7 @@ export async function applyAiPlan(
       proposals: args.proposals,
       groundingNotes: args.groundingNotes ?? [],
       candidateCounts: args.candidateCounts ?? {},
+      values: args.values ?? [],
     },
   )
   return data

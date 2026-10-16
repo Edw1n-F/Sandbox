@@ -37,6 +37,21 @@
             "maxLength": 200,
             "title": "Provider",
             "type": "string"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
           }
         },
         "required": [
@@ -1438,6 +1453,130 @@
           }
         },
         "title": "RunRequest",
+        "type": "object"
+      },
+      "SandboxInputsRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/inputs`` body.",
+        "properties": {
+          "interventionType": {
+            "minLength": 1,
+            "title": "Interventiontype",
+            "type": "string"
+          },
+          "params": {
+            "additionalProperties": true,
+            "title": "Params",
+            "type": "object"
+          }
+        },
+        "required": [
+          "interventionType"
+        ],
+        "title": "SandboxInputsRequest",
+        "type": "object"
+      },
+      "SandboxModifyRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/modify`` body.\n\n``values`` are the input card's answers; a key left out keeps the value the\nintervention already carries.",
+        "properties": {
+          "featureId": {
+            "minLength": 1,
+            "title": "Featureid",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": true,
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "featureId"
+        ],
+        "title": "SandboxModifyRequest",
+        "type": "object"
+      },
+      "SandboxRemoveRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/resolve-removal`` body.",
+        "properties": {
+          "instruction": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "SandboxRemoveRequest",
+        "type": "object"
+      },
+      "SandboxStageRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/stage`` body.\n\n``features`` are the confirmed interventions verbatim (geometry, type,\nparams, style); ``values[i]`` holds the input card's answers for\n``features[i]``. A key left out of ``values[i]`` is one the user handed to\nthe AI's estimate.",
+        "properties": {
+          "features": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "minItems": 1,
+            "title": "Features",
+            "type": "array"
+          },
+          "source": {
+            "default": "manual",
+            "pattern": "^(manual|ai)$",
+            "title": "Source",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "features"
+        ],
+        "title": "SandboxStageRequest",
+        "type": "object"
+      },
+      "SandboxSuggestRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/suggestions`` body.",
+        "properties": {
+          "planIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planids",
+            "type": "array"
+          },
+          "rainfallMm": {
+            "maximum": 800.0,
+            "minimum": 0.0,
+            "title": "Rainfallmm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rainfallMm"
+        ],
+        "title": "SandboxSuggestRequest",
         "type": "object"
       },
       "SceneCreate": {
@@ -3582,6 +3721,318 @@
         "tags": [
           "scenes"
         ]
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/inputs": {
+      "post": {
+        "description": "The input card for one intervention: what the run reads, and the estimate.\n\nAn empty ``inputs`` list is an answer: the kind has no value the ledger\nreads, so there is nothing to ask.",
+        "operationId": "sandbox_inputs_api_scenes__scene_id__sandbox_inputs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxInputsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Inputs Api Scenes  Scene Id  Sandbox Inputs Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Inputs"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/modify": {
+      "post": {
+        "description": "Change a placed intervention's values; its footprint stays where it is.\n\nA value the run would refuse is a 422 and the sandbox is left unchanged.",
+        "operationId": "sandbox_modify_api_scenes__scene_id__sandbox_modify_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxModifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Modify Api Scenes  Scene Id  Sandbox Modify Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Modify"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/resolve-modification": {
+      "post": {
+        "description": "Which placed intervention a change instruction refers to, with its card.\n\n``isModification: false`` means the sentence does not change anything\nplaced, and the client treats it as an addition instead.",
+        "operationId": "sandbox_resolve_modification_api_scenes__scene_id__sandbox_resolve_modification_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxRemoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Resolve Modification Api Scenes  Scene Id  Sandbox Resolve Modification Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Resolve Modification"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/resolve-removal": {
+      "post": {
+        "description": "What a removal instruction refers to, without removing anything.\n\nThe client confirms with the user, then unpins the intervention or toggles\nthe project off. Resolving and acting are separate calls on purpose: a\nremoval is never applied on the strength of a parse alone.",
+        "operationId": "sandbox_resolve_removal_api_scenes__scene_id__sandbox_resolve_removal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxRemoveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Resolve Removal Api Scenes  Scene Id  Sandbox Resolve Removal Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Resolve Removal"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/stage": {
+      "post": {
+        "description": "Confirm interventions onto the sandbox, with the input card's answers.\n\nThe features are pinned into the scene's staged plan, the one place the\nInterventions panel reads and every run composes. A value the run would\nrefuse is a 422 naming the field, and nothing is written.",
+        "operationId": "sandbox_stage_api_scenes__scene_id__sandbox_stage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxStageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Stage Api Scenes  Scene Id  Sandbox Stage Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Stage"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/suggestions": {
+      "post": {
+        "description": "The three suggestions shown under a run's card: one per axis.\n\nReal footprints from the rasters, with the estimate and the input card\nattached. Asked for after the run returns rather than inside it, because\nranking candidates takes seconds the run should not wait on.",
+        "operationId": "sandbox_suggestions_api_scenes__scene_id__sandbox_suggestions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxSuggestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Suggestions Api Scenes  Scene Id  Sandbox Suggestions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Suggestions"
       }
     },
     "/api/scenes/{scene_id}/scenario/compare": {

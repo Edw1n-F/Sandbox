@@ -133,6 +133,8 @@ export interface InterventionProperties {
   source: 'manual' | 'ai'
   status: 'draft' | 'validated'
   params: Record<string, unknown>
+  /** False when the user took it off the sandbox (unpinned). Absent means pinned. */
+  pinned?: boolean
 }
 
 export interface InterventionFeature {

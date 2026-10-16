@@ -21,6 +21,7 @@ import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 
 import { usePlanStore } from '@/state/planStore'
+import { useSandboxStore } from '@/state/sandboxStore'
 import { useSceneStore } from '@/state/sceneStore'
 
 interface LegendEntry {
@@ -42,7 +43,8 @@ const ENTRIES: LegendEntry[] = [
 
 export default function InterventionLegend() {
   const show = useSceneStore((s) => s.layers.interventions)
-  const features = usePlanStore((s) => s.interventions.features)
+  // The sandbox's placed interventions: the layer the viewer draws.
+  const features = useSandboxStore((s) => s.features)
   const proposals = usePlanStore((s) => s.proposals)
 
   const showPlaced = show && features.length > 0

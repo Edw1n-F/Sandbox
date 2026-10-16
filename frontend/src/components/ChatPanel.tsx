@@ -43,7 +43,22 @@ import {
 import { applyAiPlan, createAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
 import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
+import {
+  fetchInputs,
+  fetchRunSuggestions,
+  modifyFeature,
+  resolveModification,
+  resolveRemoval,
+  stageFeatures,
+  type ModifyTarget,
+  type RemovalMatch,
+  type SandboxInput,
+  type SandboxSuggestion,
+} from '@/api/sandboxApi'
+import InputCard from './InputCard'
+import { defaultAnswers, fieldError, toValues, type InputAnswers } from './inputAnswers'
 import { usePlanStore } from '@/state/planStore'
+import { useSandboxStore } from '@/state/sandboxStore'
 import { useSceneStore } from '@/state/sceneStore'
 
 interface Step {
@@ -79,18 +94,29 @@ interface Message {
   chips?: string[]
   /** Confirm gate for ai-plan proposals (plan v2 §5). */
   proposals?: ProposalPayload
+  /** Route 1: the grounded suggestions under a run's card (or `loading`). */
+  suggestions?: SandboxSuggestion[] | 'loading'
+  /** A suggestion the user picked, waiting on its input card. */
+  staging?: { suggestion: SandboxSuggestion; resolved?: 'added' | 'cancelled' }
+  /** What a removal instruction resolved to, waiting on the user's choice. */
+  removal?: { matches: RemovalMatch[]; resolved?: string }
+  /** A change to a placed intervention, waiting on its input card. */
+  modify?: { target: ModifyTarget; resolved?: boolean }
 }
 
 /**
- * Fallback chips (plan v2 §7): intervention instruction sentences, so clicking
- * one goes through the ai-plan confirm gate rather than looping as another chat
- * question. Only used when the backend did not supply its own followups.
+ * Does this ask to take something off the sandbox? A removal verb anywhere in
+ * the turn, from the shared vocabulary pinned to the server's. Checked before
+ * the add path, which would otherwise read "remove the reservoir" as a request
+ * to propose one.
  */
-const SUGGESTIONS = [
-  'add a water reservoir in the north',
-  'add green space in the centre',
-  'add permeable paving across the whole area',
-]
+function isRemoval(text: string): boolean {
+  const lowered = text.toLowerCase()
+  if (lowered.trim().endsWith('?')) return false
+  return INTENT_VOCABULARY.removalVerbs.some((verb) =>
+    new RegExp(`\\b${verb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(lowered),
+  )
+}
 
 let nextId = 1
 const mkId = () => `m${nextId++}`
@@ -394,6 +420,26 @@ function ProposalReview({
   )
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The input card per proposal: what the run reads, and the user's answers.
+  const [inputs, setInputs] = useState<SandboxInput[][]>(() => payload.proposals.map(() => []))
+  const [answers, setAnswers] = useState<InputAnswers[]>(() => payload.proposals.map(() => ({})))
+
+  useEffect(() => {
+    if (payload.resolved) return
+    let live = true
+    void Promise.all(
+      payload.proposals.map((p) =>
+        fetchInputs(sceneId, p.interventionType, p.params ?? {}).catch(() => [] as SandboxInput[]),
+      ),
+    ).then((all) => {
+      if (!live) return
+      setInputs(all)
+      setAnswers(all.map(defaultAnswers))
+    })
+    return () => {
+      live = false
+    }
+  }, [payload, sceneId])
 
   if (payload.resolved === 'applied') {
     return (
@@ -401,7 +447,7 @@ function ProposalReview({
         variant="caption"
         sx={{ display: 'block', mt: 1, color: 'text.secondary' }}
       >
-        Applied. Run again to see the effect.
+        Added to the sandbox. Run again to see the effect.
       </Typography>
     )
   }
@@ -417,29 +463,33 @@ function ProposalReview({
   }
 
   const anyChecked = checked.some(Boolean)
+  // A checked proposal with a field the run would refuse holds Apply back.
+  const invalid = payload.proposals.some(
+    (_, i) => checked[i] && inputs[i].some((input) => fieldError(input, answers[i][input.key]) !== null),
+  )
 
   const apply = async () => {
-    const selected = payload.proposals.filter((_, i) => checked[i])
-    if (selected.length === 0) return
+    const indices = payload.proposals.map((_, i) => i).filter((i) => checked[i])
+    if (indices.length === 0 || invalid) return
     setBusy(true)
     setError(null)
     try {
       const r = await applyAiPlan(sceneId, {
         instruction: payload.instruction,
         provider: payload.provider,
-        proposals: selected,
+        proposals: indices.map((i) => payload.proposals[i]),
         groundingNotes: payload.groundingNotes,
         candidateCounts: payload.candidateCounts,
+        values: indices.map((i) => toValues(inputs[i], answers[i])),
       })
       if (r.planId) {
-        // The draft is now a persisted plan: drop the preview so the viewer
-        // swaps the dashed draft blocks for the real ones (DESIGN §2.4).
+        // The draft is now on the sandbox: drop the dashed preview, and re-read
+        // the sandbox so the panel, the 3D view and the next run all have it.
         usePlanStore.getState().clearProposals()
-        await usePlanStore.getState().refreshPlans(sceneId)
-        await usePlanStore.getState().selectPlan(r.planId)
+        await useSandboxStore.getState().refresh(sceneId)
         onResolved(
           'applied',
-          `Applied ${r.features} intervention${r.features === 1 ? '' : 's'} (${(r.types ?? []).join(', ') || 'geometry'}). Status: draft. Run again to see the effect.`,
+          `Added ${r.features} intervention${r.features === 1 ? '' : 's'} (${(r.types ?? []).join(', ') || 'geometry'}) to the sandbox. Run again to see the effect.`,
         )
       } else {
         setError(r.message ?? 'The server returned no plan id.')
@@ -488,6 +538,20 @@ function ProposalReview({
                 </Typography>
               )}
               <ProposalDetail proposal={p} />
+              {checked[i] && (
+                // Not part of the checkbox label's click target: typing a depth
+                // must not toggle the proposal off.
+                <Box sx={{ mt: 0.75 }} onClick={(e) => e.preventDefault()}>
+                  <InputCard
+                    inputs={inputs[i]}
+                    answers={answers[i]}
+                    disabled={busy}
+                    onChange={(next) =>
+                      setAnswers((prev) => prev.map((old, idx) => (idx === i ? next : old)))
+                    }
+                  />
+                </Box>
+              )}
             </Box>
           }
           sx={{ alignItems: 'flex-start', ml: 0, mr: 0 }}
@@ -501,11 +565,11 @@ function ProposalReview({
         <Button
           size="small"
           variant="contained"
-          disabled={!anyChecked || busy}
+          disabled={!anyChecked || busy || invalid}
           onClick={() => void apply()}
           sx={{ fontSize: 11 }}
         >
-          {busy ? 'Applying…' : `Apply ${checked.filter(Boolean).length}`}
+          {busy ? 'Adding…' : `Add ${checked.filter(Boolean).length} to sandbox`}
         </Button>
         <Button
           size="small"
@@ -519,6 +583,211 @@ function ProposalReview({
           sx={{ fontSize: 11 }}
         >
           Dismiss
+        </Button>
+      </Stack>
+    </Stack>
+  )
+}
+
+/** A suggestion as a draft proposal, so the viewer can draw its dashed preview. */
+function asDraft(s: SandboxSuggestion): InterventionProposal {
+  return {
+    geometry: s.feature.geometry,
+    interventionType: s.kind,
+    source: 'manual',
+    params: s.feature.params,
+    style: s.feature.style,
+    siteId: null,
+    rationale: null,
+    basis: s.evidence,
+  }
+}
+
+/** The estimate a suggestion was ranked on, in the axis's own units. */
+function estimateLine(s: SandboxSuggestion): string {
+  const e = s.estimate
+  if (s.axis === 'drainage') return `adds ~${Math.round(e.storageAddedM3).toLocaleString('en-US')} m³ storage`
+  if (s.axis === 'heat') return `heat index ${e.heatIndexDelta > 0 ? '+' : ''}${e.heatIndexDelta}`
+  return `runoff Δ ${e.runoffDeltaM3 > 0 ? '+' : ''}${Math.round(e.runoffDeltaM3)} m³`
+}
+
+/**
+ * Route 1: a suggestion the user picked, with its input card.
+ *
+ * The footprint is the suggestion's own, carried verbatim from the rasters; only
+ * the values the run reads are asked for. Add pins it to the sandbox.
+ */
+function SuggestionStage({
+  staging,
+  sceneId,
+  onResolved,
+}: {
+  staging: NonNullable<Message['staging']>
+  sceneId: string
+  onResolved: (outcome: 'added' | 'cancelled', note: string) => void
+}) {
+  const { suggestion } = staging
+  const [answers, setAnswers] = useState<InputAnswers>(() => defaultAnswers(suggestion.inputs))
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const invalid = suggestion.inputs.some((i) => fieldError(i, answers[i.key]) !== null)
+
+  if (staging.resolved) return null
+
+  const add = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await stageFeatures(sceneId, [suggestion.feature], [toValues(suggestion.inputs, answers)])
+      usePlanStore.getState().clearProposals()
+      await useSandboxStore.getState().refresh(sceneId)
+      onResolved('added', `Added ${suggestion.label.replace(/^Add /, '')} to the sandbox. Run again to see the effect.`)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack spacing={0.75} sx={{ mt: 1 }}>
+      <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+        {suggestion.evidence} · {estimateLine(suggestion)}
+      </Typography>
+      <InputCard inputs={suggestion.inputs} answers={answers} onChange={setAnswers} disabled={busy} />
+      {error && <Typography sx={{ fontSize: 10.5, color: '#ff6b6b' }}>{error}</Typography>}
+      <Stack direction="row" spacing={1}>
+        <Button size="small" variant="contained" disabled={busy || invalid} onClick={() => void add()} sx={{ fontSize: 11 }}>
+          {busy ? 'Adding…' : 'Add to sandbox'}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          disabled={busy}
+          onClick={() => {
+            usePlanStore.getState().clearProposals()
+            onResolved('cancelled', 'Cancelled. Nothing was added.')
+          }}
+          sx={{ fontSize: 11 }}
+        >
+          Cancel
+        </Button>
+      </Stack>
+    </Stack>
+  )
+}
+
+/**
+ * Removal: what an instruction resolved to, with a confirmation per match.
+ *
+ * An intervention is unpinned; a planned project is toggled off, never deleted.
+ * Several matches ("remove the park" can be HSK Park or a green space the user
+ * added) are listed so the user picks one rather than the app guessing.
+ */
+function RemovalReview({
+  removal,
+  sceneId,
+  onResolved,
+}: {
+  removal: NonNullable<Message['removal']>
+  sceneId: string
+  onResolved: (note: string) => void
+}) {
+  const [busy, setBusy] = useState(false)
+  if (removal.resolved || removal.matches.length === 0) return null
+
+  const act = async (m: RemovalMatch) => {
+    setBusy(true)
+    try {
+      if (m.action === 'unpin' && m.featureId) {
+        await useSandboxStore.getState().remove(sceneId, m.featureId)
+        onResolved(`Removed ${m.label} from the sandbox. Run again to see the effect.`)
+      } else if (m.action === 'toggle_off' && m.planId) {
+        const { selectedPlanIds, setSelectedPlanIds } = usePlanStore.getState()
+        setSelectedPlanIds(selectedPlanIds.filter((id) => id !== m.planId))
+        onResolved(`Toggled ${m.label} off. Its plan is kept, so you can toggle it back on in Projects.`)
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack spacing={0.5} sx={{ mt: 1 }}>
+      {removal.matches.map((m) => (
+        <Stack key={m.featureId ?? m.planId} direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+          <Typography sx={{ fontSize: 11.5 }}>
+            {m.label}
+            <Box component="span" sx={{ color: 'text.secondary', fontSize: 10 }}>
+              {m.type === 'project' ? ' · planned project' : ' · placed intervention'}
+            </Box>
+          </Typography>
+          <Button size="small" color="error" variant="outlined" disabled={busy} onClick={() => void act(m)} sx={{ fontSize: 10.5 }}>
+            {m.action === 'toggle_off' ? 'Toggle off' : 'Remove'}
+          </Button>
+        </Stack>
+      ))}
+      <Button size="small" disabled={busy} onClick={() => onResolved('Kept everything as it was.')} sx={{ fontSize: 10.5, alignSelf: 'flex-start' }}>
+        Keep everything
+      </Button>
+    </Stack>
+  )
+}
+
+/**
+ * Modification: the input card for an intervention already on the sandbox.
+ *
+ * A value the sentence named ("5 m deep") opens as the user's own; the rest
+ * keep what the row already carries.
+ */
+function ModifyReview({
+  modify,
+  sceneId,
+  onResolved,
+}: {
+  modify: NonNullable<Message['modify']>
+  sceneId: string
+  onResolved: (note: string) => void
+}) {
+  const { target } = modify
+  const [answers, setAnswers] = useState<InputAnswers>(() => {
+    const start = defaultAnswers(target.inputs)
+    for (const [key, value] of Object.entries(target.suggestedValues)) {
+      start[key] = { mode: 'user', text: String(value) }
+    }
+    return start
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (modify.resolved) return null
+  const invalid = target.inputs.some((i) => fieldError(i, answers[i.key]) !== null)
+
+  const save = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await modifyFeature(sceneId, target.featureId, toValues(target.inputs, answers))
+      await useSandboxStore.getState().refresh(sceneId)
+      onResolved(`Changed the ${target.label}. Run again to see the effect.`)
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Stack spacing={0.75} sx={{ mt: 1 }}>
+      <InputCard inputs={target.inputs} answers={answers} onChange={setAnswers} disabled={busy} />
+      {error && <Typography sx={{ fontSize: 10.5, color: '#ff6b6b' }}>{error}</Typography>}
+      <Stack direction="row" spacing={1}>
+        {target.inputs.length > 0 && (
+          <Button size="small" variant="contained" disabled={busy || invalid} onClick={() => void save()} sx={{ fontSize: 11 }}>
+            {busy ? 'Saving…' : 'Save change'}
+          </Button>
+        )}
+        <Button size="small" variant="outlined" disabled={busy} onClick={() => onResolved('Left it as it was.')} sx={{ fontSize: 11 }}>
+          Cancel
         </Button>
       </Stack>
     </Stack>
@@ -570,8 +839,7 @@ export default function ChatPanel() {
     {
       id: mkId(),
       role: 'ai',
-      text: 'Sandbox loaded. Adjust the rainfall and temperature sliders (top-right), toggle a project, then press Run. After the run I can answer questions about what changed.',
-      chips: SUGGESTIONS,
+      text: 'Sandbox loaded. Adjust the rainfall and temperature sliders (top-right), toggle a project, then press Run. After the run I will suggest three interventions grounded in it, and you can describe your own here.',
     },
   ])
   const [input, setInput] = useState('')
@@ -610,29 +878,27 @@ export default function ChatPanel() {
     // chat produces. The paragraph is the fallback for a client that predates
     // this, or for a response missing the field.
     const runCard = runResult.explanationCard as AnswerCard | undefined
-    // Prefer the card's own followups (plan v2 §7: the backend already shapes
-    // these as intervention instructions). Fall back to the constant for a
-    // response that predates the followup contract.
-    const runChips = runCard?.followups?.length ? runCard.followups : SUGGESTIONS
+    // Route 1: the three suggestions under the card are grounded sites for
+    // THIS run, fetched once it returns (ranking takes seconds the run should
+    // not wait on). Fixed sentences used to sit here, the same on every run.
+    const messageId = mkId()
     setMessages((prev) => [
       ...prev,
-      runCard
-        ? {
-            id: mkId(),
-            role: 'ai' as const,
-            card: runCard,
-            receipt: buildReceipt(runResult),
-            chips: runChips,
-          }
-        : {
-            id: mkId(),
-            role: 'ai' as const,
-            text: runResult.explanation,
-            receipt: buildReceipt(runResult),
-            chips: runChips,
-          },
+      {
+        id: messageId,
+        role: 'ai' as const,
+        ...(runCard ? { card: runCard } : { text: runResult.explanation }),
+        receipt: buildReceipt(runResult),
+        suggestions: 'loading' as const,
+      },
     ])
-  }, [runResult, running])
+    if (!sceneId) return
+    const setSuggestions = (suggestions: SandboxSuggestion[]) =>
+      setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, suggestions } : m)))
+    void fetchRunSuggestions(sceneId, runResult.inputs.rainfallMm, runResult.inputs.planIds ?? [])
+      .then((r) => setSuggestions(r.suggestions))
+      .catch(() => setSuggestions([]))
+  }, [runResult, running, sceneId])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -804,6 +1070,56 @@ export default function ChatPanel() {
     //      card, so `intent="intervention"` now arrives even with no model
     //      configured (cause R1); the `answer` handler below reaches the same
     //      `openProposalGate` the fast path uses, so behaviour converges.
+    // A removal is resolved against what is on the sandbox -- placed
+    // interventions and planned projects -- never sent to the proposer, which
+    // would read "remove the reservoir" as a request to add one.
+    if (isRemoval(trimmed)) {
+      try {
+        const { matches, message } = await resolveRemoval(sceneId, trimmed)
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: mkId(),
+            role: 'ai',
+            text:
+              message ??
+              (matches.length === 1
+                ? `This would ${matches[0].action === 'toggle_off' ? 'toggle off' : 'remove'} ${matches[0].label}. Confirm below.`
+                : ''),
+            removal: { matches },
+          },
+        ])
+      } catch (err) {
+        setMessages((prev) => [...prev, { id: mkId(), role: 'ai', text: `Error: ${errorMessage(err)}` }])
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
+    // A change to something already placed ("make the reservoir 5 m deep")
+    // edits that row in place. Anything else falls through to adding.
+    if (looksLikeIntervention(trimmed, INTENT_VOCABULARY) || /\b\d+(\.\d+)?\s*m\b/i.test(trimmed)) {
+      try {
+        const mod = await resolveModification(sceneId, trimmed)
+        if (mod.isModification && mod.targets?.length) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: mkId(),
+              role: 'ai',
+              text: `This changes the ${mod.targets![0].label} already on the sandbox; its footprint stays where it is.`,
+              modify: { target: mod.targets![0] },
+            },
+          ])
+          setBusy(false)
+          return
+        }
+      } catch {
+        // Not resolvable as a change: treat it as an addition below.
+      }
+    }
+
     if (looksLikeIntervention(trimmed, INTENT_VOCABULARY)) {
       try {
         await openProposalGate(trimmed, 'regex')
@@ -818,6 +1134,24 @@ export default function ChatPanel() {
       .slice(-6)
       .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.text }))
     await ask(trimmed, history)
+  }
+
+  /** Route 1: open the input card for one of the run's suggestions, with a 3D preview. */
+  const pickSuggestion = (s: SandboxSuggestion) => {
+    usePlanStore.getState().setProposals([asDraft(s)])
+    setMessages((prev) => [
+      ...prev,
+      { id: mkId(), role: 'user', text: s.label },
+      {
+        id: mkId(),
+        role: 'ai',
+        text:
+          s.inputs.length > 0
+            ? 'Set the values the run will use, or let the AI estimate them. The dashed block shows where it goes.'
+            : 'The dashed block shows where it goes. Nothing to set for this kind.',
+        staging: { suggestion: s },
+      },
+    ])
   }
 
   const dotColor = llmConfigured === null ? '#7d928a' : llmConfigured ? '#5cff9d' : '#ff9d2e'
@@ -936,6 +1270,88 @@ export default function ChatPanel() {
                   ))}
                 </Stack>
               )}
+              {m.suggestions === 'loading' && (
+                <Typography className="hud-shimmer" variant="caption" sx={{ display: 'block', mt: 1 }}>
+                  Finding three sites for this run…
+                </Typography>
+              )}
+              {Array.isArray(m.suggestions) && (
+                <Box sx={{ mt: 1 }}>
+                  <Typography className="hud-label" sx={{ fontSize: 9, mb: 0.5 }}>
+                    SUGGESTED FROM THIS RUN
+                  </Typography>
+                  {m.suggestions.length === 0 ? (
+                    <Typography sx={{ fontSize: 10.5, color: 'text.secondary' }}>
+                      No free site to suggest. Describe an intervention below instead.
+                    </Typography>
+                  ) : (
+                    <Stack spacing={0.5}>
+                      {m.suggestions.map((s) => (
+                        <Button
+                          key={`${s.axis}-${s.kind}`}
+                          size="small"
+                          variant="outlined"
+                          disabled={busy}
+                          onClick={() => pickSuggestion(s)}
+                          sx={{ justifyContent: 'flex-start', textAlign: 'left', textTransform: 'none', fontSize: 11, py: 0.4 }}
+                        >
+                          <Box>
+                            <Box>{s.label}</Box>
+                            <Box sx={{ fontSize: 9.5, color: 'text.secondary' }}>
+                              {s.axis} · {estimateLine(s)}
+                            </Box>
+                          </Box>
+                        </Button>
+                      ))}
+                    </Stack>
+                  )}
+                </Box>
+              )}
+              {m.staging && sceneId && (
+                <SuggestionStage
+                  staging={m.staging}
+                  sceneId={sceneId}
+                  onResolved={(outcome, note) =>
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === m.id && msg.staging
+                          ? { ...msg, text: note, staging: { ...msg.staging, resolved: outcome } }
+                          : msg,
+                      ),
+                    )
+                  }
+                />
+              )}
+              {m.modify && sceneId && (
+                <ModifyReview
+                  modify={m.modify}
+                  sceneId={sceneId}
+                  onResolved={(note) =>
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === m.id && msg.modify
+                          ? { ...msg, text: note, modify: { ...msg.modify, resolved: true } }
+                          : msg,
+                      ),
+                    )
+                  }
+                />
+              )}
+              {m.removal && sceneId && (
+                <RemovalReview
+                  removal={m.removal}
+                  sceneId={sceneId}
+                  onResolved={(note) =>
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === m.id && msg.removal
+                          ? { ...msg, text: note, removal: { ...msg.removal, resolved: note } }
+                          : msg,
+                      ),
+                    )
+                  }
+                />
+              )}
               {m.proposals && sceneId && (
                 <ProposalReview
                   payload={m.proposals}
@@ -948,7 +1364,6 @@ export default function ChatPanel() {
                               ...msg,
                               proposals: { ...msg.proposals, resolved: outcome },
                               text: note ?? msg.text,
-                              chips: outcome === 'applied' ? SUGGESTIONS : msg.chips,
                             }
                           : msg,
                       ),

@@ -190,6 +190,9 @@ class AIPlanApplyRequest(WireModel):
     proposals: list[InterventionProposal] = Field(default_factory=list)
     grounding_notes: list[str] = Field(default_factory=list)
     candidate_counts: dict[str, int] = Field(default_factory=dict)
+    # The input card's answers, one entry per proposal (Stage 4). A key left
+    # out is one the user handed to the AI's estimate.
+    values: list[dict[str, Any] | None] = Field(default_factory=list)
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]

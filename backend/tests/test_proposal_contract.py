@@ -229,6 +229,20 @@ def _apply(scene_id: str, instruction: str, proposals: list[dict],
     return resp.json()
 
 
+def _clear_staged(scene_id: str) -> None:
+    """Take everything this suite placed off the sandbox.
+
+    ``/ai-plan/apply`` pins into the scene's staged plan rather than writing a
+    plan of its own, so a test that applies and does not clear leaves ground
+    claimed for every test after it, and later proposals are rightly refused.
+    """
+    from app.services import pins
+
+    for row in pins.staged_features(scene_id):
+        if row.get("pinned"):
+            pins.unpin(scene_id, row["id"])
+
+
 def _ledger(scene_id: str, plan_id: str) -> dict:
     resp = client.get(f"/api/scenes/{scene_id}/ledger", params={"plan_id": plan_id})
     assert resp.status_code == 200, resp.text
@@ -837,9 +851,14 @@ def test_apply_accepts_the_provider_string_propose_actually_returns() -> None:
         "provider": echoed,
         "proposals": body["proposals"],
     })
-    assert resp.status_code == 200, (
-        f"apply rejected the provider the propose endpoint returned "
-        f"({echoed!r}): {resp.text[:300]}")
+    try:
+        assert resp.status_code == 200, (
+            f"apply rejected the provider the propose endpoint returned "
+            f"({echoed!r}): {resp.text[:300]}")
+    finally:
+        # Apply puts the proposal on the sandbox (the staged plan). Left there,
+        # its ground is correctly refused to every later proposal in this suite.
+        _clear_staged(scene_id)
 
 
 def test_apply_accepts_every_provider_string_the_planner_can_emit() -> None:

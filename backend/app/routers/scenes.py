@@ -345,6 +345,7 @@ def apply_ai_plan(scene_id: str, payload: AIPlanApplyRequest) -> AIPlanResponse:
             payload.provider,
             payload.grounding_notes,
             payload.candidate_counts,
+            payload.values,
         )
     except PlanGenerationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

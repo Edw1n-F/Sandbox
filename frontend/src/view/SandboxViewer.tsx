@@ -27,8 +27,6 @@ import {
   Model,
   NearFarScalar,
   Rectangle,
-  ScreenSpaceEventHandler,
-  ScreenSpaceEventType,
   Transforms,
   VerticalOrigin,
   Viewer,
@@ -43,7 +41,7 @@ import { add3DTileset, type TilesetHandle } from './tilesetLayer'
 import { hk1980ToEcefMatrix } from './hk1980Transform'
 import { addInterventions, type InterventionLayerHandle } from './interventionLayer'
 import { addProposals, type ProposalLayerHandle } from './proposalLayer'
-import { deleteIntervention } from '@/api/planApi'
+import { useSandboxStore } from '@/state/sandboxStore'
 import { publishHeading } from './cameraHeading'
 import { demElevationRange, sampleDemHeight, whenDemReady } from './demProvider'
 import {
@@ -225,7 +223,28 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
 
   const bbox = useSceneStore((s) => s.scene?.bbox ?? null)
   const terrainMeta = useSceneStore((s) => s.terrain)
-  const interventions = usePlanStore((s) => s.interventions)
+  const sandboxFeatures = useSandboxStore((s) => s.features)
+  // The sandbox as GeoJSON for the intervention layer. Memoised on the store's
+  // array, which is replaced only when the staged plan is re-read.
+  const sandboxCollection = useMemo(
+    () => ({
+      type: 'FeatureCollection' as const,
+      features: sandboxFeatures.map((f) => ({
+        type: 'Feature' as const,
+        id: f.id,
+        geometry: f.geometry,
+        properties: {
+          id: f.id,
+          interventionType: f.interventionType,
+          style: f.style,
+          source: 'manual' as const,
+          status: 'draft' as const,
+          params: f.params,
+        },
+      })),
+    }),
+    [sandboxFeatures],
+  )
   const proposals = usePlanStore((s) => s.proposals)
   const showInterventions = useSceneStore((s) => s.layers.interventions)
   const showProps = useSceneStore((s) => s.layers.props ?? true)
@@ -799,28 +818,24 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
   // ---- intervention features ---------------------------------------------
   //
   // The discrete half of ADR-032: interventions are geometry, not raster, so
-  // they go in through GeoJsonDataSource and can be extruded and picked. The
-  // effect is keyed on the *identity* of the collection rather than the object,
-  // because `planStore` replaces the object on every fetch and an effect keyed
-  // on the reference would tear down and rebuild the data source each time even
-  // when the features are identical.
+  // they go in through GeoJsonDataSource and can be extruded. What is drawn is
+  // the sandbox -- the staged plan's pinned rows, the same list the
+  // Interventions panel shows and the run scores -- so a placed intervention
+  // appears, and a deleted one disappears, in all three at once.
+  //
+  // Deleting is done from the Interventions panel, behind a confirmation. A
+  // bare left click on the map used to delete whatever it hit, which turned
+  // looking around near a feature into a destructive prompt.
   useEffect(() => {
     const viewer = viewerRef.current
     if (!isLive(viewer)) return
 
-    // `massing_height` features drove the procedural city-model pillar layer,
-    // which has been removed. They are not handed to the real-building viewer.
-    const drawn = interventions.features.filter(
-      (f) => f.properties?.interventionType !== 'massing_height',
-    )
-
     let disposed = false
     let handle: InterventionLayerHandle | undefined
-    let clickHandler: ScreenSpaceEventHandler | undefined
 
     void addInterventions(viewer, {
       type: 'FeatureCollection',
-      features: showInterventions ? drawn : [],
+      features: showInterventions ? sandboxCollection.features : [],
     }).then((h) => {
       // The effect may have been torn down while the GeoJSON was in flight.
       if (disposed) {
@@ -828,40 +843,13 @@ export default function SandboxViewer({ className }: SandboxViewerProps = {}) {
         return
       }
       handle = h
-
-      if (!isLive(viewer)) return
-      const scene = viewer.scene
-      const planId = usePlanStore.getState().activePlanId
-      if (!planId) return
-
-      clickHandler = new ScreenSpaceEventHandler(scene.canvas)
-      clickHandler.setInputAction((event: ScreenSpaceEventHandler.PositionedEvent) => {
-        if (!isLive(viewer)) return
-        const picked = scene.pick(event.position)
-        const entity = picked?.id
-        const interventionId = h.interventionIdOf(entity)
-        if (!interventionId) return
-        if (!window.confirm('Delete this intervention? This cannot be undone.')) return
-        void (async () => {
-          try {
-            await deleteIntervention(planId, interventionId)
-          } catch (err) {
-            console.warn('[sandbox] delete intervention failed:', err)
-            return
-          }
-          // Re-fetch so the layer, the store and the server all agree.
-          const current = usePlanStore.getState().activePlanId
-          if (current) await usePlanStore.getState().selectPlan(current)
-        })()
-      }, ScreenSpaceEventType.LEFT_CLICK)
     })
 
     return () => {
       disposed = true
-      if (clickHandler && !clickHandler.isDestroyed()) clickHandler.destroy()
       handle?.dispose()
     }
-  }, [showInterventions, interventions])
+  }, [showInterventions, sandboxCollection])
 
   // ---- proposal draft preview (unconfirmed) -------------------------------
   //

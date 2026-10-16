@@ -19,8 +19,8 @@ Nothing here is a target. The architecture rationale is in
 | 0 | Scaffold and the first feature buildout | Discarded — built on a placeholder world |
 | 1 | Real spatial foundation: terrain, land cover, buildings | **Done** |
 | 2 | Deterministic run loop on today's state: sliders → runoff/storage → flood + heat overlays → stats → LLM panel | **Done** |
-| 3 | Scenario composition: planned project footprints and toggles | **Partially — one planned project** (HSK MTR station, scored in runs) |
-| 4 | Intervention authoring: NL → proposal gate, parameter card, suggestions | **In progress** — NL path and the parameter card work end to end; `questions[]` and editable assumptions are next |
+| 3 | Scenario composition: planned project footprints and toggles | **Done** — two planned projects (HSK MTR station, HSK Park), scored together; the Projects panel lists only declared projects |
+| 4 | Intervention authoring: suggestions, NL → proposal gate, input card, add / modify / remove, parameter card | **Built** — see "The sandbox loop" and "The parameter card" below; no committed browser suite covers the loop yet |
 | 5 | Demo narrative, validation, pitch | Not started |
 
 Stage 2 is closed. Stage 3 is partially open: the Projects panel lands the first
@@ -34,9 +34,9 @@ intervention — the intervention loop (Stage 4) is how a planner proposes chang
 *to* such a project. A second project is a data edit, not a code change: the
 scene record lists every project that has a model (`terrain.projects`, built from
 the same files), the viewer keeps one model per project, and the Projects panel
-builds a row per seeded plan. Proven by adding a throwaway second project and
-driving both independently in a browser, then removing it. What is still missing
-is the **second real project** itself.
+builds a row per seeded plan. HSK Park (`park.json`, 16 Oct) proved it: the second
+project landed as data with no code change, and the two score distinctly alone and
+compose when toggled together.
 
 A project's run effect has two halves that behave differently. Its storage moves
 the water ledger like any intervention. Its massing moves the heat geometry, and
@@ -50,7 +50,7 @@ project toggles. It changes which layer the city is drawn from and nothing else:
 selecting a project no longer swaps the depiction, and switching to 2.5D no
 longer spawns the station. Those were one flag, and the fusion was the bug.
 
-### What Stage 4 means today
+### The project catalog
 
 The derived project catalog was **retired on 16 Oct 2026**: its four placeholder
 parcels are gone, along with `data/projects.json`,
@@ -61,6 +61,8 @@ station and HSK Park. A derived parcel beside a declared project read as a plan
 that actually exists, which is why it went. The suggester still derives candidate
 sites (`app/services/suggest.py`, `GET /scenes/{id}/suggestions`); that is a
 different step and it stays.
+
+### The natural-language path
 
 **The natural-language → intervention path works, end to end.** Measured on 16 Oct
 against the live server, no model key configured:
@@ -76,6 +78,8 @@ checks building overlap (zero tolerance), overlap with anything already staged, 
 the coverage caps, and re-derives every number from the rasters. A paving site at
 39 % of the grid is refused `OVER_SINGLE_CAP` rather than proposed.
 
+### The parameter card
+
 **The parameter card works** (`GET /api/scenes/{id}/parameter-card`). It is the
 brief's §2 table, assembled entirely from the dicts `ledger_for_scenario` computed in
 the same request — it never touches `grids.land_class`, so a card and a run cannot
@@ -87,20 +91,78 @@ numbers side by side — gross `area × depth` (the brief's own formula) and net
 `storageCapacityM3` change (the run's own figure) — because they are different
 quantities and net is smaller whenever the ground gave up storage.
 
-**Still open in Stage 4:** `questions[]` (the AI asking for the assumptions it
-currently defaults), editable assumptions before confirm, and moving the ranked
-suggestions from the HUD into the chat beneath the result card.
+### The sandbox loop (Stage 4)
+
+After a run, there are two ways to add an intervention, and both end in the same
+place:
+
+1. **A suggestion under the run's card.** Three, one per axis (drainage, heat,
+   runoff): the best free site for *this* run, read from the land cover, wet grid
+   and building footprints by `services/suggest.py`. They used to be three fixed
+   sentences, the same on every run; `run_card.py` now emits none, and the chat
+   asks `POST /sandbox/suggestions` once the run returns. A site already taken by
+   a placed intervention or a toggled project is skipped for the next one.
+2. **A sentence in the chat**, through the existing `ai-plan` proposer and its
+   confirm gate.
+
+Either way the user gets an **input card**: the values the run reads for that
+kind, each typed by the user or left to the AI's estimate. Only fields the ledger
+reads are offered — storage depth for a reservoir, tank or floodable ground, and
+nothing for green space or permeable paving (the ledger ignores a supplied curve
+number, so offering one would be a control that does nothing). Which it was is
+stored per field in `params.inputSources` (`user` / `ai_estimate`) and shown in
+the Interventions panel. A value the run would refuse is caught at the card.
+
+Confirming **pins** the feature into the scene's staged plan — the one place
+interventions live (`services/pins.py`). The **Interventions** panel lists it,
+the 3D view draws it, and Run scores it with the toggled projects. Deleting a row
+asks first and unpins it.
+
+**Removal** is resolved against what is on the sandbox, never sent to the
+proposer (which used to read "remove the reservoir" as a request to *add* one): a
+placed intervention is unpinned, a planned project is toggled off and its plan
+kept. Existing buildings and today's land cover are not removable. Several
+matches ("remove the park" can be HSK Park or a green space the user placed) are
+listed for the user to pick.
+
+**Modification** changes the values of something already placed, never its
+footprint: the ✎ on an Interventions row, or a sentence like "make the reservoir
+5 m deep" (the named depth opens as the user's own value). A refused value leaves
+the sandbox as it was. Planned projects are not modifiable; their values are their
+project file's.
+
+What it does not do: shape is still the candidate's contour, not something the
+user draws, and green space and permeable paving have nothing to set.
+
+One reading to know before a demo: on the large reservoir site, **unstored runoff
+does not move with depth** (7,777.7 m³ at 0.05 m and at 5 m, 50 mm storm) while
+storage capacity does (10,561 → 317,593 m³). The unstored volume is water that
+never reaches the site, so a deeper reservoir there adds capacity nobody fills.
+That is the model being honest, not a bug, but it reads like one.
+
+Verified on 16 Oct by `tests/test_sandbox.py` (24 checks) and
+`sandboxStore.test.ts`, and once by hand in a real browser against a temp copy of
+the store: suggestions, preview, input card, add, edit, NL removal and
+confirm-to-delete, 17/17. That walk is not a committed suite; none of the four
+`verify-*.mjs` drives the panel yet.
+
+**Still open in Stage 4:** a committed browser suite for the loop; an
+intervention shape the user draws rather than a candidate's contour; and the
+parameter card is a read-only table beside the run, not yet shown in the
+Interventions panel. `questions[]` and editable assumptions are covered by the
+input card above: it asks for every value the run reads, and the user types it
+or leaves it to the AI's labelled estimate.
 
 ### What a "plan project" is — and what it is not
 
-A **plan project is a government-planned project to be built.** The HSK MTR station is
-the one modelled today (`backend/data/projects/mtr-station.json`: a real footprint, a
-real GLB, project-supplied effects). It is the **application scenario** — the thing the
+A **plan project is a government-planned project to be built.** Two are modelled:
+the HSK MTR station and HSK Park (`backend/data/projects/<id>.json`: a real footprint,
+a real GLB, project-supplied effects). It is the **application scenario** — the thing the
 sandbox exists to help plan — and it is **not** a user intervention.
 
 The four-project catalog that used to sit in the HUD (`detention-reservoir`,
 `underground-tank`, `green-retrofit`, `blue-green-park`) was raster-derived candidate
-parcels, not planned projects. It is being removed. See `docs/TODO_remaining.md` for
+parcels, not planned projects. It was removed on 16 Oct. See `docs/TODO_remaining.md` for
 the re-scope.
 
 ---
@@ -235,8 +297,9 @@ heat are in the product surface:
 
 ### Test suites
 
-Counts measured by running every suite on **2026-10-14**. Lint and typecheck are
-clean. **Every backend suite is green.** `.github/workflows/ci.yml` runs every
+Counts measured by running every suite on **2026-10-16** (the browser suites were
+last run on 14 Oct and are not re-measured here). Lint and typecheck are clean.
+**Every backend suite is green.** `.github/workflows/ci.yml` runs every
 suite below except the three browser suites, plus the contract drift check and
 `npm run build`, on every PR and every push to `main`. It has not yet run on
 GitHub; every command in it was run locally, including from a fresh clone. The last three red suites were
@@ -249,23 +312,30 @@ copied from the code's output.
 |---|---|---|
 | backend `test_design_metrics` | 91/91 | `python tests/test_design_metrics.py` |
 | backend `test_scenario` | 65/65 | `python tests/test_scenario.py` |
-| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
+| backend `test_run` | 49/49 | `python tests/test_run.py` — the live run loop |
 | backend `test_ventilation` | 45/45 | `python tests/test_ventilation.py` |
 | backend `test_ledger` | 42/42 | `python tests/test_ledger.py` |
-| backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling |
+| backend `test_ai_plan` | 40/40 | `python tests/test_ai_plan.py` — includes the 429 handling; ~5 min |
+| backend `test_contract` | 36/36 | `python tests/test_contract.py` — now on a temp copy of the store |
+| backend `test_building_fit` | 32/32 | `python tests/test_building_fit.py` |
 | backend `test_hydrology` | 32/32 | `python tests/test_hydrology.py` |
-| backend `test_run` | 34/34 | `python tests/test_run.py` — the live run loop |
+| backend `test_llm_provider` | 31/31 | `python tests/test_llm_provider.py` — the chat and the run card through a scripted `FakeProvider`, no key |
+| backend `test_agent` | 31/31 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
-| backend `test_contract` | 23/23 | `python tests/test_contract.py` |
+| backend `test_sandbox` | 24/24 | `python tests/test_sandbox.py` — Stage 4: suggestions, input card, add, modify, remove |
+| backend `test_pins` | 18/18 | `python tests/test_pins.py` |
+| backend `test_intervention_geometry` | 18/18 | `python tests/test_intervention_geometry.py` |
+| backend `test_proposal_contract` | 23/23 | `python tests/test_proposal_contract.py` — the proposal wire, constraints, parameter card and routing; clears what it stages, since apply now pins to the sandbox |
 | backend `test_constants` | 17/17 | `python tests/test_constants.py` |
 | backend `test_sea_level` | 15/15 | `python tests/test_sea_level.py` |
+| backend `test_intent_routing` | 14/14 | `python tests/test_intent_routing.py` |
+| backend `test_grounding_pools` | 13/13 | `python tests/test_grounding_pools.py` |
 | backend `test_temperature_field` | 13/13 | `python tests/test_temperature_field.py` |
-| backend `test_agent` | 28/28 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
-| backend `test_llm_provider` | 30/30 | `python tests/test_llm_provider.py` — the chat and the run card through a scripted `FakeProvider`, no key |
+| backend `test_suggest` | 11/11 | `python tests/test_suggest.py` |
 | backend `test_openapi_contract` | 5/5 | `python tests/test_openapi_contract.py` — fails if `contracts/openapi.json` is stale |
 | backend `test_overlay_masking` | 3/3 | `python -m pytest tests/test_overlay_masking.py` |
-| frontend unit (`vitest`) | 71/71 | `npm test` — includes `streamChat` against real streams, the provenance receipt, the trackpad wheel maths and the navigation cheat-sheet |
+| frontend unit (`vitest`) | 98/98 | `npm test` — includes `streamChat` against real streams, the provenance receipt, the wheel maths, the navigation cheat-sheet, and the sandbox's run composition and input-card answers |
 | frontend rendering (`verify-3d.mjs`) | 27/27 | `npm run verify:3d` — needs live servers; `/run` is stubbed from `scripts/fixtures/run-result.json`, so it needs no language model |
 | frontend robustness (`verify-ux.mjs`) | 21/21 | `npm run verify:ux` — needs live servers |
 | frontend chat panel (`verify-chat.mjs`) | 17/17 | `npm run verify:chat` — needs live servers; both the chat stream and `/run` are stubbed, so it needs no language model |
