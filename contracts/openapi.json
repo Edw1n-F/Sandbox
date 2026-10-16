@@ -2300,6 +2300,13 @@
             "title": "Projects",
             "type": "array"
           },
+          "projectsUnavailable": {
+            "items": {
+              "$ref": "#/components/schemas/UnavailableProject"
+            },
+            "title": "Projectsunavailable",
+            "type": "array"
+          },
           "terrain3DUrl": {
             "anyOf": [
               {
@@ -2373,6 +2380,38 @@
           }
         },
         "title": "TerrainRead",
+        "type": "object"
+      },
+      "UnavailableProject": {
+        "additionalProperties": false,
+        "description": "A seeded project the viewer cannot draw, and why.\n\nPresent so an absent model reads as *a missing file* rather than as a\ndataset that never held the project. Both facts are true statements about\ndifferent things, and only one of them is worth acting on.",
+        "properties": {
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "projectId": {
+            "title": "Projectid",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "projectId",
+          "name"
+        ],
+        "title": "UnavailableProject",
         "type": "object"
       },
       "ValidationError": {

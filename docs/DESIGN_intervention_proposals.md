@@ -81,11 +81,29 @@ All three predicates are pure functions over the loaded grid; none of them calls
 
 | Constraint | Predicate | Tolerance | On violation |
 |---|---|---|---|
-| **No building** | `covered ∩ building_mask = ∅`, where `building_mask = building_footprint_mask(load_overlay())` is `True` iff a cell centre falls under one of the 396 surveyed footprints (`rasters/buildings_hsk.json` → `design_metrics.rasterise_height(footprints_from_geojson(...)) > 0`) | **0 cells.** A footprint edge clipping one cell is a violation. | Site-based → re-site. Coordinate-based → clip; reject if clip > 25 % of the window or remainder < 40 cells. |
+| **No building** | `covered ∩ building_mask = ∅`, where `building_mask(ov) = building_footprint_mask(ov) \| _polygon_footprint_mask(ov)` — the envelope mask (`design_metrics.rasterise_height(footprints_from_geojson(...)) > 0`, `True` iff a cell *centre* falls under one of the 396 surveyed footprints) **unioned with** a polygon-exact mask, and `None` when `buildings_hsk.json` is absent. The two differ by ~23 cells on this data (7,789 vs 7,812), and the union is the authority because a cell a footprint's edge crosses is still a cell a structure sits on | **0 cells.** A footprint edge clipping one cell is a violation. | Site-based → re-site. Coordinate-based → clip; reject if clip > 25 % of the window or remainder < 40 cells. |
 | **No overlap** | `covered ∩ claimed = ∅`, where `claimed = ⋃ _polygon_cells(grids, f["geometry"]["coordinates"])` over (a) every feature of the plan ids named in the request, defaulting to the scene's staged plan (`pins.staged_plan_id(scene_id)`), and (b) every proposal already accepted earlier in this same batch | **0 cells.** Edge-adjacency is allowed (sharing an edge is not sharing a cell); a 1-cell overlap is a violation. | Reject, with `overlapsWith: [siteId | "proposal#n"]` and the overlapping cell count. Never clipped — an overlap is another feature's ground, and clipping would silently re-site the *other* one too. |
 | **Size within the caps** | `MIN_SITE_CELLS (40) ≤ covered ≤ floor(0.25 · 17,316) = 4,329`; and `|claimed ∪ covered| ≤ floor(0.40 · 17,316) = 6,926` | exact cell counts | Reject, stating the requested size, the legal maximum and the cells already claimed. |
 
 `MIN_SITE_CELLS` is **imported from `siting.py`**, not re-declared: "a component smaller than this is noise rather than a project" is one rule.
+
+**`clippedCells` counts the whole shortfall, not just the buildings.** It is
+`window − served`, where `served` is the cell count of the contour actually
+handed back. Two things can remove a cell: a surveyed building, and
+`contour_ring` returning the **largest ring only**. A building that bisects a
+window leaves survivors in two pieces and the smaller piece is not served, so
+counting buildings alone under-reports the difference between what was asked for
+and what the planner is shown — and that number is the one that makes the field
+auditable.
+
+**The pools and the gate use one building authority.** Both
+`ai_plan.load_grounding` and `siting._rasters` filter with
+`proposal_constraints.building_mask(ov)`, the same union the gate applies.
+They used to use `building_footprint_mask` alone, which offers sites the gate
+then clips: the pool and the gate disagreeing about the same building is the
+drift this section exists to prevent. Measured before the swap, no site moved
+more than 16 cells and the smallest (83 cells) was unchanged, well above the
+40-cell floor.
 
 **The window, exactly — this is what the caps above are measured on.** A coordinate-based placement asks for `N = sizeCells`. The window is **exactly `N` cells**, built by a deterministic N-nearest-cell scan outward from the snapped centre `Grids.cell_of(lon, lat)`, ties broken by a fixed `(row, col)` key, so the same request yields the same window on every host and **never depends on set/dict iteration order**. The window is then clipped to legal ground (buildings, already-claimed cells), contoured, and the **survivors** are `size.cells`. So the window holds **`N` cells pre-clip** and **`size.cells ≤ N` post-clip** — equal when nothing was clipped, less when the clip removed cells, never more. **The window is never a bounding square:** `ceil(sqrt(N))` cells per side would serve **49** cells for a request of 39 (silently slipping past the 40-cell floor) and **4,356** for a request of 4,329 (refusing the legal maximum) — precisely the off-by-a-square that T01's four boundaries (39 / 40 / 4,329 / 4,330) are written to catch, and that yan's boundary suite must be testing against *this* rule rather than one implementation's accident.
 

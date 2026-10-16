@@ -38,6 +38,7 @@ from app.schemas.scene import (
     SceneRead,
     SceneUpdate,
     TerrainRead,
+    UnavailableProject,
     close_ring,
 )
 
@@ -425,6 +426,9 @@ def get_terrain(scene_id: str) -> TerrainRead:
     if doc is None:
         raise SceneNotFound(scene_id)
 
+    # Drawn projects and undrawable ones, from one read of data/projects/ -- so
+    # the two lists cannot disagree about which files exist.
+    _projects = project_models()
     return TerrainRead(
         # Resolved, existence-checked, exactly like the overlays: a stored
         # relative DEM path becomes a URL the viewer can actually fetch, and a
@@ -443,52 +447,83 @@ def get_terrain(scene_id: str) -> TerrainRead:
         terrain_3d_url=_resolve_model_3d_url(doc, "terrain_3d_path"),
         waterbody_url=_resolve_overlay_url(doc, "waterbody_path"),
         infrastructure_url=_resolve_overlay_url(doc, "infrastructure_path"),
-        projects=project_models(),
+        projects=_projects[0],
+        projects_unavailable=_projects[1],
     )
 
 
-def project_models() -> list[ProjectModel]:
-    """Every seeded planned project that has a model, as the viewer needs it.
+def project_models() -> tuple[list[ProjectModel], list[Any]]:
+    """Every seeded planned project that has a model, and every one that does not.
 
     Reads `data/projects/*.json` -- the same files `seed_projects.py` turns into
     plans -- so a project's URL, origin and scale have one home and adding a
-    second one needs no code. A project with no `model`, or whose GLB or
-    footprint is not on disk, is **omitted rather than listed with nulls**: the
+    second one needs no code.
+
+    A project whose GLB or footprint is not on disk is **not drawn** -- the
     viewer should draw what exists, and a missing file is a build step not run,
-    not a broken project to render a placeholder for.
+    not a broken project to render a placeholder for. But it is **not silently
+    dropped either**: it comes back in the second half of the pair, with the
+    artefact named, because a shorter `projects` list is otherwise
+    indistinguishable from a dataset that never held the project. Those are
+    different facts and only one of them is worth acting on.
+
+    The pair is returned rather than a single list with an `available` flag on
+    each entry: the viewer iterates `projects` to draw, and a flag there would
+    make "should I draw this" a per-item decision the caller can get wrong.
 
     Sorted by id so the response is stable between calls; an unstable list would
     make the viewer tear down and rebuild its models on every scene fetch.
     """
     out: list[ProjectModel] = []
+    unavailable: list[Any] = []
     root = settings.data_dir / "projects"
     if not root.is_dir():
-        return out
+        return out, unavailable
     for path in sorted(root.glob("*.json")):
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         project_id = doc.get("id") or path.stem
+        name = doc.get("name") or project_id
         model_rel = doc.get("model")
         footprint_rel = doc.get("footprint")
-        if not model_rel or not footprint_rel:
-            continue
-        model_path = settings.model_dir / model_rel
-        footprint_path = settings.data_dir / footprint_rel
-        if not model_path.exists() or not footprint_path.exists():
+        missing: list[str] = []
+        if not model_rel:
+            missing.append("model")
+        if not footprint_rel:
+            missing.append("footprint")
+        if not missing:
+            model_path = settings.model_dir / model_rel
+            footprint_path = settings.data_dir / footprint_rel
+            if not model_path.exists():
+                missing.append("model")
+            if not footprint_path.exists():
+                missing.append("footprint")
+        if missing:
+            unavailable.append(UnavailableProject(
+                project_id=project_id,
+                name=name,
+                missing=missing,
+                reason=(
+                    "the project is seeded in data/projects/ but its "
+                    + " and its ".join(missing) + " is not on disk, so it is "
+                    "not drawn. Run the build step that produces it (a GLB is "
+                    "tracked with git-lfs; a checkout without the LFS objects "
+                    "has a 133-byte pointer instead of the model)."),
+            ))
             continue
         origin = doc.get("origin")
         out.append(ProjectModel(
             project_id=project_id,
-            name=doc.get("name") or project_id,
+            name=name,
             model_url=settings.public_model_url(model_rel),
             footprint_url=settings.public_url(footprint_rel),
             origin=(float(origin[0]), float(origin[1])) if origin else None,
             scale=float(doc.get("scale") or 1.0),
             label=doc.get("label"),
         ))
-    return out
+    return out, unavailable
 
 
 def buildings_path(scene_id: str) -> Path | None:

@@ -535,15 +535,26 @@ def clip_window(grids: Any, centre: Any, size_cells: int, occupied: Any,
     occ = _occupied_cells(occupied)
     kept = {cell for cell in window if occ is None or cell not in occ}
 
-    clipped = len(window) - len(kept)
-    fraction = (clipped / len(window)) if window else 0.0
-
     geometry = None
+    served = 0
     if kept:
         contour = contour_ring(sorted(kept), bounds=grids.bounds,
                                rows=grids.rows, cols=grids.cols)
         if contour is not None:
-            geometry = contour[0]
+            geometry, served, _of_component = contour
+
+    # ``clippedCells`` is the whole difference between what was asked for and
+    # what is served -- the building cells removed **plus** any fragment
+    # `contour_ring` stranded by returning the largest ring only. Counting the
+    # buildings alone under-reports: a bisecting building can leave survivors in
+    # two pieces, and the smaller piece is silently not served. That number is
+    # the one that makes the field auditable, so it has to be the total
+    # shortfall rather than the part of it that is easy to see.
+    #
+    # When no contour came back at all, nothing is served and the whole window
+    # is the shortfall -- which is also what ``kept`` being empty gives.
+    clipped = len(window) - (served if geometry is not None else 0)
+    fraction = (clipped / len(window)) if window else 0.0
 
     overlap = len(kept & _as_cell_set(claimed)) if claimed is not None else 0
 
@@ -551,6 +562,7 @@ def clip_window(grids: Any, centre: Any, size_cells: int, occupied: Any,
         "cells": kept,
         "window": len(window),
         "kept": len(kept),
+        "served": served,
         "clipped": clipped,
         "clippedFraction": round(fraction, 6),
         "centreCell": (row, col),

@@ -307,6 +307,28 @@ class TerrainRead(RowModel):
     waterbody_url: str | None = None
     infrastructure_url: str | None = None
     projects: list["ProjectModel"] = Field(default_factory=list)
+    # A seeded project whose model or footprint is not on disk (a build step not
+    # run, a checkout without the LFS objects). Additive and defaulted: a client
+    # that does not read it is unaffected, and one that does can say *why* the
+    # project is absent. Reporting rather than rendering: a missing file is not
+    # a project to draw a placeholder for, but a silently shorter `projects`
+    # list is indistinguishable from a dataset that never had the project.
+    projects_unavailable: list["UnavailableProject"] = Field(default_factory=list)
+
+
+class UnavailableProject(WireModel):
+    """A seeded project the viewer cannot draw, and why.
+
+    Present so an absent model reads as *a missing file* rather than as a
+    dataset that never held the project. Both facts are true statements about
+    different things, and only one of them is worth acting on.
+    """
+
+    project_id: str
+    name: str
+    #: Which artefact is missing: ``model`` | ``footprint`` | both.
+    missing: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class ProjectModel(WireModel):

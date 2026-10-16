@@ -338,14 +338,27 @@ def load_grounding(claimed: Any = None) -> Grounding:
     # roof is not a site. Without this subtraction a reservoir or paving site
     # could be offered on top of a surveyed building and then rejected by the
     # constraint guard -- so the proposal list would be empty, a worse failure
-    # than the one being fixed. The surveyed footprints are subtracted from all
-    # three masks here, through the one building authority
-    # (``scripts/_overlay_common.building_footprint_mask``, the same mask the
-    # placement generator uses), rather than re-deriving footprints from the
-    # GeoJSON a second time.
+    # than the one being fixed.
+    #
+    # This is the **gate's** mask (`proposal_constraints.building_mask`), not
+    # `_overlay_common.building_footprint_mask` alone. The two differ by a
+    # couple of dozen cells in how a footprint edge rasterises (7,812 vs 7,789
+    # on this data), and filtering the pools with the looser one offers sites
+    # the gate then clips -- the pool and the gate disagreeing about the same
+    # building is exactly the drift DESIGN §2.1 warns about. Measured before the
+    # swap: the largest basin falls 1,878 -> 1,876 cells, the largest paving
+    # site 3,596 -> 3,580, both far inside the caps, and the smallest site (83
+    # cells) is unchanged and well above the 40-cell floor, so no site vanishes.
+    #
+    # The footprint mask is kept as the fallback when no city model is present,
+    # because it is the one that reports `None` rather than an all-False mask.
     try:
+        from app.services.proposal_constraints import building_mask
         from _overlay_common import building_footprint_mask
-        occupied = building_footprint_mask(ov)
+
+        occupied = building_mask(ov)
+        if occupied is None:
+            occupied = building_footprint_mask(ov)
     except ImportError:  # pragma: no cover - scripts/ off sys.path
         occupied = None
 

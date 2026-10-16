@@ -148,9 +148,31 @@ def _sites(mask: np.ndarray, *, kind: str, why: str,
 @lru_cache(maxsize=1)
 def _rasters() -> tuple[Any, Any, Any]:
     ov = _overlay()
-    from _overlay_common import building_footprint_mask
+    # The *gate's* building authority, not this module's own loose envelope.
+    #
+    # `building_footprint_mask` rasterises each footprint by whether a cell
+    # centre falls inside it; the gate additionally unions a polygon-exact mask,
+    # and the two differ by a couple of dozen cells in how a footprint edge
+    # rasterises (7,789 vs 7,812 on this data). A pool filtered with the loose
+    # mask can therefore offer a site the gate will then clip, so the site a
+    # planner is shown is not the site that gets served -- and every cell of the
+    # difference is a cell the two authorities disagree about.
+    #
+    # Measured before the swap: the largest basin falls 1,878 -> 1,876 cells and
+    # the largest paving site 3,596 -> 3,580, both far inside the caps, and the
+    # smallest site (83 cells) is unchanged and well above the 40-cell floor.
+    # So no site vanishes and none crosses a cap; the pools simply stop
+    # disagreeing with the gate.
+    try:
+        from app.services.proposal_constraints import building_mask
 
-    buildings = building_footprint_mask(ov)
+        buildings = building_mask(ov)
+    except Exception:  # noqa: BLE001 - a missing city model is not an error here
+        buildings = None
+    if buildings is None:
+        from _overlay_common import building_footprint_mask
+
+        buildings = building_footprint_mask(ov)
     from _overlay_common import LAND_CLASSES
 
     depth_path = settings.rasters_dir / "wetgrid_hsk.npy"

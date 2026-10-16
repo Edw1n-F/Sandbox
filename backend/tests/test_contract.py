@@ -960,7 +960,7 @@ def test_the_scene_lists_every_project_that_has_a_model() -> None:
             ["a.glb", "a.json", "b.glb", "b.json"],
         )
         try:
-            found = scene_service.project_models()
+            found, _unavailable = scene_service.project_models()
         finally:
             _restore(saved)
 
@@ -972,9 +972,14 @@ def test_the_scene_lists_every_project_that_has_a_model() -> None:
 
 
 def test_a_project_with_a_missing_file_is_omitted_not_listed_with_nulls() -> None:
-    """Draw what exists. A missing GLB is a build step not run, not a project to
-    render a placeholder for -- and a null-filled entry would make the viewer try
-    to load a model that is not there."""
+    """Draw what exists, and **say** what does not.
+
+    A missing GLB is a build step not run, not a project to render a placeholder
+    for -- and a null-filled entry would make the viewer try to load a model
+    that is not there. But it must not vanish either: a silently shorter
+    `projects` list is indistinguishable from a dataset that never held the
+    project, and those are different facts.
+    """
     import tempfile
 
     with tempfile.TemporaryDirectory() as t:
@@ -992,11 +997,22 @@ def test_a_project_with_a_missing_file_is_omitted_not_listed_with_nulls() -> Non
             ["ok.glb", "ok.json", "n.json", "f.glb"],
         )
         try:
-            found = [p.project_id for p in scene_service.project_models()]
+            found, unavailable = scene_service.project_models()
         finally:
             _restore(saved)
 
-    assert found == ["ok"], found
+    assert [p.project_id for p in found] == ["ok"], found
+    # Every undrawable project is accounted for, with the artefact named, so
+    # "not drawn" never reads as "not seeded".
+    reported = {u.project_id: u for u in unavailable}
+    assert set(reported) == {"no_glb", "no_fp", "effects_only"}, sorted(reported)
+    assert reported["no_glb"].missing == ["model"], reported["no_glb"].missing
+    assert reported["no_fp"].missing == ["footprint"], reported["no_fp"].missing
+    # A project that declares neither is missing both, rather than silently
+    # counting as complete.
+    assert reported["effects_only"].missing == ["model", "footprint"]
+    assert reported["no_glb"].name == "NoGlb"
+    assert reported["no_glb"].reason, "an omission must state its reason"
 
 
 def test_an_unreadable_project_file_does_not_take_the_scene_down() -> None:
@@ -1010,7 +1026,7 @@ def test_an_unreadable_project_file_does_not_take_the_scene_down() -> None:
 
             (settings.data_dir / "projects" / "broken.json").write_text(
                 "{not json", encoding="utf-8")
-            found = scene_service.project_models()
+            found, _unavailable = scene_service.project_models()
         finally:
             _restore(saved)
 

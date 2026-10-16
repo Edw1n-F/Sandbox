@@ -97,20 +97,26 @@ crashed process is blocking every write, and the sandbox will not permit its rem
 
 ## Deferred defects — do not lose these
 
-- **`siting.py:150-152` and `ai_plan.load_grounding` still use the loose bounding-box mask**,
-  so the catalog/suggester path can still site a feature on a real polygon-exact building
-  cell. The proposal gate now uses the stricter union and refuses such a site, so the
-  user-visible guarantee holds; the residual risk is a site offered then rejected.
-- **`clip_window` under-reports `clippedCells`** on the coordinate path (it contours only the
-  largest ring, so a stranded fragment is not counted). Same class as the site-path defect
-  fixed in Phase 1, different path.
+**Closed on 17 Oct 2026** (all three verified by a suite, not by reading):
+
+- ~~`siting.py:150-152` and `ai_plan.load_grounding` still use the loose bounding-box mask.~~
+  Both now filter with `proposal_constraints.building_mask(ov)` — the gate's own
+  union — so the pool and the gate cannot disagree about the same building.
+  Measured before the swap: no site moved more than 16 cells (the largest basin
+  1,878 → 1,876; the largest paving site 3,596 → 3,580) and the smallest (83
+  cells) was unchanged, well above the 40-cell floor, so no site vanished.
+- ~~`clip_window` under-reports `clippedCells`~~ — it now reports `window − served`,
+  where `served` is the contour actually handed back, so a fragment stranded by
+  `contour_ring` returning the largest ring is counted with the buildings.
+- ~~`docs/DESIGN_intervention_proposals.md:84` describes `building_mask` as
+  `building_footprint_mask(...)`~~ — corrected, with the two-mask union and the
+  ~23-cell difference stated and the whole-shortfall rule for `clippedCells`.
+
+**Still open:**
+
 - **The two rainfall defaults differ** (`RunRequest.rainfall_mm = 50.0` vs
   `DEFAULT_RAINFALL_MM = 450.0`). Deliberately not unified: it would move published run
   numbers and deserves its own decision.
-- **`STATUS.md` is stale** — Stage 4 is recorded "Not started" and the catalog as "a
-  placeholder". Both are now false, and the catalog is being deleted outright.
-- **`docs/DESIGN_intervention_proposals.md:84`** still describes `building_mask` as
-  `building_footprint_mask(...)`, which is no longer true.
 - **P2-8** `curveNumber` is reported as *unread*; a per-intervention override would move
   published numbers and needs its own decision.
 
