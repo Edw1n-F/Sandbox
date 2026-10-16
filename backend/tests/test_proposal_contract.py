@@ -1378,6 +1378,11 @@ def test_a_missing_capability_refusal_names_the_supported_set() -> None:
         assert op in detail, (op, detail)
     for region in sorted(ai_plan.REGION_FRACTIONS):
         assert region in detail, (region, detail)
+    # NOTE, for the R-A author (§10.5): these two assertions encode §3B.3's
+    # correction, and they are TRUE only while `flood_storage` has no pool. Ruling
+    # R-A deliberately adds that pool and retires them. When it lands, flip both
+    # to `in detail` -- in the R-A commit, so the red suite has exactly one
+    # author (the change that retires them). Do not soften them early.
     assert "flood_storage" not in detail
     assert KIND_WORD["flood_storage"] not in detail, (
         f"the message names {KIND_WORD['flood_storage']!r}, which /ai-plan cannot "
@@ -1387,30 +1392,27 @@ def test_a_missing_capability_refusal_names_the_supported_set() -> None:
 def test_a_synonym_phrasing_is_not_told_it_is_unsupported() -> None:
     """C4: the synonym guard (§3B.4) -- the biggest risk in §3B, and silent.
 
-    Every `PROPOSAL_SHAPED_GAPS` phrasing reads as an intervention to a person;
-    none may be *told its request is unsupported*. The message's shape -- every
-    clause a fact about the system -- is what keeps this honest, so if a later
-    contributor sharpens the wording into "a school is not supported", this fails.
+    The detector fires on a *synonym* as readily as on a genuine miss, so the
+    message must never claim the user's request is unsupported: every clause is a
+    fact about the system, and the supported set is listed so the retry is
+    obvious. If a later contributor sharpens the wording into "a school is not
+    supported", this fails.
 
-    FINDING, measured: §3B.4 lists all four as phrasings the detector "is also
-    true of", but three -- "green corridor", "permeable plaza", "basin" -- are
-    now in `ai_plan.EN_ALIASES`, so `classify_turn` routes them and the guard
-    does not fire at all. Only "wetland" (-> `flood_storage`, which has no
-    `POOL_FOR_KIND` entry) still fires. Either way the message stays a system
-    fact, which is what this asserts.
+    Two families are checked. (i) A genuinely unrecognised synonym --
+    "add a rain garden in the north", a real green-space feature the vocabulary
+    has not learned -- so the detector fires and this message is what the user
+    sees. (ii) The pinned `PROPOSAL_SHAPED_GAPS`, which must NOT be falsely
+    refused.
+
+    FINDING, measured: §3B.4 offered all four gaps as the false-positive
+    demonstration, but three -- "green corridor", "permeable plaza", "basin" --
+    are now `EN_ALIASES` entries, so `classify_turn` routes them and the guard
+    does not fire at all. Only "wetland" (-> `flood_storage`, no pool) still
+    fires. Either way the message stays a system fact, which is what this asserts.
     """
     from app.agent.intent import classify_turn, refusal_detail
 
-    refused = 0
-    for phrase in PROPOSAL_SHAPED_GAPS:
-        out = classify_turn(phrase, _blank_card())
-        assert out.intent == "intervention", (
-            f"{phrase!r} no longer reads as a proposal to the router; the synonym "
-            "guard assumes it does")
-        detail = refusal_detail("scene-1", phrase)
-        if detail is None:
-            continue  # routed as an intervention: nothing was claimed
-        refused += 1
+    def _assert_system_fact(phrase: str, detail: str) -> None:
         low = detail.lower()
         for word in UNSUPPORTED_CLAIM_WORDS:
             assert word not in low, (
@@ -1419,10 +1421,27 @@ def test_a_synonym_phrasing_is_not_told_it_is_unsupported() -> None:
         assert "green space" in low and "water reservoir" in low, (
             f"{phrase!r}: the retry is not obvious without the supported "
             f"kinds:\n{detail}")
-    assert refused >= 1, (
-        "no PROPOSAL_SHAPED_GAP fires the detector, so this test exercised "
-        "nothing; if the vocabulary learned every synonym that is fine, but say "
-        "so rather than passing vacuously")
+
+    # (i) A synonym the vocabulary has not learned must fire, and its message must
+    #     stay a system fact -- this is the case §3B.4 is actually about.
+    synonym = "add a rain garden in the north"
+    synonym_detail = refusal_detail("scene-1", synonym)
+    assert synonym_detail is not None, (
+        f"{synonym!r}: expected the detector to fire on an unlearned synonym; if "
+        "the vocabulary learned it, pick another unlearned synonym here")
+    _assert_system_fact(synonym, synonym_detail)
+
+    # (ii) The pinned gaps must not be falsely refused; when one fires, its
+    #      message must hold the same line.
+    for phrase in PROPOSAL_SHAPED_GAPS:
+        out = classify_turn(phrase, _blank_card())
+        assert out.intent == "intervention", (
+            f"{phrase!r} no longer reads as a proposal to the router; the synonym "
+            "guard assumes it does")
+        detail = refusal_detail("scene-1", phrase)
+        if detail is None:
+            continue  # routed as an intervention: nothing was claimed
+        _assert_system_fact(phrase, detail)
 
 
 def test_the_unsupported_card_dates_the_cause_correctly() -> None:
