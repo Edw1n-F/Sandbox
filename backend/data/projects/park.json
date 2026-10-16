@@ -1,0 +1,18 @@
+{
+  "id": "park",
+  "name": "HSK Park",
+  "note": "Fixed project footprint. The green-space effect is an assumption (a park is vegetated ground); replace with the real landscape plan when available.",
+  "footprint": "park_footprint.json",
+  "model": "park.glb",
+  "origin": [113.99759, 22.43229],
+  "scale": 50.0,
+  "label": "洪水桥公园\nHung Shui Kiu Park",
+  "effects": [
+    {
+      "kind": "green_space",
+      "params": {
+        "basis": "assumed: a park is vegetated ground (INTERVENTION_EFFECTS green_space -> green)."
+      }
+    }
+  ]
+}
