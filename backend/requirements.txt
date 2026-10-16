@@ -7,6 +7,22 @@ uvicorn[standard]==0.30.6
 # (the local interpreter already had 2.13.5 installed). 2.13.5 pulls
 # pydantic-core 2.41.5, the first release with a cp314 manylinux wheel.
 # Do not pin pydantic back below 2.13: the floor is the wheel, not a preference.
+#
+# The SAME drift then reappeared from the other side, and it is worth recording
+# because it is invisible from a machine whose venv happens to be right.
+# `contracts/openapi.json` is committed, and it had been generated under 2.9.2.
+# From 2.9.2 a `dict[str, Any]` field renders WITHOUT `additionalProperties`; from
+# 2.13.5 it renders WITH it. So the committed contract matched every local run
+# and still failed the `contract` job, which regenerates with the pinned version:
+# 47 added lines, every one of them `"additionalProperties": true`, on schemas
+# like `params` / `style` / `geometry`. `git diff` on the regenerated file showed
+# nothing else, which is how you tell a version drift from a real schema change.
+#
+# Two lessons, both still true:
+#   1. Generate the contract with THIS file's versions, never with whatever the
+#      local interpreter happens to carry. `backend/.venv` is stale at 2.9.2.
+#   2. A green local suite proves nothing about the contract job when the local
+#      venv is off-pin. Check `pip show pydantic` before trusting it.
 pydantic==2.13.5
 pydantic-settings>=2.11
 python-dotenv==1.0.1
