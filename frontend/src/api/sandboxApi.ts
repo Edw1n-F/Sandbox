@@ -168,3 +168,64 @@ export async function modifyFeature(
   })
   return data
 }
+
+/**
+ * What a preview measured, split by whether it is a *state* or a *difference*.
+ *
+ * Three deltas now exist and they are not interchangeable: the run's own
+ * `runDelta` (scenario − today's land cover), `now` (the current sandbox state),
+ * and `previewDelta` (preview − now, the **marginal** effect of these
+ * candidates). Once prior work exists `previewDelta !== runDelta`, and they
+ * differ by exactly the prior work — so `previewDelta` deliberately does not
+ * reuse the run's key, and a UI showing one must be able to show the other.
+ */
+export interface SandboxPreview {
+  /** `PREVIEW_NOT_A_RUN_UNCOMMITTED_CHANGE`, distinct from a run's own status. */
+  status: string
+  /** Non-empty, always: display it verbatim. */
+  warning: string
+  /** What is measured, and what deliberately is not. Display verbatim. */
+  scope: string
+  rainfallMm: number
+  /** The ledger reading with prior work in place. */
+  now: Record<string, number>
+  /** The same reading with the candidates added. */
+  preview: Record<string, number>
+  /** Per-key `preview - now`: the marginal effect. */
+  previewDelta: Record<string, number>
+  /** The run's own delta, under the run's own keys. Never merged with the above. */
+  runDelta: Record<string, number>
+  interventionsApplied: Array<Record<string, unknown>>
+  /** What the run would SKIP, each with its `why`. */
+  interventionsSkipped: Array<Record<string, unknown>>
+  sources: Record<string, unknown>
+  ledgerSource: string
+}
+
+/**
+ * Measure an uncommitted change without running it (Phase 4 T01).
+ *
+ * Writes nothing, starts no run and calls no model: there is no `runId`, no
+ * overlay and no result card, and the response carries none of those keys at
+ * all. A value the ledger would refuse comes back as a 422.
+ */
+export async function previewChange(
+  sceneId: string,
+  body: {
+    interventions: Array<Record<string, unknown>>
+    values?: Array<Record<string, number> | null>
+    planIds?: string[]
+    rainfallMm?: number
+  },
+): Promise<SandboxPreview> {
+  const { data } = await http.post<SandboxPreview>(
+    `/scenes/${sceneId}/sandbox/preview`,
+    {
+      interventions: body.interventions,
+      values: body.values ?? [],
+      planIds: body.planIds ?? [],
+      rainfallMm: body.rainfallMm ?? 450,
+    },
+  )
+  return data
+}

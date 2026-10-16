@@ -303,11 +303,19 @@ def claimed_cells_for(
     scene_id: str,
     grids: Any | None = None,
     extra_features: Iterable[Mapping[str, Any]] | None = None,
+    plan_ids: Iterable[str] | None = None,
 ) -> set[tuple[int, int]]:
     """Convenience: a scene's claimed set, its staged plan included (§2.1).
 
     Resolves the staged plan through ``pins.staged_plan_id`` -- the one place
     that knows which plan is staged -- then defers to :func:`claimed_cells`.
+
+    ``plan_ids`` (Phase 4 T04a, additive) are the run's **toggled projects**.
+    They are claimed ground for the proposer's purposes even though they are
+    not staged rows: a site that overlaps a project the user has switched on
+    is a site the run already covers, and proposing it would offer work that
+    is already there. Added rather than replacing the staged plan, because
+    both are prior work and the caller holds both.
     """
     from app.services import pins
 
@@ -315,11 +323,14 @@ def claimed_cells_for(
         from app.services.sandbox_model import load_grids
 
         grids = load_grids()
-    plan_ids: list[str] = []
+    ids: list[str] = []
     staged = pins.staged_plan_id(scene_id)
     if staged:
-        plan_ids.append(staged)
-    return claimed_cells(grids, plan_ids, extra_features)
+        ids.append(staged)
+    for plan_id in plan_ids or []:
+        if plan_id and plan_id not in ids:
+            ids.append(plan_id)
+    return claimed_cells(grids, ids, extra_features)
 
 
 # --------------------------------------------------------------------------- #

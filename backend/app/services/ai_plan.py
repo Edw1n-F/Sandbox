@@ -172,12 +172,47 @@ class PlanGenerationError(RuntimeError):
 # --------------------------------------------------------------------------- #
 
 
-def load_grounding() -> Grounding:
+def _claimed_for_pools(scene_id: str,
+                       plan_ids: Any = None) -> set[tuple[int, int]]:
+    """Prior work as a cell set, for the proposer's pool filter (Phase 4 T04b).
+
+    Returns the claimed cells of the scene's staged plan **plus every toggled
+    project** the request named. Returns an empty set rather than raising when
+    the ledger grid is unavailable: the pools are then built unfiltered and the
+    gate still refuses anything that collides, which is the honest degradation --
+    a proposer that cannot see prior work offers a site the gate will refuse,
+    but it does not invent one.
+
+    Failure is deliberately *not* silent: the reason is appended as a grounding
+    note by the caller, so "could not check" never reads as "nothing is there".
+    """
+    try:
+        from app.services import proposal_constraints as _constraints
+
+        return _constraints.claimed_cells_for(scene_id, plan_ids=plan_ids)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return set()
+
+
+def load_grounding(claimed: Any = None) -> Grounding:
     """Derive candidate intervention sites from the DEM, land cover and wet grid.
 
     This is the part that makes an AI-generated plan defensible. Every candidate
     carries the raster it came from, and the geometry handed back to the model is
     a *choice among these sites*, never a free coordinate.
+
+    ``claimed`` (Phase 4 T04b, additive) is the set of cells already covered by
+    prior work -- the staged plan's pinned rows plus every toggled project. A
+    candidate whose ground is (partly) claimed is filtered out here, at
+    selection, so the proposer **skips to the next candidate** instead of
+    offering a site the gate will then refuse with ``OVERLAPS_STAGED``.
+
+    That dead-end was the live defect: with prior work on the sandbox, the
+    proposal path returned an empty list while free candidates existed. The
+    overlap guard is **not** weakened by this -- it stays exactly as it is, as
+    the backstop for anything that still collides (a coordinate request, or a
+    race with a concurrent pin). Skip at selection, refuse at the gate; both,
+    for the same reason the region work needed both.
 
     Returns an empty :class:`Grounding` (with notes) when the analysis has not
     been run, so the caller can refuse rather than invent.
@@ -449,8 +484,97 @@ def load_grounding() -> Grounding:
                 paving_sites.append(entry)
     g.paving_sites.extend(paving_sites[:3])
 
+    if claimed:
+        _drop_claimed_sites(g, claimed, occupied)
     g.notes.append(f"terrain={ov.terrain_source}, landcover={ov.landcover_source}")
     return g
+
+
+def _drop_claimed_sites(g: "Grounding", claimed: Any, occupied: Any = None) -> None:
+    """Remove prior-work candidates from every pool, in place (Phase 4 T04b).
+
+    A site whose ground is already covered by the staged plan or a toggled
+    project is **not offered**: the proposer skips to the next candidate instead
+    of handing the gate a placement the overlap guard will refuse, which used to
+    empty the whole kind while free candidates existed.
+
+    Membership is on the *candidate's own cells* against the claimed set, not on
+    a geometry intersection -- the candidate is a cell mask and the claimed set
+    is a cell set, so there is nothing to rasterise and nothing to round.
+
+    ``occupied`` (the surveyed building mask the gate applies) is subtracted
+    from each candidate before the comparison, because the gate serves the
+    **clipped** geometry: the largest basin is 1,878 cells as a candidate and
+    1,876 as a served placement, and the 2 building cells it sheds would
+    otherwise read as free ground and keep a fully-claimed site in the pool.
+
+    A site is kept when **any** of its *servable* cells are free. A partly-claimed
+    site is still a legal site: the gate clips and the guard reports the overlap,
+    and dropping it would discard ground the user can still use. Wholly-claimed
+    sites go, and the note says how many, because a shorter pool with no
+    explanation reads exactly like a pool that was never that long.
+    """
+    from app.services.sandbox_model import _polygon_cells
+
+    try:
+        taken = {(int(r), int(c)) for r, c in claimed}
+    except TypeError:  # pragma: no cover - a malformed set is not worth failing on
+        return
+    if not taken:
+        return
+
+    # The overlay is the grids the candidate geometries were contoured against,
+    # so this rasterises through the same function the ledger and the gate use
+    # (`sandbox_model._polygon_cells`), and the cells are directly comparable
+    # with the claimed set.
+    grids = g.overlay
+    if grids is None or not hasattr(grids, "cell_of"):
+        return
+
+    # The gate's own building authority, not the pool filter's: the served
+    # geometry is what the gate clips, so the comparison has to use the mask the
+    # gate clipped with. The two masks are close but not identical (they differ
+    # by how a building's own footprint is rasterised), and using the wrong one
+    # leaves a cell or two reading as free ground on a wholly-claimed site --
+    # which is exactly the off-by-two that kept the largest basin in the pool.
+    buildings: set[tuple[int, int]] = set()
+    try:
+        import numpy as np
+
+        from app.services import proposal_constraints as _constraints
+
+        mask = _constraints.building_mask(g.overlay)
+        if mask is not None:
+            rows, cols = np.where(mask)
+            buildings = {(int(r), int(c)) for r, c in zip(rows, cols)}
+    except Exception:  # noqa: BLE001 - the pool filter degrades to the loose mask
+        buildings = set()
+
+    dropped = 0
+    for name in ("reservoir_sites", "green_sites", "paving_sites"):
+        pool = getattr(g, name, None)
+        if not pool:
+            continue
+        kept = []
+        for candidate in pool:
+            coords = (candidate.get("geometry") or {}).get("coordinates") or []
+            try:
+                cells = {(int(r), int(c))
+                         for r, c in _polygon_cells(grids, coords)}
+            except Exception:  # noqa: BLE001 - a bad ring keeps the candidate
+                kept.append(candidate)
+                continue
+            served = cells - buildings
+            if served and not (served - taken):
+                dropped += 1
+                continue
+            kept.append(candidate)
+        setattr(g, name, kept)
+    if dropped:
+        g.notes.append(
+            f"{dropped} candidate site(s) already covered by work on the "
+            f"sandbox were not offered; the proposer moved on to free ground "
+            f"rather than proposing a placement that would be refused")
 
 
 def _ranked(rank: int) -> str:
@@ -2467,6 +2591,7 @@ def generate_proposals(
     max_features: int = 6,
     allowed_types: list[str] | None = None,
     answered: Any = None,
+    plan_ids: Any = None,
 ) -> dict[str, Any]:
     """Produce feature proposals **without persisting** them (plan v2 §5).
 
@@ -2513,7 +2638,10 @@ def generate_proposals(
         raise PlanGenerationError("instruction is empty")
 
     provider = get_provider(prefer)
-    grounding = load_grounding()
+    # Phase 4 T04b: the claimed set is computed BEFORE the pools are built, so a
+    # candidate under prior work is never offered. The gate's own guard stays as
+    # the backstop; this is prevention, not replacement.
+    grounding = load_grounding(_claimed_for_pools(scene_id, plan_ids))
     if not grounding.any_available():
         raise PlanGenerationError(
             "no grounded candidate sites are available. Run fetch_dem.py, "

@@ -6,6 +6,7 @@ store (``isolate_store``), so the real ``data/`` is never touched.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -224,8 +225,139 @@ def main() -> int:
     check("an unscoped instruction keeps the generic sentence, not a region claim",
           "south region" not in (unscoped.get("message") or ""))
 
+    print("prior work: the proposer skips rather than dead-ends")
+    # Phase 4 T04b. Before this, a pinned reservoir made the proposal path
+    # return an EMPTY list (every remaining candidate refused OVERLAPS_STAGED)
+    # while free candidates existed. The fix narrows the pools at selection, so
+    # the proposer moves on to free ground; the gate's overlap guard is
+    # untouched and stays the backstop.
+    for row in _staged_pinned():
+        client.post(f"/api/scenes/{SCENE}/pins/{row['id']}/unpin")
+    baseline = _ai_plan("add a water reservoir in the north")
+    check("with nothing placed, every reservoir candidate is offered",
+          len(baseline["proposals"]) == 3 and not baseline.get("rejected"),
+          f"{len(baseline['proposals'])} proposals, "
+          f"{len(baseline.get('rejected') or [])} refused")
+    taken = baseline["proposals"][0]
+    applied = _apply([taken], baseline["provider"])
+    check("the first candidate can be placed",
+          applied.status_code == 200 and applied.json().get("features") == 1,
+          applied.text[:120])
+
+    after = _ai_plan("add a water reservoir in the north")
+    check("the taken candidate is not offered again",
+          all(p["geometry"] != taken["geometry"] for p in after["proposals"]),
+          f"{len(after['proposals'])} proposals")
+    check("and the free candidates still are -- no dead end",
+          len(after["proposals"]) == 2 and not after.get("rejected"),
+          f"{len(after['proposals'])} proposals, "
+          f"{len(after.get('rejected') or [])} refused")
+    check("the shorter pool says why it is shorter",
+          any("already covered by work on the sandbox" in n
+              for n in after.get("groundingNotes", [])),
+          str(after.get("groundingNotes"))[-160:])
+    check("the constraint guard is untouched: a stale coordinate ask still refuses",
+          _untouched_guard_refuses(), "")
+
+    print("preview: the effect of an uncommitted change")
+    # Phase 4 T01. The preview must measure, never run: no runId, no overlay, no
+    # card, nothing written, and the same answer twice.
+    for row in _staged_pinned():
+        client.post(f"/api/scenes/{SCENE}/pins/{row['id']}/unpin")
+    candidate = _ai_plan("add a water reservoir in the north")["proposals"][0]
+    shallow = _preview(candidate, 1.5)
+    deep = _preview(candidate, 3.0)
+
+    check("the preview labels itself as not-a-run",
+          shallow["status"] == "PREVIEW_NOT_A_RUN_UNCOMMITTED_CHANGE"
+          and shallow["warning"], shallow["status"])
+    check("and carries no run identity at all",
+          not any(k in shallow for k in
+                  ("runId", "run_id", "overlayUrls", "explanationCard")),
+          str(sorted(shallow))[:160])
+    check("the scope declines the figures it does not measure",
+          "NOT the flood extent" in shallow["scope"] and "NOT the overlay" in shallow["scope"],
+          shallow["scope"][:120])
+    check("the marginal delta is not published under the run's key",
+          "deltaUnstoredM3" not in shallow["previewDelta"]
+          and "deltaUnstoredM3" in shallow["runDelta"],
+          f"previewDelta {sorted(shallow['previewDelta'])} vs runDelta {sorted(shallow['runDelta'])}")
+    check("the candidate is measured as applied, not skipped",
+          len(shallow["interventionsApplied"]) == 1 and not shallow["interventionsSkipped"],
+          str(shallow["interventionsSkipped"])[:120])
+    check("a deeper depth raises capacity and does not pretend to drain more",
+          deep["previewDelta"]["storageCapacityM3"] > shallow["previewDelta"]["storageCapacityM3"]
+          and abs(deep["previewDelta"]["unstoredM3"] - shallow["previewDelta"]["unstoredM3"]) < 0.01,
+          f"cap {shallow['previewDelta']['storageCapacityM3']} -> "
+          f"{deep['previewDelta']['storageCapacityM3']}, "
+          f"unstored {shallow['previewDelta']['unstoredM3']} -> "
+          f"{deep['previewDelta']['unstoredM3']}")
+    check("the preview is byte-identical on repeat",
+          json.dumps(_preview(candidate, 3.0), sort_keys=True)
+          == json.dumps(deep, sort_keys=True))
+    check("and it wrote nothing: the sandbox is unchanged",
+          _staged_pinned() == [])
+    check("an out-of-range depth is a 422, not a silent default",
+          _preview_response(candidate, 40).status_code == 422,
+          str(_preview_response(candidate, 40).text)[:110])
+
     print(f"\n{'all sandbox checks passed' if not FAILURES else f'{len(FAILURES)} failed'}")
     return 1 if FAILURES else 0
+
+
+def _ai_plan(instruction: str) -> dict:
+    return client.post(f"/api/scenes/{SCENE}/ai-plan",
+                       json={"instruction": instruction, "apply": False}).json()
+
+
+def _preview(candidate: dict, depth: float) -> dict:
+    resp = _preview_response(candidate, depth)
+    check("the preview answered", resp.status_code == 200, resp.text[:120])
+    return resp.json() if resp.status_code == 200 else {}
+
+
+def _preview_response(candidate: dict, depth: float):
+    return client.post(f"/api/scenes/{SCENE}/sandbox/preview", json={
+        "interventions": [candidate],
+        "values": [{"storageDepthM": depth}],
+        "planIds": [],
+    })
+
+
+def _untouched_guard_refuses() -> bool:
+    """The gate still refuses a placement on claimed ground, so prevention did
+    not replace detection.
+
+    A coordinate-based ask bypasses the pool filter entirely -- it names a cell
+    rather than choosing a candidate -- so it is the case that proves the guard
+    still runs. The refusal is asserted as *a refusal*, not as one particular
+    code: the exact predicate that fires at a given cell depends on how much of
+    that cell's window is building, claimed or off-grid, and pinning the code
+    would make this test a statement about one cell rather than about the guard.
+    What matters is that it is refused, and that the claimed cells are among the
+    reasons reported.
+    """
+    from app.services import proposal_constraints as pc
+    from app.services.sandbox_model import load_grids
+
+    grids = load_grids()
+    if grids is None:
+        return True
+    taken = pc.claimed_cells_for(SCENE)
+    if not taken:
+        return False
+    row, col = sorted(taken)[0]
+    x0, y0, x1, y1 = grids.bounds
+    lon = x0 + (col + 0.5) / grids.cols * (x1 - x0)
+    lat = y1 - (row + 0.5) / grids.rows * (y1 - y0)
+    seen = pc.validate_proposal(
+        grids,
+        {"intervention_type": "water_reservoir",
+         "params": {"requested": {"centre": {"lon": lon, "lat": lat},
+                                 "sizeCells": 60}}},
+        pc.building_mask(grids), taken)
+    return (seen["reasonCode"] is not None
+            and seen["constraints"]["overlapCells"] > 0)
 
 
 def _proposal(instruction: str) -> tuple[dict | None, str]:

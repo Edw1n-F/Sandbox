@@ -189,6 +189,39 @@ replaced. The parse is the **server's**, never the client's: "about 80 cm"
 becomes 0.80 m, and an answer with no number in it is reported as unparsed with
 the class default left standing, rather than guessed at.
 
+**Prior work is filtered at selection, not refused at the gate** (Phase 4
+T04a/b, 17 Oct). `/ai-plan` gains `planIds` and the proposer's pools are narrowed
+by the claimed cell set before any candidate is offered, so a site already under
+the staged plan or a toggled project is **skipped** and the next free candidate
+is proposed. Before this, pinning one reservoir made the whole kind come back
+empty while two free basins existed. The overlap guard is **not** weakened — it
+stays exactly as it is, as the backstop for a coordinate request or a race with
+a concurrent pin, and `test_sandbox` asserts it still refuses. Skip at
+selection, refuse at the gate; both, for the same reason the region work needed
+both. The pool filter subtracts the *gate's* building mask, not the pool's own:
+they differ by a couple of cells in how a footprint rasterises, and the
+difference is enough to keep a wholly-claimed site in the pool.
+
+**`POST /sandbox/preview` measures without running** (Phase 4 T01/T02). The
+dashed layer already showed a proposal's *shape*; this shows its *consequence*.
+A dedicated route rather than a `dryRun` flag on `/run`, because a run writes
+overlays, prunes the run history to 20 entries, mints a `runId` and calls a
+model for an explanation card — none of which a preview may do. The response
+carries **no `runId`, no `overlayUrls` and no `explanationCard` key at all**,
+absent by construction rather than empty.
+
+The three deltas are kept apart, which is the load-bearing part: the run's own
+`runDelta` (scenario − today's land cover), `now` (the current sandbox state)
+and `previewDelta` (preview − now, the **marginal** effect). Once prior work
+exists they differ by exactly that prior work, so `previewDelta` deliberately
+does not reuse the run's key, both are present, and each is labelled by what it
+is the difference of. The preview runs candidates through `sandbox.apply_inputs`
+first — the same function `/ai-plan/apply` uses — because the input card changes
+the ledger, and previewing the AI's estimate while the planner has typed a depth
+would show a number that will not happen. `status` / `warning` / `scope` are
+rendered verbatim from the payload, not re-worded in the UI, so no other client
+can mistake these numbers for a run's.
+
 `POST /ai-plan/revalidate` is the gate's third call and writes nothing: it
 re-runs the same constraint engine over the proposals as they now stand, so a
 planner sees what their edit did -- and whether it made the placement illegal --
@@ -369,7 +402,7 @@ copied from the code's output.
 | backend `test_agent` | 31/31 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
-| backend `test_sandbox` | 32/32 | `python tests/test_sandbox.py` — Stage 4: suggestions, input card, add, modify, remove, plus the three honesty checks (a hand-set depth is never recorded as a measurement; `/ai-plan/apply` re-validates before it pins; an empty region names the region) |
+| backend `test_sandbox` | 50/50 | `python tests/test_sandbox.py` — Stage 4: suggestions, input card, add, modify, remove; the three honesty checks (a hand-set depth is never recorded as a measurement; `/ai-plan/apply` re-validates before it pins; an empty region names the region); and Phase 4's prior-work skip (the proposer moves to free ground instead of dead-ending) and preview (self-labelled, no run identity, three deltas kept apart, byte-identical on repeat, writes nothing) |
 | backend `test_pins` | 18/18 | `python tests/test_pins.py` |
 | backend `test_intervention_geometry` | 18/18 | `python tests/test_intervention_geometry.py` |
 | backend `test_proposal_contract` | 38/38 | `python tests/test_proposal_contract.py` — the proposal wire, constraints, parameter card and routing; clears what it stages, since apply now pins to the sandbox. Six Phase 2 checks: every silent assumption becomes a question; an answered question is honoured, not re-asked; a hand-edited depth changes its provenance label; an edit leaves geometry byte-identical; apply revalidates and refuses an illegal edited proposal; an out-of-range depth is a 422. |

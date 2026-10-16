@@ -124,6 +124,12 @@ class AIPlanRequest(WireModel):
     # so answering changes the run rather than merely silencing a prompt.
     # Additive and defaulted: a pre-Phase-2 client is unaffected.
     answered_questions: list[AnsweredQuestion] = Field(default_factory=list)
+    # Phase 4 T04a: the run's toggled projects. A project the user has switched
+    # on is prior work: its ground is already covered, so a proposal over it
+    # would offer something that is already there. Additive and defaulted --
+    # omitting it means "no projects toggled", which is what the client that
+    # does not send it means.
+    plan_ids: list[str] = Field(default_factory=list)
     model_config = {
         "alias_generator": __import__(
             "pydantic.alias_generators", fromlist=["to_camel"]

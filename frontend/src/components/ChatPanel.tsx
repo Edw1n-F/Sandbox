@@ -45,6 +45,7 @@ import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import {
   fetchInputs,
+  previewChange,
   fetchRunSuggestions,
   modifyFeature,
   resolveModification,
@@ -53,6 +54,7 @@ import {
   type ModifyTarget,
   type RemovalMatch,
   type SandboxInput,
+  type SandboxPreview,
   type SandboxSuggestion,
 } from '@/api/sandboxApi'
 import InputCard from './InputCard'
@@ -485,6 +487,10 @@ function ProposalReview({
     movedGeometry: string[]
     refused: number
   } | null>(null)
+  // What the preview measured (Phase 4 T01/T02). Held beside the draft set, not
+  // in it: a preview is a reading, not a proposal.
+  const [preview, setPreview] = useState<SandboxPreview | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
 
   useEffect(() => {
     if (payload.resolved) return
@@ -575,6 +581,28 @@ function ProposalReview({
   const invalid = payload.proposals.some(
     (_, i) => checked[i] && inputs[i].some((input) => fieldError(input, answers[i][input.key]) !== null),
   )
+
+  // Measure the checked candidates without applying them (Phase 4 T01). Writes
+  // nothing and calls no model; the reading is held beside the draft set, never
+  // in it, and it is cleared when the set changes so a stale number cannot be
+  // read next to a proposal it no longer describes.
+  const runPreview = async () => {
+    const indices = payload.proposals.map((_, i) => i).filter((i) => checked[i])
+    if (indices.length === 0 || invalid) return
+    setPreviewBusy(true)
+    setError(null)
+    try {
+      setPreview(await previewChange(sceneId, {
+        interventions: indices.map((i) => payload.proposals[i] as unknown as Record<string, unknown>),
+        values: indices.map((i) => toValues(inputs[i], answers[i])),
+        planIds: [],
+      }))
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
 
   const apply = async () => {
     const indices = payload.proposals.map((_, i) => i).filter((i) => checked[i])
@@ -703,6 +731,15 @@ function ProposalReview({
         <Button
           size="small"
           variant="outlined"
+          disabled={!anyChecked || busy || previewBusy || invalid}
+          onClick={() => void runPreview()}
+          sx={{ fontSize: 11 }}
+        >
+          {previewBusy ? 'Measuring…' : 'Preview effect'}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
           disabled={busy}
           onClick={() => {
             // A dismissed draft must disappear from the scene (DESIGN §2.4).
@@ -714,8 +751,79 @@ function ProposalReview({
           Dismiss
         </Button>
       </Stack>
+      {preview && <PreviewReading preview={preview} />}
     </Stack>
   )
+}
+
+/**
+ * The preview's numbers, with the three deltas kept apart (Phase 4 §1.4).
+ *
+ * `status`, `warning` and `scope` are rendered **verbatim** from the payload
+ * rather than re-worded in the UI: a preview whose numbers look like a run's is
+ * the failure this whole endpoint exists to prevent, and a UI-only convention
+ * would leave the payload able to mislead any other client.
+ *
+ * The three figures are labelled by what they are the difference *of*, and the
+ * marginal one is never shown under the run's key — once prior work exists they
+ * differ by exactly that prior work, so quoting one as the other is a wrong
+ * number under a right-sounding label.
+ */
+function PreviewReading({ preview }: { preview: SandboxPreview }) {
+  const marginal = preview.previewDelta ?? {}
+  const runDelta = preview.runDelta ?? {}
+  return (
+    <Box
+      sx={{
+        mt: 0.75,
+        p: 0.75,
+        borderRadius: '4px',
+        border: '1px solid',
+        borderColor: 'rgba(92,255,157,0.35)',
+        bgcolor: 'rgba(92,255,157,0.06)',
+      }}
+    >
+      <Typography className="hud-label" sx={{ fontSize: 9, color: '#5cff9d' }}>
+        {preview.status}
+      </Typography>
+      <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, mt: 0.25 }}>
+        {preview.warning}
+      </Typography>
+      <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25 }}>
+        scope: {preview.scope}
+      </Typography>
+      <Typography className="hud-mono" sx={{ fontSize: 9.5, lineHeight: 1.5, mt: 0.5 }}>
+        marginal (these candidates, on top of what is on the sandbox):
+        {' '}unstored {fmt(marginal.unstoredM3)} m³ · runoff {fmt(marginal.runoffM3)} m³ ·
+        {' '}capacity {fmt(marginal.storageCapacityM3)} m³
+      </Typography>
+      <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.5 }}>
+        the run&rsquo;s own delta (scenario vs today&rsquo;s land cover, prior work included):
+        {' '}unstored {fmt(runDelta.deltaUnstoredM3)} m³ · runoff {fmt(runDelta.deltaRunoffM3)} m³
+      </Typography>
+      <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4 }}>
+        now: unstored {fmt(preview.now?.unstoredM3)} m³ · capacity {fmt(preview.now?.storageCapacityM3)} m³
+        {' → '}with the change: unstored {fmt(preview.preview?.unstoredM3)} m³ ·
+        {' '}capacity {fmt(preview.preview?.storageCapacityM3)} m³
+      </Typography>
+      {(preview.interventionsSkipped ?? []).length > 0 && (
+        <Typography sx={{ fontSize: 9.5, color: '#ff9d2e', lineHeight: 1.4, mt: 0.25 }}>
+          the run would skip {preview.interventionsSkipped.length} of these:
+          {' '}{(preview.interventionsSkipped as Array<{ why?: string }>).map((s) => s.why).filter(Boolean).join('; ')}
+        </Typography>
+      )}
+      <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25 }}>
+        {preview.ledgerSource}
+      </Typography>
+    </Box>
+  )
+}
+
+/** A ledger figure with a sign and no false precision. */
+function fmt(value: number | undefined): string {
+  if (value === undefined || value === null || Number.isNaN(value)) return '—'
+  const rounded = Math.round(value)
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()}`
 }
 
 /** A suggestion as a draft proposal, so the viewer can draw its dashed preview. */

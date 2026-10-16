@@ -110,6 +110,13 @@
             "title": "Maxfeatures",
             "type": "integer"
           },
+          "planIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planids",
+            "type": "array"
+          },
           "provider": {
             "default": "auto",
             "pattern": "^(auto|llm|heuristic)$",
@@ -1752,6 +1759,51 @@
           "featureId"
         ],
         "title": "SandboxModifyRequest",
+        "type": "object"
+      },
+      "SandboxPreviewRequest": {
+        "additionalProperties": false,
+        "description": "``POST /api/scenes/{sceneId}/sandbox/preview`` body (Phase 4 T01).\n\nThe candidates are the ones the confirm gate is showing, in the shape\n`/ai-plan/apply` would receive them; ``values[i]`` holds the input card's\nanswers for ``interventions[i]``, because the card changes the ledger and a\npreview that ignored it would measure a different intervention than the one\nabout to be confirmed.\n\nThere is **no ``tideState``**: the level-pool ledger does not consume it, and\naccepting an input this route ignores would imply the preview reflects the\ntide. ``planIds`` are the run's toggled projects, which are prior work.",
+        "properties": {
+          "interventions": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Interventions",
+            "type": "array"
+          },
+          "planIds": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Planids",
+            "type": "array"
+          },
+          "rainfallMm": {
+            "default": 450.0,
+            "maximum": 800.0,
+            "minimum": 0.0,
+            "title": "Rainfallmm",
+            "type": "number"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "title": "SandboxPreviewRequest",
         "type": "object"
       },
       "SandboxRemoveRequest": {
@@ -4135,6 +4187,58 @@
           }
         },
         "summary": "Sandbox Modify"
+      }
+    },
+    "/api/scenes/{scene_id}/sandbox/preview": {
+      "post": {
+        "description": "What the candidates would do, measured against what is on the sandbox now.\n\nA dedicated route rather than a `dryRun` flag on `/run`, because a run\nwrites overlays, prunes the run history to 20 entries, mints a `runId` and\ncalls a model for an explanation card -- none of which a preview may do, and\none endpoint with two shapes and different side effects is the\nshape-failure class this project has already paid for twice.\n\nWrites nothing, starts no run, calls no model. The response carries no\n`runId`, no `overlayUrls` and no `explanationCard` key at all, and it labels\nitself (`status` / `warning` / `scope`) in the payload rather than only in\nthe UI, so any other client cannot mistake these numbers for a run's.",
+        "operationId": "sandbox_preview_api_scenes__scene_id__sandbox_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sandbox Preview Api Scenes  Scene Id  Sandbox Preview Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sandbox Preview"
       }
     },
     "/api/scenes/{scene_id}/sandbox/resolve-modification": {

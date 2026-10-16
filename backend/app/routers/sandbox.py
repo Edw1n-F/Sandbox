@@ -158,3 +158,58 @@ def sandbox_modify(scene_id: str, body: SandboxModifyRequest) -> dict:
         return sandbox.modify(scene_id, body.feature_id, body.values)
     except (sandbox.InputError, PinError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class SandboxPreviewRequest(WireModel):
+    """``POST /api/scenes/{sceneId}/sandbox/preview`` body (Phase 4 T01).
+
+    The candidates are the ones the confirm gate is showing, in the shape
+    `/ai-plan/apply` would receive them; ``values[i]`` holds the input card's
+    answers for ``interventions[i]``, because the card changes the ledger and a
+    preview that ignored it would measure a different intervention than the one
+    about to be confirmed.
+
+    There is **no ``tideState``**: the level-pool ledger does not consume it, and
+    accepting an input this route ignores would imply the preview reflects the
+    tide. ``planIds`` are the run's toggled projects, which are prior work.
+    """
+
+    interventions: list[dict[str, Any]] = Field(default_factory=list)
+    values: list[dict[str, Any] | None] = Field(default_factory=list)
+    plan_ids: list[str] = Field(default_factory=list)
+    rainfall_mm: float = Field(default=450.0, ge=0, le=800)
+
+
+@router.post("/scenes/{scene_id}/sandbox/preview")
+def sandbox_preview(scene_id: str, body: SandboxPreviewRequest) -> dict:
+    """What the candidates would do, measured against what is on the sandbox now.
+
+    A dedicated route rather than a `dryRun` flag on `/run`, because a run
+    writes overlays, prunes the run history to 20 entries, mints a `runId` and
+    calls a model for an explanation card -- none of which a preview may do, and
+    one endpoint with two shapes and different side effects is the
+    shape-failure class this project has already paid for twice.
+
+    Writes nothing, starts no run, calls no model. The response carries no
+    `runId`, no `overlayUrls` and no `explanationCard` key at all, and it labels
+    itself (`status` / `warning` / `scope`) in the payload rather than only in
+    the UI, so any other client cannot mistake these numbers for a run's.
+    """
+    from app.services import preview as preview_service
+    from app.services.sandbox import InputError
+
+    _require_scene(scene_id)
+    try:
+        return preview_service.preview(
+            scene_id,
+            interventions=body.interventions,
+            values=body.values,
+            plan_ids=body.plan_ids,
+            rainfall_mm=body.rainfall_mm,
+        )
+    except preview_service.PreviewUnavailable as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except InputError as exc:
+        # A value the ledger would refuse is the card's problem, not a preview
+        # bug: 422 with the same words `/sandbox/stage` would use.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

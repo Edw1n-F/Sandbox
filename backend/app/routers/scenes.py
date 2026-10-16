@@ -275,6 +275,7 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
             max_features=payload.max_features,
             allowed_types=payload.allowed_types,
             answered=payload.answered_questions,
+            plan_ids=payload.plan_ids,
         )
     except PlanGenerationError as exc:
         # 422 rather than 500: the request was well-formed, the machine simply
