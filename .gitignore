@@ -96,3 +96,9 @@ raw_data/
 # Local dev-server logs (uvicorn / vite stdout+stderr redirects). Runtime noise,
 # never source; see the root uvicorn.*.log / vite.*.log left by `npm run dev`.
 *.log
+
+# Scratch files from working in the tree: latency-measurement payloads, ad-hoc
+# probe JSON. Runtime noise, never source -- one was staged by accident on
+# 17 Oct and had to be removed in a follow-up commit.
+.tmp_*
+*.tmp_*
