@@ -421,6 +421,59 @@ def test_card_accepts_an_llm_supplied_intent() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# A small model does not honour the wire schema reliably
+# --------------------------------------------------------------------------- #
+
+def test_a_card_the_model_under_specifies_still_validates() -> None:
+    """Three shapes a 3B model actually produced, and it dropped the card on all three.
+
+    Measured live against `qwen2.5:3b-instruct` on 16 Oct, six identical calls:
+    **four validated**. The two that failed had a `confidence` with no `pct`
+    (one) and no `confidence` object at all (one), each raising
+    `ValidationError` inside `run_service._llm_explanation`, which discarded an
+    otherwise good explanation and reported "the language model call failed
+    (ValidationError)". A third shape surfaced on the next round of testing:
+    `caveats` arriving as a bare string where the schema says array.
+
+    None of those is the model disagreeing with us. `pct` is a rendering of
+    `level` -- `confidence._clamp_pct` forces it into that level's band anyway --
+    and a single caveat written as a string says exactly what a one-element list
+    says. So the card survives; what it must not do is silently claim confidence
+    the model never expressed.
+    """
+    from app.agent.answer import AnswerCard
+
+    # 1. level + note, no pct.
+    card = AnswerCard.model_validate({
+        "title": "t", "sentence": "s",
+        "confidence": {"level": "Low", "note": "small changes"},
+    })
+    assert card.confidence.level == "Low"
+    assert card.confidence.pct is not None, "pct must be filled from the level"
+
+    # 2. no confidence object at all.
+    card = AnswerCard.model_validate({"title": "t", "sentence": "s"})
+    assert card.confidence.level == "Low", (
+        "a model that states no confidence must not inherit the clean-run cap: "
+        "'code is reporting a clean run' and 'the model declined to say' are "
+        "different claims")
+    assert "did not state" in card.confidence.note, (
+        "the inferred confidence must say it was inferred, or the reader cannot "
+        "tell an omission from a judgement")
+
+    # 3. a scalar where the schema says array.
+    card = AnswerCard.model_validate({
+        "title": "t", "sentence": "s", "caveats": "one caveat",
+    })
+    assert card.caveats == ["one caveat"]
+
+    # And the ladder's own reading is unchanged where the model did comply.
+    card = AnswerCard.model_validate({
+        "title": "t", "sentence": "s",
+        "confidence": {"level": "High", "pct": 90, "note": "n"},
+    })
+    assert card.confidence.pct == 90, "an explicit pct must pass through untouched"
+
 
 def _run() -> int:
     tests = [(n, o) for n, o in sorted(globals().items()) if n.startswith("test_")]

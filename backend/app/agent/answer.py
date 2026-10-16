@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 #: Why a card was assembled by code when no model answered. Defined here rather
 #: than in `services/run_card.py` because both that module and this one need it,
@@ -39,11 +39,44 @@ class StatItem(BaseModel):
 
 
 class Confidence(BaseModel):
-    """How sure the answer is, with a one-line reason the reader can check."""
+    """How sure the answer is, with a one-line reason the reader can check.
+
+    ``pct`` is **optional, and derived from ``level`` when the model omits it**.
+
+    It was required, and that turned out to cost the whole card. Measured against
+    a live Ollama run (`qwen2.5:3b-instruct`): the model intermittently returns
+    ``{"level": "Low", "note": ...}`` with no ``pct``, which raised
+    ``ValidationError: confidence.pct Field required`` and dropped the run
+    explanation back to the code-assembled template -- the reader saw "the
+    language model call failed (ValidationError)" for a reply that was right in
+    every other respect. It reproduced in roughly 1 run in 3, so it read as
+    flakiness rather than as a contract that was too strict.
+
+    Omitting it is not the model being wrong. ``confidence._clamp_pct`` already
+    forces ``pct`` into the band its own ``level`` owns -- a level outside its own
+    band reads as a contradiction -- so the level is what carries the meaning and
+    the percentage is a *rendering* of it. Filling it from the band's midpoint is
+    therefore the same number the ladder would have clamped to anyway, not an
+    invented figure. Declared optional on the wire for the same reason.
+    """
 
     level: Literal["High", "Medium", "Low"]
-    pct: int = Field(ge=0, le=100)
+    pct: int | None = Field(default=None, ge=0, le=100)
     note: str
+
+    @model_validator(mode="after")
+    def _fill_pct_from_level(self) -> "Confidence":
+        # Imported here rather than at module scope: `confidence.py` owns the
+        # band table and the ladder, and importing it lazily keeps this module
+        # importable from `run_card.py` without a cycle.
+        from app.agent.confidence import BANDS, _clamp_pct
+
+        if self.pct is None:
+            low, high = BANDS[self.level]
+            # `_clamp_pct(level, x)` is the identity for an x already inside the
+            # band, so this keeps the band table in exactly one place.
+            self.pct = _clamp_pct(self.level, (low + high) // 2)
+        return self
 
 
 class GroundingReport(BaseModel):
@@ -73,7 +106,11 @@ class AnswerCard(BaseModel):
     l2: str = Field("What to do", description="Label above `todo`.")
     todo: str | None = Field(None, description="What to do next, or None.")
     stats: list[StatItem] = Field(default_factory=list)
-    confidence: Confidence
+    confidence: Confidence | None = Field(
+        None,
+        description="How sure the model is. None becomes Low with a note that says "
+                    "the model did not state one -- see _default_confidence.",
+    )
     caveats: list[str] = Field(default_factory=list)
     followups: list[str] = Field(default_factory=list, max_length=3)
     source: Literal["model", "template"] = Field(
@@ -106,6 +143,72 @@ class AnswerCard(BaseModel):
                     "classifier), 'model' (the model alone), or 'both' (they agreed).",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalise_lists(cls, data: Any) -> Any:
+        """A scalar where a list belongs becomes a one-element list.
+
+        Measured against the same live run, the next failure after `confidence`
+        was `caveats` arriving as a plain string: ``Input should be a valid
+        list``. The schema says array, and a small model writing one caveat
+        reaches for the string form. That is a *container* mismatch, not a
+        disagreement about content -- a single caveat written as a string says
+        exactly what a one-element list says -- so it is unwrapped rather than
+        treated as a malformed card.
+
+        Only the container is repaired. Nothing is added, dropped or reworded,
+        and a genuinely wrong element (an object where a string belongs) still
+        fails below, because that would be a real disagreement rather than a
+        shape the model expressed differently.
+        """
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for key in ("caveats", "followups", "stats"):
+            value = out.get(key)
+            if isinstance(value, (str, bytes)) or (
+                    isinstance(value, dict) and value):
+                out[key] = [value]
+        grounding = out.get("grounding")
+        if isinstance(grounding, dict):
+            ungrounded = grounding.get("ungrounded")
+            if isinstance(ungrounded, (str, bytes)):
+                grounding = dict(grounding)
+                grounding["ungrounded"] = [ungrounded]
+                out["grounding"] = grounding
+        return out
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_confidence(cls, data: Any) -> Any:
+        """A model that omits `confidence` entirely gets Low, and says so.
+
+        Measured against a live Ollama run (`qwen2.5:3b-instruct`), `confidence`
+        was the *whole* object missing in 2 of 6 identical runs -- the same class
+        of failure as the missing `pct`, one level up, and for the same reason:
+        a required field on the wire that a small model drops intermittently.
+
+        Dropping the card over it was a bad trade. The explanation is the
+        valuable part; the confidence is a self-assessment the reader mostly
+        ignores. So the card survives, with the weakest honest reading.
+
+        **Low, not the clean-run cap.** `confidence.apply_ladder` already
+        substitutes `CLEAN_RUN_CAP` when it is handed `None` -- but that path
+        means "code is reporting this, and the run is clean". Here the model
+        wrote the card and then said nothing about how sure it was, which is
+        not the same claim at all, so it must not inherit that one's confidence.
+        The note names the omission, so the reader can see it was inferred.
+        """
+        if not isinstance(data, dict) or data.get("confidence") is not None:
+            return data
+        out = dict(data)
+        out["confidence"] = {
+            "level": "Low",
+            "note": ("the model did not state a confidence for this answer, so "
+                     "it is reported as Low"),
+        }
+        return out
+
 
 #: The JSON schema handed to the provider. Mirrors the model above, minus the
 #: fields only code fills (`source`, `grounding`).
@@ -137,10 +240,16 @@ ANSWER_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "level": {"type": "string", "enum": ["High", "Medium", "Low"]},
+                # Optional on purpose, and omitted from `required` below. It was
+                # required, and a 3B model intermittently left it out, which
+                # raised ValidationError and threw away an otherwise good card
+                # (see Confidence). The percentage is a rendering of `level` --
+                # the ladder clamps it into that level's band -- so a model that
+                # gives the level and the reason has said everything worth saying.
                 "pct": {"type": "integer", "minimum": 0, "maximum": 100},
                 "note": {"type": "string", "maxLength": 200},
             },
-            "required": ["level", "pct", "note"],
+            "required": ["level", "note"],
         },
         "caveats": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 200}},
         "followups": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 120}},
@@ -154,7 +263,12 @@ ANSWER_SCHEMA: dict[str, Any] = {
         # implying the model may set it. `classify_turn` overwrites any value.
         "intent_source": {"type": "string", "enum": ["parser", "model", "both"]},
     },
-    "required": ["title", "sentence", "confidence"],
+    # `confidence` was here and is deliberately not: a 3B model dropped the whole
+    # object in 2 of 6 live runs, and losing the whole explanation to a missing
+    # self-assessment was a bad trade. `AnswerCard` fills Low with a note that
+    # names the omission, so a card that arrives without one is still labelled
+    # honestly rather than discarded.
+    "required": ["title", "sentence"],
 }
 
 
