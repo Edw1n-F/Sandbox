@@ -1409,6 +1409,11 @@ def test_a_synonym_phrasing_is_not_told_it_is_unsupported() -> None:
     are now `EN_ALIASES` entries, so `classify_turn` routes them and the guard
     does not fire at all. Only "wetland" (-> `flood_storage`, no pool) still
     fires. Either way the message stays a system fact, which is what this asserts.
+
+    That makes the pinned list a **false-positive guard only**, not a
+    fires-the-detector list: three of its five members route rather than fire. An
+    entry that "does not fire" is therefore still load-bearing -- deleting it
+    removes the false-positive guard, it does not remove a dead test.
     """
     from app.agent.intent import classify_turn, refusal_detail
 
@@ -1423,12 +1428,17 @@ def test_a_synonym_phrasing_is_not_told_it_is_unsupported() -> None:
             f"kinds:\n{detail}")
 
     # (i) A synonym the vocabulary has not learned must fire, and its message must
-    #     stay a system fact -- this is the case §3B.4 is actually about.
+    #     stay a system fact -- this is the case §3B.4 is actually about. The
+    #     non-vacuity guarantee is anchored HERE, on a genuinely unknown noun,
+    #     rather than on a count over PROPOSAL_SHAPED_GAPS: a count would go stale
+    #     the moment the vocabulary grew, which is the lesson §3B.4 taught.
     synonym = "add a rain garden in the north"
     synonym_detail = refusal_detail("scene-1", synonym)
     assert synonym_detail is not None, (
-        f"{synonym!r}: expected the detector to fire on an unlearned synonym; if "
-        "the vocabulary learned it, pick another unlearned synonym here")
+        f"Pick another unlearned synonym here: {synonym!r} no longer fires the "
+        "detector, so the vocabulary has learned it -- which is good, but this "
+        "test needs a creation request whose noun is genuinely unknown, or it "
+        "passes without exercising the message it exists to check.")
     _assert_system_fact(synonym, synonym_detail)
 
     # (ii) The pinned gaps must not be falsely refused; when one fires, its
