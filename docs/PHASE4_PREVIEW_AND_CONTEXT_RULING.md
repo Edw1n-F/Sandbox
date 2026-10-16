@@ -29,6 +29,11 @@ and it is part of this ruling rather than a neighbour: Feature A's preview rende
 invisible layer is unverifiable. §9 becomes **T00** and blocks T02. Its idiom is verified by *executing* the
 installed Cesium's own resolution functions, not from memory (§9.1).
 
+**§10–§12 were added the same day**: the `EN_ALIASES → POOL_FOR_KIND` audit (§10), the closure analysis
+answering whether the alias rule *provably* closes the defect family (§11 — it does not, and §11.2 says
+exactly which mechanisms it does and does not close), and two conventions for implementers (§12, one of
+which is that a **route docstring is a wire field** — it cost a red suite to learn).
+
 ---
 
 ## 0. AUDIT of `cbd4cef` — what already exists, measured
@@ -466,14 +471,34 @@ interrogative"*. That predicate is **also true of phrasings whose intent IS supp
 the vocabulary yet** — and a message that told such a user their request is unsupported would be **worse than
 today's silence.**
 
-**CORRECTION (19 Oct, measured).** This paragraph originally offered the four `PROPOSAL_SHAPED_GAPS` phrasings
-as the demonstration. **That is now stale, and the T03 engineer measured it first:** three of the four —
-*"green corridor"*, *"permeable plaza"*, *"basin"* — are now in `ai_plan.EN_ALIASES`, so `_match_noun` finds
-them, `classify_turn` routes them, and **the guard does not fire at all**. Only *"wetland"* still reaches the
-guard, and it reaches it for a different reason — it maps to `flood_storage`, which has no pool (§10).
-So the false positive is **not** demonstrated by those four, and test **C4 must assert on a genuinely
-unrecognised synonym** instead. The *message shape* below is still the right ruling; only the illustration was
-wrong.
+**CORRECTION (19 Oct, measured — the T03/T03B implementer measured it first).** This paragraph offered four
+`PROPOSAL_SHAPED_GAPS` phrasings as the demonstration. **The live surface is far narrower than that, and the
+counts matter:**
+
+| | phrasings listed here | reach `classify_turn` as an intervention | **fire `is_unsupported_capability`** |
+|---|---|---|---|
+| as written in this section | 4 | 4 | **4 (implied)** |
+| measured today | 4 | 4 | **1** — only *"create a wetland"* |
+| after R-A (§10.5) | 4 | 4 | **0** |
+
+Three of the four — *"green corridor"*, *"permeable plaza"*, *"basin"* — are now in `ai_plan.EN_ALIASES` (the
+16 Oct additions), so `_match_noun` finds them, `classify_turn` **routes** them, and the guard never fires.
+The fourth, *"create a wetland"*, fires for a **different** reason than this section gave: it resolves to
+`flood_storage`, which has no pool (§10.4) — and **R-A gives it one, so it stops firing too.**
+
+**The ruling stands; only the illustration was wrong — and the narrower surface is an argument *for* the
+ruling, not against it.** The constraint is *"the message may never claim anything about the user's sentence"*.
+That is a statement about the **shape** of the message, so it holds whatever the alias set happens to be. The
+error in this paragraph was proving a shape claim with a **count** — and a count defined by the current
+vocabulary silently goes stale, which is the same failure the message rule exists to prevent, one level up.
+**So do not rebuild the demonstration on a fixed list; state the invariant.**
+
+**Credit where it is due: the implementer's C4 is better than what this paragraph asked for.** It asserts each
+phrasing **routes** *and* that at least one **fires** — `assert refused >= 1`, with the message *"no
+PROPOSAL_SHAPED_GAP fires the detector, so this test exercised nothing; if the vocabulary learned every synonym
+that is fine, but say so rather than passing vacuously"*. That is the anti-vacuity discipline this project has
+needed more than once (a guard that never executes, a suite that passes because it skipped). It is also why
+**R-A cannot simply delete the last firing phrasing** — see §10.5.
 
 **Ruling — every clause must be a fact about the *system*, never a claim about the *user's sentence*:**
 
@@ -1152,12 +1177,25 @@ where the user asked for a flat floodable park — the sixth instance of the fam
 pool nor R-B's rule would fix on its own (§11.1). It is legal only in the same commit as R-A, because before
 R-A it would point at a kind with no pool.
 
-**CONSEQUENCE, and it is a coordination item, not a detail:** this **flips test C3**, which the T03 engineer
-has just written — `assert "flood_storage" not in detail` and `assert KIND_WORD["flood_storage"] not in detail`.
-Those assertions encode §3B.3's *correction*, which was correct **for as long as the pool was absent**. R-A
-retires it deliberately. **Tell the engineer; do not let a green suite go red on them.** C3 becomes: the
-message names all `POOL_FOR_KIND` kinds — including floodable ground, once it is one of them — and still omits
-nothing it can create.
+**CONSEQUENCE — this is a coordination item, and R-A breaks _two_ tests, not one.** Both were written by the
+T03/T03B implementer and both are **correct for the state they encode**; each must be retired **in the R-A
+commit itself, by the same author**, so the red suite has exactly one owner.
+
+1. **C3 flips.** `assert "flood_storage" not in detail` and `assert KIND_WORD["flood_storage"] not in detail`
+   encode §3B.3's correction, which was right **for as long as the pool was absent**. C3 becomes: the message
+   names every `POOL_FOR_KIND` kind — including floodable ground, once it is one — and omits nothing it can
+   create.
+2. **C4 loses its non-vacuity assertion, and this one is easy to miss.** C4 ends with
+   `assert refused >= 1` over `PROPOSAL_SHAPED_GAPS`. **Measured: exactly one member of that list fires the
+   guard today (`create a wetland in the east`), and R-A drops `flood_storage`'s absence, so it becomes zero.**
+   The assertion then fails — deliberately, with the message *"say so rather than passing vacuously"*. The fix
+   is **not** to delete the assertion: C4 must gain a **genuinely unrecognised synonym** (a noun that is in no
+   alias), so the guard stays exercised. Deleting it would convert a live guard test into a vacuous pass, which
+   is the failure mode the assertion exists to prevent.
+
+**So R-A's commit touches: `POOL_FOR_KIND`, `load_grounding`, `parse_intent` (R-B), `EN_ALIASES["flood
+storage"]` (R-6), the `instructions` dict (R-C), **and both C3 and C4**.** That list is why it cannot be split
+across two authors.
 
 **R-B — fix the parser disagreement; do not rely on the guard's placement.**
 `parse_intent` must resolve **one kind per noun occurrence, longest alias wins** — the same rule `_match_noun`
@@ -1312,13 +1350,59 @@ R-B cannot be specified as a self-contained change for someone else to carry —
      that will ever exist, not just today's 29.
   2. `test_every_routed_kind_has_a_pool` — `{k for k in EN_ALIASES.values() if k in KIND_WORD} ⊆
      set(POOL_FOR_KIND)`. Same property: exhaustive by construction.
-- **C3 flips in this commit, and it should be the same author.** `assert "flood_storage" not in detail` encodes
-  §3B.3's correction, which was **correct while the pool was absent**. R-A retires it — that is a deliberate
-  retirement by the change that causes it, which is why the lead's instruction to the T03/T03B engineer to
-  leave C3 alone for now is the right call and consistent with this spec.
+- **C3 and C4 both move in this commit, same author.** C3's `assert "flood_storage" not in detail` encodes
+  §3B.3's correction, which was correct **while the pool was absent**, and R-A retires it deliberately. C4 is
+  the easy one to miss: its closing `assert refused >= 1` over `PROPOSAL_SHAPED_GAPS` is currently satisfied by
+  **exactly one** member (`create a wetland in the east`) and R-A drops that to **zero** — so C4 needs a
+  genuinely unrecognised synonym, **not** the deletion of the assertion, or a live guard test becomes a vacuous
+  pass. Measured counts and both assertions are in §10.5. This is also why the lead's instruction to the
+  T03/T03B engineer to leave C3 alone for now is right: a test that is correct-today-and-retired-later should
+  be retired by the change that retires it.
 - **Must not regress:** `test_intent_parsing_reads_counts` (`parse_intent`'s outputs for the counted cases),
   `test_intent_routing` 14/14, `test_every_proposal_kind_has_a_defined_ledger_effect` (`flood_storage` has an
   `INTERVENTION_EFFECTS` entry, so it should pass), and the gate total the region branch establishes.
 - **Explicitly NOT in this task:** mechanisms C and D. They are structural (call-graph), they are already
   covered by the §3B and §3 removal guards at the router, and the honest fix is risk 12 — move the guard into
   the shared path — which is a separate decision.
+
+---
+
+## 12. Conventions for implementers — recorded because they cost someone a red suite
+
+*(Both found by the T03/T03B implementer during `37c90d3` + `5735bf2`. Recorded here because this doc is what
+implementers read, and its repeated "no schema change" wording is what makes the first one easy to get wrong.)*
+
+**C1 — A route handler's docstring is a wire field, not a comment. Editing it is a wire change.**
+In FastAPI the docstring of a route function **becomes** the OpenAPI `description`, so
+`contracts/openapi.json` changes and `test_openapi_contract` — which regenerates the contract in memory and
+compares byte-for-byte — **goes red**. Measured: the implementer's first cut added the §3B rationale to
+`create_ai_plan`'s docstring, the suite went red, and moving the same prose into an ordinary code comment left
+`contracts/openapi.json` byte-identical.
+
+**Why this belongs in the doc and not just in a brief:** several sections here say *"no schema change"* when
+they mean *"no Pydantic model changes"*. A reader is entitled to conclude that prose on a route is free. **It is
+not.** So: a ruling that says "no wire change" permits an ordinary comment and **forbids a docstring edit on a
+route handler**; if a route docstring genuinely must change, the same commit regenerates
+`contracts/openapi.json`. This is the one place where "documentation" and "the contract" are the same artifact.
+
+**C2 — Use `/tmp/v_pin/bin/python`; do not assume a virtualenv exists in the worktree.**
+`backend/.venv` exists **only in the main tree** (`T1/`). The worktrees have none, so
+`./.venv/bin/python` is a "no such file" — not a stale-pydantic problem. Run tests and any one-off script with
+`/tmp/v_pin/bin/python`, from the target worktree's `backend/` directory so `app` resolves to that branch's
+code. (The `T1/backend/.venv` interpreter also works for read-only auditing against another worktree's tree —
+`cd <worktree>/backend && /path/to/T1/backend/.venv/bin/python -c …` — because `app` resolves from the cwd,
+which is how §9 and §10 were measured.)
+
+**C3 — In a shared worktree, `git add` and `git commit` must be ONE command.**
+The main tree and the worktrees are separate checkouts of **shared branches**, and several people commit into
+them concurrently. A change that sits **staged** between one command and the next is visible to anybody else's
+`git commit`, so it rides along under their message. Measured, in this very file: a 108-line edit to this
+document was staged, a teammate committed their test change, and **the doc edit landed inside
+`ad2ae5a test(proposal-contract): C4 exercises an unlearned synonym`** — content intact, description wrong,
+and an innocent-looking commit that appears to have been written by someone who did not write it.
+
+Nothing was lost and **history was not rewritten** (QA was running; rewriting a shared branch to fix
+provenance is a worse trade than recording it). But the rule is worth carrying: **`git add <file> && git
+commit …` in a single invocation**, never staged across commands. This is the same discipline §11.4 demands of
+R-A's two-test retirement for the opposite reason — there, two authors would leave a red suite with no owner;
+here, one staged file left a commit with no author.
