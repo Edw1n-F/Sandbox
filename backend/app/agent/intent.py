@@ -30,7 +30,14 @@ from __future__ import annotations
 import re
 
 from app.agent.answer import AnswerCard
-from app.services.ai_plan import EN_ALIASES, _match_region, parse_massing_intent
+from app.services.ai_plan import (
+    EN_ALIASES,
+    MASSING_TOOL,
+    POOL_FOR_KIND,
+    REGION_FRACTIONS,
+    _match_region,
+    parse_massing_intent,
+)
 
 __all__ = [
     "INTERVENTION_VERBS",
@@ -41,6 +48,15 @@ __all__ = [
     "NOUNS",
     "classify_turn",
     "parse_intervention_intent",
+    # The refusal path (§3.2 removal, §3B missing capability). Two predicates,
+    # two generated messages, one shared helper -- see `refusal_detail`.
+    "names_a_creation",
+    "is_removal_instruction",
+    "is_unsupported_capability",
+    "capability_create_words",
+    "capability_statement",
+    "removal_refusal_detail",
+    "refusal_detail",
 ]
 
 
@@ -113,6 +129,14 @@ _VERB_RE = re.compile(
 )
 _REMOVAL_RE = re.compile(
     r"\b(" + "|".join(re.escape(v) for v in REMOVAL_VERBS) + r")\b",
+    re.IGNORECASE,
+)
+#: The *creation* verbs on their own. `_VERB_RE` mixes creation and removal so a
+#: hint can be shaped either way; the missing-capability detector (§3B) needs the
+#: creation half alone, because "remove the school" is a removal, not a request
+#: for a capability we lack.
+_CREATION_RE = re.compile(
+    r"\b(" + "|".join(re.escape(v) for v in INTERVENTION_VERBS) + r")\b",
     re.IGNORECASE,
 )
 
@@ -246,3 +270,139 @@ def classify_turn(question: str, card: AnswerCard) -> AnswerCard:
     return card.model_copy(update={
         "intent": "ambiguous", "intent_hint": None, "intent_source": "parser",
     })
+
+
+# --------------------------------------------------------------------------- #
+# The refusal path -- one mechanism, two detectors, two messages (§3.2, §3B)
+# --------------------------------------------------------------------------- #
+#
+# Why this lives here and not in the router: `classify_turn` already decides what
+# a sentence *means* from the server's one vocabulary, and both detectors are
+# statements about a sentence against that vocabulary. The router only raises the
+# 422; the judgement is this pure function, so a test can drive it with no HTTP
+# and no model.
+#
+# Why the lists are generated and never typed (§3B.3): three kind vocabularies
+# disagree by design -- `KIND_WORD` (6, the router's nouns), `POOL_FOR_KIND` (5,
+# what /ai-plan can actually propose), `STYLE_FOR_KIND` (6, what the renderer can
+# draw). Typing the list, or reading the wrong one, produces a message that lies:
+# naming `flood_storage` ("floodable ground") would promise a capability this
+# endpoint does not have, because it is in `KIND_WORD` but has no pool in
+# `POOL_FOR_KIND` and so no member in the `CHOOSE_TOOL` enum.
+
+def names_a_creation(text: str) -> bool:
+    """True when the sentence contains a pinned *creation* verb.
+
+    The chat seam (§3B.5) selects the unsupported-capability card on this,
+    gated on the classifier already having returned `ambiguous`/`parser`, so the
+    two together mean exactly "a creation was asked for and no supported noun
+    matched".
+    """
+    return bool(_CREATION_RE.search(str(text or "")))
+
+
+def is_removal_instruction(text: str) -> bool:
+    """True when the sentence contains a pinned removal verb.
+
+    The detector for §3.2, and deliberately just the verb class: "/ai-plan can
+    only create" is true whatever the noun, so a removal with no supported known
+    noun ("remove the masts") must still be refused rather than quietly created.
+    """
+    return bool(_REMOVAL_RE.search(str(text or "")))
+
+
+def is_unsupported_capability(text: str) -> bool:
+    """True when a creation is asked for and no *proposable* noun matches.
+
+    The detector for §3B: a creation verb is present, the turn is not a question,
+    and no noun maps to a kind with a grounding pool. A noun that maps only to a
+    kind the endpoint cannot propose (`flood_storage` -- "wetland", "floodable
+    park") does **not** count as a match: /ai-plan has no such member, so leaving
+    it to the forced tool is exactly the substitution this guard closes.
+
+    The predicate is *also true of a synonym the vocabulary has not learned yet*.
+    That is why the message it produces is a fact about the system and never a
+    claim about the sentence -- see :func:`capability_statement`.
+    """
+    t = str(text or "")
+    if not t.strip() or _is_interrogative(t) or not _CREATION_RE.search(t):
+        return False
+    noun = _match_noun(t)
+    return noun is None or noun[1] not in POOL_FOR_KIND
+
+
+def capability_create_words() -> list[str]:
+    """The kinds /ai-plan can create, as words, generated from `POOL_FOR_KIND`.
+
+    Built by mapping the *pool* dictionary's keys through `KIND_WORD`, so it
+    cannot drift from the enum `CHOOSE_TOOL` is built from (`sorted(set(
+    POOL_FOR_KIND))`), and `flood_storage` is absent by construction rather than
+    by remembering to omit it.
+    """
+    return [KIND_WORD[kind] for kind in sorted(set(POOL_FOR_KIND))]
+
+
+def capability_statement() -> str:
+    """The capability boundary, every clause a fact about *the system*.
+
+    Written so it answers "add a school" (the reshape line shows what buildings
+    are for) without ever asserting that a school is impossible -- we do not know
+    that; we know only that no supported noun matched. It also answers a synonym
+    like "plant a green corridor": `green space` is listed, so the retry is
+    obvious. See §3B.4 -- a message that told those users their request is
+    unsupported would be worse than today's silence.
+    """
+    ops = MASSING_TOOL["input_schema"]["properties"]["edits"]["items"]["properties"]["op"]["enum"]
+    regions = ", ".join(sorted(REGION_FRACTIONS))
+    return (
+        "I could not match this to an intervention I can create.\n"
+        "  create: " + ", ".join(capability_create_words()) + "\n"
+        "  reshape existing buildings: " + ", ".join(ops) + "\n"
+        "  regions it understands: " + regions + "\n"
+        "Existing buildings come from the surveyed city model and can be "
+        "reshaped, not created.\n"
+        "If you meant one of the above, name it - e.g. \"add a water reservoir "
+        "in the north\"."
+    )
+
+
+def removal_refusal_detail(scene_id: str, text: str) -> str:
+    """The 422 `detail` for a removal sent to /ai-plan (§3.2).
+
+    Names the route that *does* honour a removal, so the refusal is actionable
+    rather than merely negative, and says so explicitly when the sentence mixes a
+    removal with an addition -- silently executing the addition half of a
+    destructive+constructive sentence is the same class of lie as the inversion
+    it replaces.
+    """
+    lines = [
+        "I cannot take anything away on this endpoint: /ai-plan only creates "
+        "interventions, so a removal here would build the very thing you asked "
+        "to remove.",
+        f"Removals are handled by POST /api/scenes/{scene_id}/sandbox/"
+        "resolve-removal.",
+    ]
+    if _CREATION_RE.search(str(text or "")):
+        lines.append(
+            "This sentence mixes a removal with an addition; send the two "
+            "instructions separately so each reaches the route that honours it.")
+    lines.append("This endpoint can create: "
+                 + ", ".join(capability_create_words()) + ".")
+    return "\n".join(lines)
+
+
+def refusal_detail(scene_id: str, instruction: str) -> str | None:
+    """The shared refusal path: the 422 `detail`, or None to proceed.
+
+    One mechanism with two detectors and two distinguishable messages. They are
+    kept separate on purpose: a client grouping by status alone must still be
+    able to tell "you asked to destroy -- a different endpoint" from "you asked
+    to create something this endpoint does not make". Removal is checked first,
+    so a mixed sentence is refused as a removal (its destructive half is the
+    dangerous one) rather than as a missing creation.
+    """
+    if is_removal_instruction(instruction):
+        return removal_refusal_detail(scene_id, instruction)
+    if is_unsupported_capability(instruction):
+        return capability_statement()
+    return None

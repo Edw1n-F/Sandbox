@@ -239,11 +239,33 @@ def create_ai_plan(scene_id: str, payload: AIPlanRequest) -> AIPlanResponse:
     It never invents geometry. If the analysis has not been run there is nothing
     legitimate to site on, and the endpoint says so rather than guessing.
     """
+    from app.agent import intent as agent_intent
     from app.services.ai_plan import (
         PlanGenerationError,
         apply_proposals,
         generate_proposals,
     )
+
+    # The shared refusal path, before any provider is called. It refuses, with a
+    # 422, an instruction this endpoint cannot honour: a removal (§3.2 --
+    # `resolve_removal` is the route that honours one), or a request to create
+    # something it has no pool for (§3B -- "add a school"). Both would otherwise
+    # be answered from the pool, because `route_tools` forces
+    # `select_intervention_sites` and its closed kind enum leaves the model no way
+    # to say "I cannot". The guard closes that door rather than loosening the
+    # schema (the enum is the grounding guarantee), and running it before the
+    # provider means no model is asked to confabulate a rationale for a
+    # substitution. 422 rather than 500 matches the rule the PlanGenerationError
+    # handler below already follows: the request was well-formed, the machine
+    # cannot honour it, and the client needs to know which.
+    #
+    # This rationale is a code comment, not docstring text, on purpose: a
+    # FastAPI route's docstring becomes its OpenAPI `description`, and this task
+    # is ruled to change no schema and no contract -- so the wire stays
+    # byte-identical rather than the contract being regenerated for prose.
+    refusal = agent_intent.refusal_detail(scene_id, payload.instruction)
+    if refusal is not None:
+        raise HTTPException(status_code=422, detail=refusal)
 
     try:
         proposed = generate_proposals(

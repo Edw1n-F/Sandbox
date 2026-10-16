@@ -22,8 +22,14 @@ import time
 from typing import Any, Iterator
 
 from app.agent import confidence, grounding, llm
-from app.agent.answer import ANSWER_SCHEMA, AnswerCard, GroundingReport, template_card
-from app.agent.intent import classify_turn
+from app.agent.answer import (
+    ANSWER_SCHEMA,
+    AnswerCard,
+    GroundingReport,
+    template_card,
+    unsupported_capability_card,
+)
+from app.agent.intent import classify_turn, names_a_creation
 from app.agent.prompts import SYSTEM, json_system, user_turn
 
 __all__ = ["answer", "build_facts", "stream_events"]
@@ -195,11 +201,33 @@ def _no_run_card() -> AnswerCard:
     return card
 
 
+def _classify(question: str, card: AnswerCard) -> AnswerCard:
+    """`classify_turn`, then the unsupported-capability card when it applies.
+
+    One wrapper over the seven `classify_turn` call sites, so the capability card
+    is selected on every path -- the model draft, the template fallback, the
+    unstreamed retry, the stream, and the no-run branch alike. `intent.py` is not
+    touched: its precedence ladder and its pin are what keep the 14 routing tests
+    stable, and this adds no member to `intent`.
+
+    The trigger is exactly the shape the classifier already computes (§3B.5): the
+    turn came back `ambiguous` *from the parser* and a creation verb is present.
+    Those two together mean "a creation was asked for and no supported noun
+    matched" -- which is why no new data is needed and why a question is exempt
+    (an interrogative is already `question`, never `ambiguous`).
+    """
+    routed = classify_turn(question, card)
+    if (routed.intent == "ambiguous" and routed.intent_source == "parser"
+            and names_a_creation(question)):
+        return unsupported_capability_card(question, routed)
+    return routed
+
+
 def answer(question: str, facts: dict[str, Any],
            history: list[dict[str, str]] | None = None) -> AnswerCard:
     """One answer, no streaming. Used by the plain POST endpoint and by tests."""
     if not facts:
-        return classify_turn(question, _no_run_card())
+        return _classify(question, _no_run_card())
     try:
         draft = _draft(facts, question, history)
     except llm.ProviderUnavailable:
@@ -207,11 +235,11 @@ def answer(question: str, facts: dict[str, Any],
         # endpoint and /chat/stream disagree on the same instruction: the stream
         # path classifies, this one did not, so "add a water reservoir in the
         # north" arrived as a result card here and a proposal there.
-        return classify_turn(question, template_card(facts))
+        return _classify(question, template_card(facts))
     except llm.LLMError:
-        return classify_turn(question, template_card(facts))
+        return _classify(question, template_card(facts))
     if not draft:
-        return classify_turn(question, template_card(facts))
+        return _classify(question, template_card(facts))
     card = _card_from(draft, facts, revised=False)
     # One revision: name the offending numbers and ask again.
     if card.grounding and not card.grounding.ok:
@@ -227,7 +255,7 @@ def answer(question: str, facts: dict[str, Any],
     # Deterministic routing (DESIGN §2.5): the classifier runs after the card is
     # built and may only raise the intent, so a proposal-shaped instruction
     # routes to the gate even when no model answered.
-    return _cap_residual(classify_turn(question, card), facts)
+    return _cap_residual(_classify(question, card), facts)
 
 
 def stream_events(question: str, facts: dict[str, Any],
@@ -256,7 +284,7 @@ def stream_events(question: str, facts: dict[str, Any],
         # The no-run branch is the one that matters today (DESIGN R1): with no
         # model key the card is code-assembled, and only `classify_turn` can lift
         # a proposal-shaped instruction out of the default "question".
-        card = classify_turn(question, _no_run_card())
+        card = _classify(question, _no_run_card())
         yield {"event": "answer", "answer": card.model_dump()}
         yield {"event": "done", "status": "done", "ms": int((time.time() - started) * 1000)}
         return
@@ -360,6 +388,6 @@ def stream_events(question: str, facts: dict[str, Any],
     # the model draft, the template card and the unstreamed retry alike. It can
     # only raise the intent, never lower it, so the model's own classification
     # still counts when the parser recognises nothing.
-    card = classify_turn(question, card)
+    card = _classify(question, card)
     yield {"event": "answer", "answer": card.model_dump()}
     yield {"event": "done", "status": "done", "ms": int((time.time() - started) * 1000)}

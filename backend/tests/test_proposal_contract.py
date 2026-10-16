@@ -1217,6 +1217,307 @@ def test_card_states_the_things_this_project_cannot_know() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# 6. A capability the executor does not have (§3B) -- C1..C6
+#
+# The third member of the family §3.4 named: an instruction the executor cannot
+# honour, answered by producing something from the pool instead of declining.
+# §3B.1 shows the mechanism is not an unmatched noun falling back -- it is a
+# *forced tool with a closed enum* (`route_tools` forces
+# `select_intervention_sites`; its schema requires `selections`, each item
+# requires an `intervention_type` from a five-member enum, and the tool requires
+# a `rationale`). So the model's only legal move is to name one of the five kinds
+# and narrate the substitution. The fix is a guard that refuses *before any
+# provider runs* -- a 422, not a 200 with zero features, because no model ran and
+# so there is no AI output to label (invariant 3) -- rather than a looser schema.
+# --------------------------------------------------------------------------- #
+
+#: Requests for something this sandbox has no pool to create. The heuristic is
+#: innocent (it returns 0 features for all of them); the substitution is on the
+#: forced LLM leg only, which is why C1 drives the endpoint directly.
+BUILDING_REQUESTS: list[str] = [
+    "add a school",
+    "add 3 buildings",
+    "add a hospital",
+    "add an office block",
+]
+
+#: Words that would turn the message into a claim about the *sentence* rather
+#: than a fact about the system. §3B.4: a message that told a synonym user their
+#: request is unsupported would be *worse* than today's silence.
+UNSUPPORTED_CLAIM_WORDS: tuple[str, ...] = (
+    "not supported", "unsupported", "not available", "impossible",
+    "cannot be created", "no such",
+)
+
+
+def _require_grounded_scene() -> str:
+    """The seeded scene, or a loud failure -- never a silent skip.
+
+    An assertion that cannot run here would be indistinguishable from a pass,
+    which is the same defect R21 exists to remove from the overlap guard.
+    """
+    scene_id = _grounded_scene()
+    if scene_id is None:
+        raise AssertionError(
+            "no grounded scene in this environment: the capability guard cannot "
+            "be observed, and this test must not report a pass it did not earn")
+    return scene_id
+
+
+def test_a_building_request_is_refused_not_substituted() -> None:
+    """C1: a building request is refused (422), never filled with a pool kind.
+
+    Driven straight at `/ai-plan`, not through the chat or the UI. The
+    substitution is masked in the browser -- a chat turn for "add a school"
+    returns `ambiguous` and never reaches the gate -- exactly like the removal
+    inversion (§3.4), so a walkthrough cannot see it. Today (guardless) the LLM
+    leg returns a `green_space` whose rationale names the school, and the
+    heuristic leg returns a 200 with zero features; neither is a refusal, and
+    this asserts one.
+    """
+    scene_id = _require_grounded_scene()
+    for instruction in BUILDING_REQUESTS:
+        resp = client.post(f"/api/scenes/{scene_id}/ai-plan", json={
+            "instruction": instruction, "provider": "heuristic", "apply": False})
+        assert resp.status_code == 422, (
+            f"{instruction!r}: expected the guard to refuse with 422, got "
+            f"{resp.status_code}: {resp.text[:200]}")
+        body = resp.json()
+        assert body.get("detail"), f"{instruction!r}: a refusal with no detail"
+        # And, defensively, no proposal of any kind leaked into the body.
+        assert not body.get("proposals"), (
+            f"{instruction!r}: a refused request carried proposals: "
+            f"{body.get('proposals')}")
+
+
+def test_the_substitution_is_still_reproducible_from_the_schema() -> None:
+    """C2: the substitution is *server-permitted*, not a model misbehaving.
+
+    Replays a recorded transport that returns a `select_intervention_sites`
+    selection for a building instruction, straight through the OpenAI-compatible
+    provider. It succeeds -- because `route_tools` forces that tool for a
+    non-massing turn, and the tool's kind enum is closed and its `selections` is
+    required, so declining is a schema violation. This pins the §3B.1 diagnosis
+    so a later reader does not "fix" the model: the model was filling the only
+    shape we permitted.
+    """
+    from app.services.ai_plan import (
+        CHOOSE_TOOL,
+        Grounding,
+        OpenAICompatProvider,
+        route_tools,
+    )
+
+    # The mechanism, asserted directly: the tool is forced and cannot decline.
+    _tools, forced = route_tools("add a school")
+    assert forced == CHOOSE_TOOL["name"], forced
+    enum = (CHOOSE_TOOL["input_schema"]["properties"]["selections"]["items"]
+            ["properties"]["intervention_type"]["enum"])
+    assert "green_space" in enum, enum
+    assert CHOOSE_TOOL["input_schema"]["required"] == ["selections"], (
+        "a schema that let the model omit `selections` could decline; the "
+        "substitution depends on `selections` being required")
+
+    site = {
+        "geometry": {"type": "Polygon", "coordinates": [[
+            [113.9935, 22.4318], [113.9942, 22.4318], [113.9942, 22.4325],
+            [113.9935, 22.4325], [113.9935, 22.4318]]]},
+        "evidence": "largest contiguous vegetated block",
+        "areaHa": 2.5,
+        "centroid": [113.99385, 22.43215],
+        "metrics": {"greenShare": 0.9},
+    }
+    grounding = Grounding(bounds=(113.99, 22.43, 114.00, 22.44), green_sites=[site])
+
+    def recorded_transport(_url, _key, _payload):
+        return {"choices": [{"message": {"tool_calls": [{"function": {
+            "name": CHOOSE_TOOL["name"],
+            "arguments": json.dumps({"selections": [{
+                "site_id": "green_space#0",
+                "intervention_type": "green_space",
+                "rationale": ("The largest contiguous vegetated block is the most "
+                              "suitable for adding a school"),
+            }]}),
+        }}]}}]}
+
+    provider = OpenAICompatProvider(base_url="http://unit-test/v1",
+                                    model="unit-test-model", api_key="k",
+                                    transport=recorded_transport)
+    features = provider.propose("add a school", grounding)
+
+    assert features, (
+        "the recorded selection was dropped: the substitution is then NOT "
+        "server-permitted, and the §3B.1 diagnosis (a forced closed-enum tool) "
+        "would be wrong")
+    assert features[0]["intervention_type"] == "green_space"
+    assert "school" in features[0]["params"]["rationale"]
+
+
+def test_a_missing_capability_refusal_names_the_supported_set() -> None:
+    """C3: the refusal's lists are generated from their owning constants.
+
+    The anti-drift pin. The `detail` must name all five `POOL_FOR_KIND` kinds and
+    all six massing ops, each read from the constant that owns it -- and must NOT
+    name `flood_storage`, which is in `KIND_WORD`/`STYLE_FOR_KIND` but has no pool
+    and so no member in the `CHOOSE_TOOL` enum (§3B.3's correction). Naming
+    "floodable ground" would promise a capability this endpoint lacks -- the same
+    class of error as the substitution it explains.
+    """
+    from app.agent.intent import KIND_WORD
+
+    scene_id = _require_grounded_scene()
+    resp = client.post(f"/api/scenes/{scene_id}/ai-plan", json={
+        "instruction": "add a school", "provider": "heuristic", "apply": False})
+    assert resp.status_code == 422, resp.text
+    detail = resp.json()["detail"]
+
+    for kind in sorted(set(ai_plan.POOL_FOR_KIND)):
+        assert KIND_WORD[kind] in detail, (kind, KIND_WORD[kind], detail)
+    for op in ai_plan.MASSING_TOOL["input_schema"]["properties"]["edits"][
+            "items"]["properties"]["op"]["enum"]:
+        assert op in detail, (op, detail)
+    for region in sorted(ai_plan.REGION_FRACTIONS):
+        assert region in detail, (region, detail)
+    # NOTE, for the R-A author (§10.5): these two assertions encode §3B.3's
+    # correction, and they are TRUE only while `flood_storage` has no pool. Ruling
+    # R-A deliberately adds that pool and retires them. When it lands, flip both
+    # to `in detail` -- in the R-A commit, so the red suite has exactly one
+    # author (the change that retires them). Do not soften them early.
+    assert "flood_storage" not in detail
+    assert KIND_WORD["flood_storage"] not in detail, (
+        f"the message names {KIND_WORD['flood_storage']!r}, which /ai-plan cannot "
+        "propose: its pool is absent from POOL_FOR_KIND")
+
+
+def test_a_synonym_phrasing_is_not_told_it_is_unsupported() -> None:
+    """C4: the synonym guard (§3B.4) -- the biggest risk in §3B, and silent.
+
+    The detector fires on a *synonym* as readily as on a genuine miss, so the
+    message must never claim the user's request is unsupported: every clause is a
+    fact about the system, and the supported set is listed so the retry is
+    obvious. If a later contributor sharpens the wording into "a school is not
+    supported", this fails.
+
+    Two families are checked. (i) A genuinely unrecognised synonym --
+    "add a rain garden in the north", a real green-space feature the vocabulary
+    has not learned -- so the detector fires and this message is what the user
+    sees. (ii) The pinned `PROPOSAL_SHAPED_GAPS`, which must NOT be falsely
+    refused.
+
+    FINDING, measured: §3B.4 offered all four gaps as the false-positive
+    demonstration, but three -- "green corridor", "permeable plaza", "basin" --
+    are now `EN_ALIASES` entries, so `classify_turn` routes them and the guard
+    does not fire at all. Only "wetland" (-> `flood_storage`, no pool) still
+    fires. Either way the message stays a system fact, which is what this asserts.
+
+    That makes the pinned list a **false-positive guard only**, not a
+    fires-the-detector list: three of its five members route rather than fire. An
+    entry that "does not fire" is therefore still load-bearing -- deleting it
+    removes the false-positive guard, it does not remove a dead test.
+    """
+    from app.agent.intent import classify_turn, refusal_detail
+
+    def _assert_system_fact(phrase: str, detail: str) -> None:
+        low = detail.lower()
+        for word in UNSUPPORTED_CLAIM_WORDS:
+            assert word not in low, (
+                f"{phrase!r}: the refusal asserts {word!r} about the request -- "
+                f"it must be a fact about the system:\n{detail}")
+        assert "green space" in low and "water reservoir" in low, (
+            f"{phrase!r}: the retry is not obvious without the supported "
+            f"kinds:\n{detail}")
+
+    # (i) A synonym the vocabulary has not learned must fire, and its message must
+    #     stay a system fact -- this is the case §3B.4 is actually about. The
+    #     non-vacuity guarantee is anchored HERE, on a genuinely unknown noun,
+    #     rather than on a count over PROPOSAL_SHAPED_GAPS: a count would go stale
+    #     the moment the vocabulary grew, which is the lesson §3B.4 taught.
+    synonym = "add a rain garden in the north"
+    synonym_detail = refusal_detail("scene-1", synonym)
+    assert synonym_detail is not None, (
+        f"Pick another unlearned synonym here: {synonym!r} no longer fires the "
+        "detector, so the vocabulary has learned it -- which is good, but this "
+        "test needs a creation request whose noun is genuinely unknown, or it "
+        "passes without exercising the message it exists to check.")
+    _assert_system_fact(synonym, synonym_detail)
+
+    # (ii) The pinned gaps must not be falsely refused; when one fires, its
+    #      message must hold the same line.
+    for phrase in PROPOSAL_SHAPED_GAPS:
+        out = classify_turn(phrase, _blank_card())
+        assert out.intent == "intervention", (
+            f"{phrase!r} no longer reads as a proposal to the router; the synonym "
+            "guard assumes it does")
+        detail = refusal_detail("scene-1", phrase)
+        if detail is None:
+            continue  # routed as an intervention: nothing was claimed
+        _assert_system_fact(phrase, detail)
+
+
+def test_the_unsupported_card_dates_the_cause_correctly() -> None:
+    """C5: the card states the *true* cause, with or without a run (§3B.5).
+
+    `_empty_card` dates the cause to a missing run ("No run in scope yet",
+    "Press Run Simulation"), and the generic run card answers a capability gap
+    with "the run is unchanged from the baseline". Both attribute a capability
+    gap to something that is not the cause. Fails today: with a run in scope the
+    cause is a run measure, and without one the note blames a missing run.
+    """
+    from app.agent import chat_service, llm
+
+    def _unavailable(*_args, **_kwargs):
+        raise llm.ProviderUnavailable("test: no model configured")
+
+    original_json, original_stream = llm.complete_json, llm.stream_text
+    llm.complete_json = _unavailable
+    llm.stream_text = _unavailable
+    try:
+        with_run = chat_service.answer("add a school", _facts())
+        without_run = chat_service.answer("add a school", {})
+    finally:
+        llm.complete_json, llm.stream_text = original_json, original_stream
+
+    for label, card in (("with a run in scope", with_run),
+                        ("with nothing run yet", without_run)):
+        note = card.confidence.note if card.confidence else ""
+        assert "No run in scope yet" not in note, (label, note)
+        assert "Press Run Simulation" not in (card.todo or ""), (label, card.todo)
+        assert card.title != "Nothing to explain yet", (label, card.title)
+        assert card.cause and "create" in card.cause.lower() \
+            and "green space" in card.cause, (
+                f"{label}: the cause does not state the capability boundary: "
+                f"{card.cause!r}")
+
+
+def test_the_guard_does_not_fire_on_a_question() -> None:
+    """C6: the detector must not fire on an interrogative.
+
+    "can you add a school?" and "what would happen if I added buildings?" are
+    questions about the run, not requests to create. Both keep their normal card
+    and must not be refused by `/ai-plan`.
+    """
+    from app.agent.intent import (
+        classify_turn,
+        is_unsupported_capability,
+        refusal_detail,
+    )
+
+    scene_id = _require_grounded_scene()
+    for question in ("can you add a school?",
+                     "what would happen if I added buildings?"):
+        assert not is_unsupported_capability(question), question
+        assert refusal_detail("scene-1", question) is None, question
+        out = classify_turn(question, _blank_card())
+        assert out.intent == "question", (question, out.intent)
+
+        resp = client.post(f"/api/scenes/{scene_id}/ai-plan", json={
+            "instruction": question, "provider": "heuristic", "apply": False})
+        assert resp.status_code == 200, (
+            f"{question!r}: the guard fired on a question ({resp.status_code}): "
+            f"{resp.text[:200]}")
+
+
+# --------------------------------------------------------------------------- #
 # Minimal runner (pytest is not installed in this environment)
 # --------------------------------------------------------------------------- #
 
