@@ -134,6 +134,28 @@ project file's.
 What it does not do: shape is still the candidate's contour, not something the
 user draws, and green space and permeable paving have nothing to set.
 
+**Three honesty holes were closed on 17 Oct**, all in the sandbox's own path:
+
+1. **A hand-set depth was recorded as a measurement.** `POST /ai-plan/apply` with
+   a client-set `params.storageDepthM` persisted it and labelled it
+   `inputSources: ai_estimate` -- a served number whose provenance said the AI
+   chose a value it never saw. A depth arriving with a request is now the
+   *sender's* own, labelled `user`, and one outside the ledger's range is a 422
+   rather than a silent fall back to the class default.
+2. **`/ai-plan/apply` persisted whatever it was handed.** The client owns the
+   proposals between the gate and the apply, so a geometry could change in
+   between; Phase 2's M6. The batch is now re-validated before anything is
+   pinned, and a proposal moved onto surveyed buildings comes back
+   `BUILDING_OVERLAP` in `rejected[]` with nothing persisted. A feature already
+   on the sandbox is not a conflict with itself, so re-confirming stays the
+   no-op the pin fingerprint already made it.
+3. **An empty region blamed a rate limit.** "add a water reservoir in the south"
+   has no candidate (every reservoir is in the north) and answered with the
+   generic "no candidate survived the constraints" plus a 429 note that had
+   nothing to do with it. It now names the region, the kind, and where that kind
+   does have candidates. Deliberately not a `rejected[]` entry: that array is the
+   constraint engine's, and this was never a constraint outcome.
+
 One reading to know before a demo: on the large reservoir site, **unstored runoff
 does not move with depth** (7,777.7 m³ at 0.05 m and at 5 m, 50 mm storm) while
 storage capacity does (10,561 → 317,593 m³). The unstored volume is water that
@@ -323,7 +345,7 @@ copied from the code's output.
 | backend `test_agent` | 31/31 | `python tests/test_agent.py` — grounding and the confidence ladder, no key |
 | backend `test_published_scenarios` | 28/28 | `python tests/test_published_scenarios.py` |
 | backend `test_hourly_storm` | 27/27 | `python tests/test_hourly_storm.py` |
-| backend `test_sandbox` | 24/24 | `python tests/test_sandbox.py` — Stage 4: suggestions, input card, add, modify, remove |
+| backend `test_sandbox` | 32/32 | `python tests/test_sandbox.py` — Stage 4: suggestions, input card, add, modify, remove, plus the three honesty checks (a hand-set depth is never recorded as a measurement; `/ai-plan/apply` re-validates before it pins; an empty region names the region) |
 | backend `test_pins` | 18/18 | `python tests/test_pins.py` |
 | backend `test_intervention_geometry` | 18/18 | `python tests/test_intervention_geometry.py` |
 | backend `test_proposal_contract` | 23/23 | `python tests/test_proposal_contract.py` — the proposal wire, constraints, parameter card and routing; clears what it stages, since apply now pins to the sandbox |

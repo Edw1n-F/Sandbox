@@ -763,6 +763,81 @@ def _point_in_region(lon: float, lat: float,
     return west <= lon <= east and south <= lat <= north
 
 
+def empty_region_message(
+    instruction: str,
+    grounding: "Grounding",
+) -> str | None:
+    """Why a named region produced nothing, in the instruction's own terms.
+
+    ``None`` when the instruction names no region (or names ``all``): the
+    generic "nothing could be placed" is then the honest sentence, because the
+    whole area was considered.
+
+    When a region *is* named and holds no candidate of a requested kind, the
+    answer is a fact about the site, not about the request or the model -- so it
+    names the region, the kind, and **where that kind does have candidates**.
+    The last clause is what makes the answer actionable: "no water reservoir in
+    the south" alone leaves a planner with nowhere to go, and the region the
+    kind does occupy is a number this module already has.
+
+    Deliberately *not* a ``rejected[]`` entry. That array is defined as the
+    proposals that failed the **constraint** engine and carries a closed
+    ``reasonCode``; "there was never a candidate here" is not a constraint
+    outcome, and filing it there would make two different physical facts
+    indistinguishable to a client grouping refusals by code.
+    """
+    region = _match_region(instruction)
+    if region is None or region == "all":
+        return None
+    bounds = getattr(grounding, "bounds", None)
+    if bounds is None:
+        return None
+
+    intents = parse_intent_counts(instruction)
+    if not intents:
+        return None
+
+    parts: list[str] = []
+    any_empty = False
+    for kind, _count in intents:
+        pool_name = POOL_FOR_KIND.get(kind)
+        pool = getattr(grounding, pool_name, []) if pool_name else []
+        if not pool:
+            continue
+        eligible = sites_in_region(pool, region, bounds)
+        if eligible:
+            continue
+        any_empty = True
+        # Which regions this kind *does* occupy, computed with the same
+        # predicate that emptied the pool -- one authority, so the sentence and
+        # the filter cannot disagree.
+        elsewhere = sorted({
+            name for name in REGION_FRACTIONS
+            if name not in ("all", region)
+            and sites_in_region(pool, name, bounds)
+        })
+        # A local label map, not `sandbox.KIND_LABEL`: `sandbox` imports this
+        # module, so reaching back for it would be a cycle. Same wording, so a
+        # reader meets one name for one kind across both surfaces.
+        label = kind.replace("_", " ")
+        if elsewhere:
+            parts.append(
+                f"no {label} candidate lies in the {region} region "
+                f"(this kind's candidates are in: {', '.join(elsewhere)})")
+        else:
+            parts.append(
+                f"no {label} candidate exists anywhere in the study area")
+
+    if not any_empty:
+        return None
+    return (
+        f"Nothing was placed for the {region} region: "
+        + "; ".join(parts)
+        + ". Nothing was invented — a site outside the region you asked for "
+          "would be a different answer, not this one."
+    )
+
+
 def sites_in_region(
     pool: list[dict[str, Any]],
     region: str | None,
@@ -2339,6 +2414,30 @@ def get_provider(prefer: str = "auto") -> Provider:
     raise PlanGenerationError(f"unknown provider {prefer!r}")
 
 
+def _constraint_inputs(scene_id: str) -> tuple[Any, Any, Any] | None:
+    """The three arguments ``validate_batch`` needs, or None when unavailable.
+
+    One construction, read by both the propose path (`generate_proposals`) and
+    the apply path (`apply_proposals`), so the gate a proposal passes on the way
+    out is the gate it passes on the way in. Two copies could drift, and a
+    proposal accepted under one set of masks and re-checked under another would
+    mean the two halves of the confirm gate disagreed about what a constraint is.
+
+    ``None`` means no ledger grid is on disk, which is an environment fact the
+    callers report rather than an error: ``_overlay_common`` is a script-only
+    module, hence the local imports.
+    """
+    from app.services import proposal_constraints as _constraints
+    from app.services.sandbox_model import load_grids as _load_grids
+    from _overlay_common import load_overlay as _load_overlay
+
+    grids = _load_grids()
+    if grids is None:
+        return None
+    return grids, _constraints.building_mask(_load_overlay()), \
+        _constraints.claimed_cells_for(scene_id, grids)
+
+
 def generate_proposals(
     scene_id: str,
     instruction: str,
@@ -2476,20 +2575,14 @@ def generate_proposals(
     rejected: list[dict[str, Any]] = []
     try:
         from app.services import proposal_constraints as _constraints
-        from app.services.sandbox_model import load_grids as _load_grids
-        # Imported here, not at module scope: `_overlay_common` is a script-only
-        # module that `load_grounding` pulls in lazily, and a top-level import
-        # would make importing this service depend on the raster scripts.
-        from _overlay_common import load_overlay as _load_overlay
 
-        grids = _load_grids()
-        if grids is None:
+        parts = _constraint_inputs(scene_id)
+        if parts is None:
             grounding.notes.append(
                 "constraints were not checked: no ledger grid is available "
                 "(run make_wetgrid.py), so these proposals are unvalidated")
         else:
-            occupied = _constraints.building_mask(_load_overlay())
-            claimed = _constraints.claimed_cells_for(scene_id, grids)
+            grids, occupied, claimed = parts
             features, rejected = _constraints.validate_batch(
                 grids, features, occupied, claimed)
     except Exception as exc:  # noqa: BLE001 - a validator bug must not empty the gate
@@ -2499,6 +2592,12 @@ def generate_proposals(
             f"constraint validation failed ({exc}); proposals are unvalidated")
 
     if not features:
+        # A named region that holds no candidate of the requested kind is a fact
+        # about the site, and it is reachable from the demo's own vocabulary
+        # ("add a water reservoir in the south" -- every reservoir candidate is
+        # in the north). Said in its own terms instead of the generic sentence,
+        # which named neither the region nor the reason.
+        region_message = empty_region_message(effective_instruction, grounding)
         return {
             "features": [],
             "rejected": rejected,
@@ -2509,7 +2608,7 @@ def generate_proposals(
                 "green": len(grounding.green_sites),
                 "paving": len(grounding.paving_sites),
             },
-            "message": (
+            "message": region_message or (
                 "Nothing could be placed: no candidate survived the "
                 "constraints, or no provider returned a usable answer for this "
                 "instruction. Nothing was invented."
@@ -2556,12 +2655,62 @@ def apply_proposals(
     user left out goes to the AI's estimate, and which was which is recorded in
     the feature's ``params.inputSources``.
 
-    Returns ``planId`` (the staged plan), ``features`` and ``types``.
+    **The batch is re-validated here, before anything is pinned** (Phase 2 R19).
+    The client owns the proposals between the two calls, so a geometry or a
+    parameter can change in between; without this the apply path would persist
+    whatever it was handed while the proposal's own ``parameters`` block still
+    described the number the server chose. A feature that no longer passes is
+    refused into ``rejected[]`` rather than pinned.
+
+    A feature already on the sandbox is *not* a conflict with itself: its own
+    claimed cells are subtracted before the check, so re-confirming the same
+    proposal stays the idempotent no-op `pins.pin`'s fingerprint already makes
+    it.
+
+    Returns ``planId`` (the staged plan), ``features``, ``types`` and
+    ``rejected``.
     """
+    from app.services import proposal_constraints as _constraints
     from app.services import sandbox
 
     if not features:
         raise PlanGenerationError("no features to apply")
+
+    try:
+        parts = _constraint_inputs(scene_id)
+    except Exception as exc:  # noqa: BLE001 - a validator bug must not empty the gate
+        raise PlanGenerationError(
+            f"could not check the constraints ({exc}); nothing was applied") from exc
+    if parts is None:
+        raise PlanGenerationError(
+            "no ledger grid is available (run scripts/make_wetgrid.py), so "
+            "these proposals cannot be checked; nothing was applied")
+    grids, occupied, claimed = parts
+
+    # Each feature's own ground is not a conflict with itself. Subtracting it is
+    # what keeps a second confirmation of the same proposal a no-op rather than
+    # an OVERLAPS_STAGED refusal against the row it would have resumed.
+    mine = set()
+    for f in features:
+        try:
+            coords = (f.get("geometry") or {}).get("coordinates")
+            mine |= {(int(r), int(c))
+                     for r, c in _constraints._polygon_cells(grids, coords)}
+        except Exception:  # noqa: BLE001 - an unreadable geometry is refused below
+            continue
+    accepted, rejected = _constraints.validate_batch(
+        grids, features, occupied, claimed - mine)
+    if not accepted:
+        return {
+            "planId": None,
+            "features": 0,
+            "provider": provider,
+            "types": [],
+            "groundingNotes": grounding_notes,
+            "rejected": rejected,
+        }
+    features = accepted
+
     try:
         staged = sandbox.stage(
             scene_id,
@@ -2587,6 +2736,7 @@ def apply_proposals(
         "types": staged["types"],
         "groundingNotes": grounding_notes,
         "candidateCounts": candidate_counts,
+        "rejected": rejected,
     }
 
 

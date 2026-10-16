@@ -63,6 +63,59 @@ _DEPTH_LABEL: dict[str, str] = {
 }
 
 
+def _server_issued(params: dict[str, Any]) -> bool:
+    """Was this feature's depth produced by the server, or typed by the client?
+
+    Only a feature the server itself built carries a ``provenance.source`` it
+    wrote (``suggestion`` for a candidate read from the wet grid). A
+    ``/ai-plan`` proposal carries no depth at all -- the number lives in the
+    response's ``parameters`` display block, never in ``params`` -- so a depth
+    that arrives on an apply request was typed by whoever sent it.
+
+    This distinction is the whole point: a server-measured depth may be
+    described as measured, and a client's may not.
+    """
+    provenance = params.get("provenance")
+    return isinstance(provenance, dict) and provenance.get("source") == "suggestion"
+
+
+def _client_typed_depths(feature: dict[str, Any]) -> dict[str, Any]:
+    """The depth values a request supplied for one feature, as *its* values.
+
+    Returned in the shape ``apply_inputs`` reads as ``values``, so a hand-set
+    depth is recorded ``user`` in ``params.inputSources`` and the served number
+    and its provenance label agree. A server-issued feature keeps its own depth
+    as the AI estimate instead, because there it really was measured.
+
+    A client value outside the ledger's range is left for ``apply_inputs`` to
+    refuse with a 422, rather than being dropped: a number silently replaced by
+    the default is the disclosure hole this function exists to close.
+    """
+    if _server_issued(feature.get("params") or {}):
+        return {}
+    params = feature.get("params") or {}
+    out: dict[str, Any] = {}
+    for key in ("storageDepthM", "storage_depth_m"):
+        if params.get(key) is not None:
+            out["storageDepthM"] = params[key]
+    return out
+
+
+def _without_client_depths(feature: dict[str, Any]) -> dict[str, Any]:
+    """The feature with any client-supplied depth removed from ``params``.
+
+    ``apply_inputs`` writes the depth back from ``values`` (labelled ``user``)
+    or from the class default (labelled ``ai_estimate``). Leaving the client's
+    number in place would have ``inputs_for`` describe it as "measured for this
+    site", which is false for a number this server never measured.
+    """
+    if _server_issued(feature.get("params") or {}):
+        return feature
+    params = {k: v for k, v in (feature.get("params") or {}).items()
+              if k not in ("storageDepthM", "storage_depth_m", "inputSources")}
+    return {**feature, "params": params}
+
+
 def inputs_for(kind: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """The values the run reads for ``kind``, with the AI's estimate for each.
 
@@ -255,6 +308,10 @@ def stage(scene_id: str, features: list[dict[str, Any]],
     staged plan stays idempotent by fingerprint and the 25%/40% caps stay the
     ledger's.
 
+    A depth already sitting in a feature's ``params`` is treated as the sender's
+    own value unless the server issued it (``_client_typed_depths``), so a
+    hand-set number is stored labelled ``user`` and never described as measured.
+
     Validated as a batch before anything is written: one bad depth refuses the
     whole confirmation rather than leaving half of it on the sandbox.
     """
@@ -268,8 +325,12 @@ def stage(scene_id: str, features: list[dict[str, Any]],
         kind = feature.get("interventionType") or feature.get("intervention_type")
         if not kind:
             raise InputError("a feature needs an interventionType")
-        params = apply_inputs(kind, feature.get("params"),
-                              values[i] if i < len(values) else None)
+        # The card's answers win; a depth the request typed into `params` is the
+        # sender's own value and joins them, so neither is read as a measurement.
+        answers = dict(_client_typed_depths(feature))
+        answers.update(values[i] if i < len(values) else None or {})
+        params = apply_inputs(kind, _without_client_depths(feature).get("params"),
+                              answers)
         prepared.append({
             "geometry": feature["geometry"],
             "interventionType": kind,

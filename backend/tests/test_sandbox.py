@@ -18,6 +18,7 @@ from _tmpstore import isolate_store  # noqa: E402
 isolate_store()
 
 from fastapi.testclient import TestClient  # noqa: E402
+import numpy as np  # noqa: E402
 
 from app.main import app  # noqa: E402
 from app.services import sandbox  # noqa: E402
@@ -160,8 +161,115 @@ def main() -> int:
     check("and the ground it held can be suggested again",
           any(s["feature"]["geometry"] == reservoir["feature"]["geometry"] for s in _suggest([plan_id])))
 
+    print("honesty: a hand-set depth is never recorded as a measurement")
+    # A client that puts a depth straight into `params` (rather than answering
+    # the input card) used to have it persisted and labelled `ai_estimate` --
+    # a served value whose provenance label said the AI chose a number it never
+    # saw. It is the sender's own value and must be labelled `user`.
+    for bad, why in ((40, "out of range"), (0.001, "below the range"), ("abc", "not a number")):
+        tampered, provider = _proposal("add a water reservoir in the north")
+        if tampered is None:
+            check("a proposal is available to tamper with", False)
+            break
+        tampered["params"] = {**(tampered.get("params") or {}), "storageDepthM": bad}
+        refused = _apply([tampered], provider)
+        check(f"a hand-set depth that is {why} is a 422, not a silent default",
+              refused.status_code == 422 and "storage depth" in str(refused.json().get("detail", "")).lower(),
+              f"{bad!r} -> {refused.status_code} {refused.text[:90]}")
+    clean, provider = _proposal("add a water reservoir in the north")
+    if clean is not None:
+        clean["params"] = {**(clean.get("params") or {}), "storageDepthM": 3.5}
+        applied = _apply([clean], provider)
+        # Read the sandbox, not the response: `AIPlanResponse` carries planId
+        # and features, not the ids, and the row is what the run will read.
+        rows = _staged_pinned()
+        check("a hand-set depth is kept, and labelled the sender's own",
+              applied.status_code == 200 and applied.json().get("features") == 1
+              and rows and rows[0]["params"].get("storageDepthM") == 3.5
+              and rows[0]["params"].get("inputSources") == {"storageDepthM": "user"},
+              str(rows)[:200])
+        for r in _staged_pinned():
+            client.post(f"/api/scenes/{SCENE}/pins/{r['id']}/unpin")
+
+    print("honesty: /ai-plan/apply re-validates before it pins")
+    # The client owns the proposals between the gate and the apply, so a
+    # geometry can change in between. A proposal moved onto surveyed buildings
+    # must be refused, not persisted (the M6 hole).
+    on_a_building = _building_ring()
+    if on_a_building is None:
+        check("a building cell is available to build a ring over", False)
+    else:
+        tampered, provider = _proposal("add permeable paving in the north")
+        if tampered is not None:
+            tampered["geometry"] = {"type": "Polygon", "coordinates": [on_a_building]}
+            refused = _apply([tampered], provider)
+            check("a proposal moved onto buildings is refused, not persisted",
+                  refused.status_code == 200 and refused.json().get("features") == 0
+                  and any((x.get("reasonCode") or x.get("reason_code")) == "BUILDING_OVERLAP"
+                          for x in (refused.json().get("rejected") or []))
+                  and not refused.json().get("planId"),
+                  str(refused.json())[:200])
+
+    print("honesty: an empty region says which region is empty")
+    ap = client.post(f"/api/scenes/{SCENE}/ai-plan",
+                     json={"instruction": "add a water reservoir in the south", "apply": False}).json()
+    check("a region with no candidate names the region and where the kind is",
+          not ap.get("proposals") and "south" in (ap.get("message") or "")
+          and "north" in (ap.get("message") or ""), str(ap.get("message"))[:200])
+    check("and it is not filed as a constraint refusal",
+          not ap.get("rejected"), str(ap.get("rejected"))[:120])
+    unscoped = client.post(f"/api/scenes/{SCENE}/ai-plan",
+                           json={"instruction": "add a water reservoir", "apply": False}).json()
+    check("an unscoped instruction keeps the generic sentence, not a region claim",
+          "south region" not in (unscoped.get("message") or ""))
+
     print(f"\n{'all sandbox checks passed' if not FAILURES else f'{len(FAILURES)} failed'}")
     return 1 if FAILURES else 0
+
+
+def _proposal(instruction: str) -> tuple[dict | None, str]:
+    """One served proposal for ``instruction`` and the provider that served it.
+
+    The provider is returned rather than assumed: the apply endpoint echoes it
+    and rejects a value it did not emit, and a test that hardcoded "heuristic"
+    would stop exercising that.
+    """
+    body = client.post(f"/api/scenes/{SCENE}/ai-plan",
+                       json={"instruction": instruction, "apply": False}).json()
+    proposals = body.get("proposals") or []
+    return (dict(proposals[0]) if proposals else None), str(body.get("provider") or "heuristic")
+
+
+def _apply(features: list[dict], provider: str = "heuristic"):
+    """Confirm proposals onto the sandbox the way the client does."""
+    return client.post(f"/api/scenes/{SCENE}/ai-plan/apply",
+                       json={"instruction": "test", "provider": provider,
+                             "proposals": features})
+
+
+def _building_ring() -> list[list[float]] | None:
+    """A ring whose cells are all surveyed building, or None if none is found."""
+    from app.services import proposal_constraints, sandbox_model
+    from _overlay_common import load_overlay
+
+    grids = sandbox_model.load_grids()
+    if grids is None:
+        return None
+    mask = proposal_constraints.building_mask(load_overlay())
+    if mask is None:
+        return None
+    rows, cols = np.where(mask)
+    if len(rows) == 0:
+        return None
+    x0, y0, x1, y1 = grids.bounds
+    r0, c0 = int(rows[0]), int(cols[0])
+
+    def at(r: int, c: int) -> list[float]:
+        return [x0 + (c + 0.5) / grids.cols * (x1 - x0),
+                y1 - (r + 0.5) / grids.rows * (y1 - y0)]
+
+    ring = [at(r0, c0), at(r0, c0 + 4), at(r0 + 4, c0 + 4), at(r0 + 4, c0)]
+    return ring if all(mask[r, c] for r, c in grids.cells_of_ring(ring)) else None
 
 
 def sandbox_template_followups() -> list[str]:

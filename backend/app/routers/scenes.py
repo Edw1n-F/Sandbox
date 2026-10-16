@@ -378,6 +378,11 @@ def apply_ai_plan(scene_id: str, payload: AIPlanApplyRequest) -> AIPlanResponse:
         "provider": applied["provider"],
         "types": applied.get("types", []),
         "groundingNotes": applied.get("groundingNotes", []),
+        # The apply path re-validates before it pins (Phase 2 R19): a proposal
+        # that changed after the gate was shown comes back refused here rather
+        # than persisted, and a refusal a client cannot see is the short-list
+        # failure this whole array exists to prevent.
+        "rejected": applied.get("rejected", []),
     })
 
 
