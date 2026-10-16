@@ -52,6 +52,16 @@ longer spawns the station. Those were one flag, and the fusion was the bug.
 
 ### What Stage 4 means today
 
+The derived project catalog was **retired on 16 Oct 2026**: its four placeholder
+parcels are gone, along with `data/projects.json`,
+`scripts/make_project_catalog.py`, `app/services/project_catalog.py` and
+`GET /scenes/{id}/project-catalog`. The Projects panel now lists only the
+**declared** projects seeded from `backend/data/projects/<id>.json` — the MTR
+station and HSK Park. A derived parcel beside a declared project read as a plan
+that actually exists, which is why it went. The suggester still derives candidate
+sites (`app/services/suggest.py`, `GET /scenes/{id}/suggestions`); that is a
+different step and it stays.
+
 **The natural-language → intervention path works, end to end.** Measured on 16 Oct
 against the live server, no model key configured:
 
@@ -316,12 +326,13 @@ Each item is self-contained. The full remaining list, with the re-scope, is in
 
 **Closed since this file was last measured**
 
-1. ~~**The project catalog is a placeholder.**~~ **Being removed, not completed.**
-   The four projects were raster-derived candidate parcels, not planned projects,
-   and the owner has ruled the whole catalog out of scope. `ProjectCatalog.tsx`,
-   `catalogApi.ts`, `project_catalog.py` and `data/projects.json` are deleted in
-   the re-scope; the planned-project machinery (`data/projects/<id>.json`,
-   `terrain.projects`, the MTR station plan) is untouched and stays.
+1. ~~**The project catalog is a placeholder.**~~ **Retired on main, 16 Oct 2026.**
+   The four projects were raster-derived candidate parcels, not planned projects.
+   `ProjectCatalog.tsx`, `catalogApi.ts`, `project_catalog.py`,
+   `data/projects.json`, `scripts/make_project_catalog.py` and
+   `tests/test_project_catalog.py` are all gone; the planned-project machinery
+   (`data/projects/<id>.json`, `terrain.projects`, the MTR station and HSK Park
+   plans) is untouched and stays.
 2. ~~**No suggestion engine and no Pin/Unpin.**~~ Both exist: `suggest.py` +
    `GET /api/scenes/{id}/suggestions` (ranked per-axis candidates with the
    per-cell arithmetic shown) and `pins.py` + three pin routes. What remains is
@@ -332,6 +343,12 @@ Each item is self-contained. The full remaining list, with the re-scope, is in
 4. ~~**No parameter card.**~~ `parameter_card.py` + `GET /api/scenes/{id}/parameter-card`
    exist, assembled from the ledger's own dicts. Still open: `questions[]` and
    editable assumptions before confirm.
+5. **Two declared projects exist; the target is four.** `backend/data/projects/`
+   holds `mtr-station.json` and `park.json`, each with a real GLB and a footprint,
+   and both score distinctly in a run and compose when toggled together. What is
+   missing is projects 3 and 4 — added as data, no code change. One caveat: a
+   project whose GLB or footprint is not on disk is silently omitted rather than
+   reported, so an incomplete project disappears instead of failing.
 
 **Still open**
 
@@ -372,21 +389,21 @@ Each item is self-contained. The full remaining list, with the re-scope, is in
 
 **Configuration and environment**
 
-6. **A live provider is still verified only by hand.** `test_llm_provider.py`
-   drives the real chat through a scripted `FakeProvider`, with no key and no
-   network. It covers every retry and fallback path, plus the request shapes both
-   real providers send. What it cannot cover is a real provider's *response*.
-   That is still checked by hand, and the free tier has been returning 429s.
-7. **A rate-limited provider costs a round trip.** The free tier is throttled and
-   slow. A 429 is caught and reported, and `LLM_FALLBACK_MODELS` now walks three
-   additionally-verified free ids (`google/gemma-4-26b-a4b-it:free`,
-   `cohere/north-mini-code:free`,
-   `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` — each called and
-   confirmed to return prose on 14 Oct). A paid model id — one `.env` line —
-   removes the problem instead of routing around it.
-8. **Storage is JSON files, not PostGIS.** The seam is `app/db.py` and
-   `scene_service.py` only, so this is a swap rather than a rewrite.
-9. **Two view modules have no unit coverage** — `view/onlineProps.ts` and
+13. **A live provider is still verified only by hand.** `test_llm_provider.py`
+    drives the real chat through a scripted `FakeProvider`, with no key and no
+    network. It covers every retry and fallback path, plus the request shapes both
+    real providers send. What it cannot cover is a real provider's *response*.
+    That is still checked by hand, and the free tier has been returning 429s.
+14. **A rate-limited provider costs a round trip.** The free tier is throttled and
+    slow. A 429 is caught and reported, and `LLM_FALLBACK_MODELS` now walks three
+    additionally-verified free ids (`google/gemma-4-26b-a4b-it:free`,
+    `cohere/north-mini-code:free`,
+    `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` — each called and
+    confirmed to return prose on 14 Oct). A paid model id — one `.env` line —
+    removes the problem instead of routing around it.
+15. **Storage is JSON files, not PostGIS.** The seam is `app/db.py` and
+    `scene_service.py` only, so this is a swap rather than a rewrite.
+16. **Two view modules have no unit coverage** — `view/onlineProps.ts` and
    `view/interventionLayer.ts`. Separately: Cesium's credit logo link has no
    accessible name (third-party markup, excluded rather than stripped, because
    removing it would break Cesium's attribution terms).

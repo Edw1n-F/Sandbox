@@ -89,7 +89,6 @@ export interface SceneState {
 }
 
 export const DEFAULT_LAYERS: LayerVisibility = {
-  imagery: true,
   boundary: true,
   // Overlays start off: they are extra context, and the study area is legible
   // without them. Interventions start on, because a scene whose plan has
@@ -99,8 +98,6 @@ export const DEFAULT_LAYERS: LayerVisibility = {
   interventions: true,
   props: true,
   realBuildings: true,
-  waterbody: true,
-  infrastructure: true,
   massing25d: false,
 }
 

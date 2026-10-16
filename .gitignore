@@ -92,3 +92,7 @@ backend/plan_project-model/
 # ~1.9 GB on this host. The committed artefacts (buildings_hsk.json, DSM/DEM
 # npz files) are what the pipeline produces from it, not the source itself.
 raw_data/
+
+# Local dev-server logs (uvicorn / vite stdout+stderr redirects). Runtime noise,
+# never source; see the root uvicorn.*.log / vite.*.log left by `npm run dev`.
+*.log

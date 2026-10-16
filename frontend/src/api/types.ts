@@ -163,7 +163,7 @@ export type ViewMode = 'survey' | 'tactical'
 export type TideState = 'low' | 'mean' | 'high'
 
 /** Which overlay layers are switched on, rendered by the viewer's layer pills. */
-export interface LayerVisibility {  imagery: boolean
+export interface LayerVisibility {
   boundary: boolean
   wetGrid: boolean
   heatmap: boolean
@@ -177,10 +177,6 @@ export interface LayerVisibility {  imagery: boolean
   props: boolean
   /** Real 3D buildings from 6-NW-12D 3D Tiles (textured meshes). */
   realBuildings: boolean
-  /** Water bodies from 6-NW-12D WATERBODY glTF. */
-  waterbody: boolean
-  /** Infrastructure structures from 6-NW-12D INFRASTRUCTURE glTF. */
-  infrastructure: boolean
   /**
    * Draw buildings as 2.5D white massing instead of the textured 3D Tiles.
    *

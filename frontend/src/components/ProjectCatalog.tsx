@@ -1,85 +1,55 @@
 /**
- * Top-right project catalog.
+ * Top-right "Projects" panel: the declared, fixed-footprint projects.
  *
- * A small, predefined set of the "buildings the planner can place in the
- * sandbox" -- each with two phase variants. Toggling a phase creates a plan
- * from **fixed footprints** read from the backend catalog; every toggled phase
- * stays selected, and the next run scores them **together**.
+ * Each row is a planned project that exists as real geometry -- a plan seeded
+ * from `backend/data/projects/<id>.json` by `scripts/seed_projects.py`, with a
+ * GLB model and a footprint of its own. Toggling a row adds its plan id to
+ * `selectedPlanIds`, and the next run scores every selected project **together**.
  *
  * ## Cumulative selection
  *
  * The brief's problem statement is explicitly about the combined effect
  * ("rather than only assessing each project individually"), so this panel
- * multi-selects. The selected plans' intervention features are merged server-side
- * into one scenario by `intervention_features_many`, and the backend refuses the
- * run if the reworked land passes 40% of the study area -- five legal 24%
- * interventions must not compose into a district-wide land-use swap.
+ * multi-selects. The selected plans' intervention features are merged
+ * server-side into one scenario by `intervention_features_many`, and the backend
+ * refuses the run if the reworked land passes 40% of the study area.
  *
  * `activePlanId` (which plan the 3D view highlights) and `selectedPlanIds`
  * (which plans the run scores) are deliberately separate store fields: with
- * cumulative projects they genuinely differ.
- *
- * ## From sentences to footprints
- *
- * This panel used to send a natural-language instruction per phase
- * ("place a large expanded school campus in the northeast of the study area")
- * to the AI planner, which re-derived a footprint on every toggle -- so the same
- * phase toggled twice was two different geometries, and a before/after
- * comparison was not a comparison. The panel said as much in a caption.
- *
- * Now the footprints come from `GET /api/scenes/{sceneId}/project-catalog`,
- * generated once from the rasters by `scripts/make_project_catalog.py`, and the
- * plan is created with that geometry verbatim. The provenance is shown rather
- * than hidden: a footprint is a candidate parcel read from land cover at 5 m,
- * not a surveyed site, and the panel says so.
- */
-import Box from '@mui/material/Box'
-import CircularProgress from '@mui/material/CircularProgress'
-import Collapse from '@mui/material/Collapse'
-import IconButton from '@mui/material/IconButton'
-import Stack from '@mui/material/Stack'
-import Typography from '@mui/material/Typography'
-import { useCallback, useEffect, useState } from 'react'
-
-import HudPanel from '@/components/HudPanel'
-import {
-  createPlan,
-  fetchProjectCatalog,
-  type CatalogPhase,
-  type CatalogProject,
-  type ProjectCatalog as CatalogDocument,
-} from '@/api/catalogApi'
-import type { Plan } from '@/api/types'
-import { usePlanStore } from '@/state/planStore'
-import { useSceneStore } from '@/state/sceneStore'
-
-/** The axis colour, matching the ledger's own legend in `interventionLayer.ts`. */
-const AXIS_COLOR: Record<string, string> = {
-  drainage: '#1f6feb',
-  heat: '#2ea043',
-  runoff: '#8957e5',
-}
-
-/**
- * A planned project that exists as real geometry rather than as a generated
- * proposal -- the MTR station and its GLB today, and any project a teammate adds
- * as a `backend/data/projects/<id>.json` tomorrow.
- *
- * It joins the run the same way a catalog phase does -- by its plan id going into
- * `selectedPlanIds` -- so its effects are scored and the "Run N projects" count
- * includes it. What it deliberately does NOT do is call `selectPlan`/
- * `resyncViewer` the way a catalog phase does: a project's plan can carry a tank
- * polygon, and selecting the plan for the viewer would draw that polygon as a
- * translucent slab over the model it describes.
+ * cumulative projects they genuinely differ. A project row therefore does NOT
+ * call `selectPlan`/`resyncViewer` -- a project's plan can carry a tank polygon,
+ * and highlighting it would draw that polygon as a translucent slab over the
+ * model it describes.
  *
  * ## Rows come from the plans, not from a list in this file
  *
  * The seeder tags every project's plan with `params.projectId`, so the rows are
  * simply the scene's plans that carry one. That is the whole reason adding a
  * project needs no change here -- and it picks up effect-only projects with no
- * 3D model, which a list built from the model URLs would miss. The plan id itself
- * is a uuid minted at seed time, so the project id is the stable handle.
+ * 3D model, which a list built from the model URLs would miss. The plan id
+ * itself is a uuid minted at seed time, so the project id is the stable handle.
+ *
+ * ## The generated catalog was removed
+ *
+ * Until 16 Oct 2026 this panel also rendered a *derived* catalog: four
+ * placeholder projects whose parcels were computed from land cover and the wet
+ * grid by `scripts/make_project_catalog.py` and served at
+ * `GET /scenes/{id}/project-catalog`. They are gone -- HSK Park and the MTR
+ * station are declared projects with real models, and a derived parcel beside
+ * them read as a plan that exists. The suggester still derives candidate sites
+ * (`app/services/siting.py`, `GET /scenes/{id}/suggestions`); that is a
+ * different step, and it stays.
  */
+import Box from '@mui/material/Box'
+import CircularProgress from '@mui/material/CircularProgress'
+import Stack from '@mui/material/Stack'
+import Typography from '@mui/material/Typography'
+
+import HudPanel from '@/components/HudPanel'
+import type { Plan } from '@/api/types'
+import { usePlanStore } from '@/state/planStore'
+import { useSceneStore } from '@/state/sceneStore'
+
 function FixedProjectRows() {
   const plans = usePlanStore((s) => s.plans)
   const projects = plans.filter(
@@ -153,7 +123,7 @@ function FixedProjectRow({ plan }: { plan: Plan }) {
   )
 }
 
-/** The little on/off pill. One definition, used by both row kinds. */
+/** The little on/off pill. */
 function SwitchPill({ on }: { on: boolean }) {
   return (
     <Box
@@ -183,116 +153,7 @@ function SwitchPill({ on }: { on: boolean }) {
 }
 
 export default function ProjectCatalog() {
-  const sceneId = useSceneStore((s) => s.sceneId)
-  const selectPlan = usePlanStore((s) => s.selectPlan)
-  const refreshPlans = usePlanStore((s) => s.refreshPlans)
-  const setSelectedPlanIds = usePlanStore((s) => s.setSelectedPlanIds)
   const selectedCount = usePlanStore((s) => s.selectedPlanIds.length)
-
-  const [catalog, setCatalog] = useState<CatalogDocument | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  // key ("<project>:<phase>") -> the plan id that toggle produced. Keeping the
-  // plan id rather than a boolean means toggling off does not have to re-derive
-  // anything, and the run can send exactly the plans on screen.
-  const [active, setActive] = useState<Record<string, string>>({})
-
-  useEffect(() => {
-    if (!sceneId) return
-    let live = true
-    void fetchProjectCatalog(sceneId)
-      .then((doc) => {
-        if (live) {
-          setCatalog(doc)
-          setError(null)
-          setExpanded(doc.projects[0]?.id ?? null)
-        }
-      })
-      .catch((err: unknown) => {
-        // A missing catalog is a 503 with the regeneration command in the
-        // detail. Showing that verbatim is more useful than "failed to load".
-        if (live) setError(err instanceof Error ? err.message : String(err))
-      })
-    return () => {
-      live = false
-    }
-  }, [sceneId])
-
-  /** Point the 3D view at the newest selection, or back to today when empty. */
-  const resyncViewer = useCallback(
-    async (planIds: string[]) => {
-      if (!sceneId) return
-      if (planIds.length) {
-        await selectPlan(planIds[planIds.length - 1])
-        return
-      }
-      // Nothing selected -> show today. The store picks the plan whose type is
-      // 'baseline' on load, so re-fetching and picking the first baseline
-      // restores "today" without a dedicated clear endpoint.
-      await refreshPlans(sceneId)
-      const plans = usePlanStore.getState().plans
-      const baseline = plans.find((p) => p.planType === 'baseline')
-      if (baseline) await selectPlan(baseline.planId)
-    },
-    [sceneId, selectPlan, refreshPlans],
-  )
-
-  const toggle = async (project: CatalogProject, phase: CatalogPhase) => {
-    if (!sceneId || busy) return
-    const key = `${project.id}:${phase.id}`
-
-    // Toggling an active phase off: drop it, and re-run with the rest.
-    if (key in active) {
-      const next = { ...active }
-      delete next[key]
-      setActive(next)
-      const planIds = Object.values(next)
-      setSelectedPlanIds(planIds)
-      setBusy(true)
-      try {
-        await resyncViewer(planIds)
-      } finally {
-        setBusy(false)
-      }
-      return
-    }
-
-    setBusy(true)
-    try {
-      const created = await createPlan(sceneId, {
-        label: `${project.name} — ${phase.label}`,
-        source: 'manual',
-        params: {
-          projectId: project.id,
-          phaseId: phase.id,
-          catalogDate: project.date,
-          catalogConfidence: project.confidence,
-        },
-        // The geometry is the catalog's own, sent verbatim: no re-derivation,
-        // so toggling this phase twice produces the same footprint twice.
-        interventions: phase.interventions.map((f) => ({
-          geometry: f.geometry,
-          interventionType: f.interventionType,
-          source: 'manual' as const,
-          params: { ...f.params, provenance: f.provenance },
-          style: f.style,
-        })),
-      })
-      const next = { ...active, [key]: created.planId }
-      setActive(next)
-      const planIds = Object.values(next)
-      setSelectedPlanIds(planIds)
-      await refreshPlans(sceneId)
-      await resyncViewer(planIds)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const totalHa = (phase: CatalogPhase) =>
-    phase.interventions.reduce((sum, f) => sum + f.provenance.areaHa, 0)
 
   return (
     <HudPanel
@@ -310,174 +171,7 @@ export default function ProjectCatalog() {
         Toggle projects to score them <strong>together</strong>. Runs combine every
         active project, up to 40% of the study area.
       </Typography>
-      {/* main's fixed, data-driven projects (seeded from backend/data/projects/*.json
-          by scripts/seed_projects.py). They sit above the catalog because their
-          footprints and effects are declared rather than derived, and the list is
-          driven by the scene's seeded plans, so a second modeled project needs no
-          change here. */}
       <FixedProjectRows />
-
-      {error && (
-        <Typography variant="caption" color="error" display="block" sx={{ mb: 1 }}>
-          {error}
-        </Typography>
-      )}
-
-      {!catalog && !error && (
-        <Typography variant="caption" color="text.secondary">
-          Loading the project catalog…
-        </Typography>
-      )}
-
-      {catalog?.projects.map((project) => {
-        const isOpen = expanded === project.id
-        const onPhases = project.phases.filter((p) => `${project.id}:${p.id}` in active)
-        return (
-          <Box
-            key={project.id}
-            sx={{
-              mb: 0.5,
-              border: '1px solid',
-              borderColor: 'divider',
-              borderRadius: 2,
-              overflow: 'hidden',
-            }}
-          >
-            <Stack
-              direction="row"
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{
-                px: 1.25,
-                py: 0.75,
-                cursor: 'pointer',
-                '&:hover': { bgcolor: 'rgba(92,255,157,0.06)' },
-              }}
-              onClick={() => setExpanded(isOpen ? null : project.id)}
-            >
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Typography
-                  className="hud-mono"
-                  variant="body2"
-                  sx={{ fontWeight: 600, fontSize: 12.5 }}
-                >
-                  {project.name}
-                </Typography>
-                <Box
-                  sx={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    bgcolor: AXIS_COLOR[project.axis] ?? '#8b949e',
-                  }}
-                  title={`axis: ${project.axis}`}
-                />
-                {onPhases.length > 0 && (
-                  <Box
-                    sx={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      bgcolor: '#5cff9d',
-                      boxShadow: '0 0 6px #5cff9d',
-                    }}
-                  />
-                )}
-              </Stack>
-              <IconButton
-                size="small"
-                sx={{ p: 0, color: 'text.secondary' }}
-                aria-label={isOpen ? 'Collapse' : 'Expand'}
-              >
-                <span
-                  style={{
-                    fontSize: 10,
-                    transition: 'transform 0.2s',
-                    display: 'inline-block',
-                    transform: isOpen ? 'rotate(90deg)' : 'none',
-                  }}
-                >
-                  ▶
-                </span>
-              </IconButton>
-            </Stack>
-            <Collapse in={isOpen}>
-              <Box sx={{ px: 1.25, pb: 1, pt: 0.25 }}>
-                <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.75 }}>
-                  {project.note}
-                </Typography>
-                <Stack spacing={0.5}>
-                  {project.phases.map((phase) => {
-                    const key = `${project.id}:${phase.id}`
-                    const on = key in active
-                    return (
-                      <Stack
-                        key={phase.id}
-                        direction="row"
-                        alignItems="center"
-                        justifyContent="space-between"
-                        onClick={() => void toggle(project, phase)}
-                        title={`${phase.grounding.evidence} — ${phase.grounding.metrics.cells ?? 0} cells`}
-                        sx={{
-                          cursor: busy ? 'wait' : 'pointer',
-                          px: 1,
-                          py: 0.6,
-                          borderRadius: 1.5,
-                          border: '1px solid',
-                          borderColor: on ? 'rgba(92,255,157,0.5)' : 'transparent',
-                          bgcolor: on ? 'rgba(92,255,157,0.12)' : 'rgba(255,255,255,0.03)',
-                          '&:hover': {
-                            bgcolor: on ? 'rgba(92,255,157,0.18)' : 'rgba(92,255,157,0.06)',
-                          },
-                          opacity: busy && !on ? 0.5 : 1,
-                        }}
-                      >
-                        <Stack spacing={0.25}>
-                          <Typography
-                            variant="caption"
-                            sx={{ fontSize: 11, color: on ? '#5cff9d' : 'text.primary' }}
-                          >
-                            {phase.label}
-                          </Typography>
-                          <Typography
-                            className="hud-mono"
-                            variant="caption"
-                            sx={{ fontSize: 9, color: 'text.secondary' }}
-                          >
-                            {phase.interventions.length} feature
-                            {phase.interventions.length === 1 ? '' : 's'} ·{' '}
-                            {totalHa(phase).toFixed(1)} ha
-                          </Typography>
-                        </Stack>
-                        <SwitchPill on={on} />
-                      </Stack>
-                    )
-                  })}
-                </Stack>
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  display="block"
-                  sx={{ mt: 0.75, fontSize: 9.5, lineHeight: 1.4 }}
-                >
-                  {project.confidence} · source: {project.source} · as of {project.date}
-                </Typography>
-              </Box>
-            </Collapse>
-          </Box>
-        )
-      })}
-
-      {catalog && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          display="block"
-          sx={{ mt: 1, fontSize: 9.5, lineHeight: 1.4 }}
-        >
-          {catalog.warning}
-        </Typography>
-      )}
     </HudPanel>
   )
 }

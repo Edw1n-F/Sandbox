@@ -38,15 +38,12 @@ const reset = () => {
     loading: false,
     error: null,
     layers: {
-      imagery: true,
       boundary: true,
       wetGrid: false,
       heatmap: false,
       interventions: false,
       props: true,
       realBuildings: true,
-      waterbody: true,
-      infrastructure: true,
       massing25d: false,
     },
     viewMode: 'survey',
@@ -61,7 +58,7 @@ describe('layer toggles', () => {
     useSceneStore.getState().toggleLayer('wetGrid')
     const after = useSceneStore.getState().layers
     expect(after.wetGrid).toBe(!before.wetGrid)
-    expect(after.imagery).toBe(before.imagery)
+    expect(after.boundary).toBe(before.boundary)
   })
 
   it('replaces the object so subscribers see the change', () => {
@@ -79,7 +76,7 @@ describe('layer toggles', () => {
     const layers = useSceneStore.getState().layers
     expect(layers.heatmap).toBe(true)
     expect(layers.interventions).toBe(true)
-    expect(layers.imagery).toBe(true)
+    expect(layers.boundary).toBe(true)
   })
 })
 

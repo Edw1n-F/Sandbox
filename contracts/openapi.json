@@ -3529,51 +3529,6 @@
         ]
       }
     },
-    "/api/scenes/{scene_id}/project-catalog": {
-      "get": {
-        "description": "GET /api/scenes/{sceneId}/project-catalog -- the fixed project catalog.\n\nThe projects the intervention loop offers, with the footprints already\nfixed and the provenance already attached. The frontend renders these\ninstead of templating natural-language sentences, so toggling a phase\ntwice produces the same geometry twice.\n\nScene-scoped only for consistency with every other route the frontend\ncalls: the catalog describes the study area, and the scene is what pins\nthis request to one. A scene that does not exist is a 404, like anywhere\nelse -- the catalog does not conjure a place to put projects in.",
-        "operationId": "get_project_catalog_api_scenes__scene_id__project_catalog_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "scene_id",
-            "required": true,
-            "schema": {
-              "title": "Scene Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Get Project Catalog Api Scenes  Scene Id  Project Catalog Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Project Catalog",
-        "tags": [
-          "scenes"
-        ]
-      }
-    },
     "/api/scenes/{scene_id}/run": {
       "post": {
         "description": "POST /api/scenes/{sceneId}/run -- one live simulation run.\n\nThe run loop the sliders were always meant to drive (ADR-024 kept them\nlocal-only until this existed): apply the chosen plan's interventions to\nthe land-class grid, re-run the project's own SCS-CN generation/retention\narithmetic at the requested rainfall, re-solve the level-pool fill, and\nre-render both overlays. The response carries fresh overlay URLs (cache\nbusted by run id), the baseline-vs-scenario ledger, and a plain-language\nexplanation -- an LLM paragraph when a provider is configured, a labelled\ndeterministic template otherwise.\n\n``planId: null`` is a baseline run: today's land cover, no interventions.\nSend ``planIds`` to compose several projects into one cumulative scenario --\nthe brief's headline goal. The heavy terrain conditioning and the\nsky-view/shade rasters are cached (they change with the offline scripts and\nthe massing respectively, never with a slider), so a run is seconds, not\nminutes.\n\nScreening-level, always: the response's ``status``/``warning`` say so, and\nso do the sidecars written beside the PNGs in ``data/rasters/run/``.",
