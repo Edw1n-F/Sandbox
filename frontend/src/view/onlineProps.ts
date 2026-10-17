@@ -96,8 +96,16 @@ export const ONLINE_PROPS: OnlineProp[] = [
   },
 ]
 
-/** Place a model at a lon/lat/height with a compass heading, in the local ENU frame. */
-function placementMatrix(lon: number, lat: number, heightM: number,
+/**
+ * Place a model at a lon/lat/height with a compass heading, in the local ENU frame.
+ *
+ * Exported for its test. The matrix is the one thing here that is pure
+ * arithmetic: everything else in this module talks to a Cesium `Viewer`, which
+ * needs a real GL context and is covered by `verify-3d.mjs` instead. Getting
+ * translation, rotation and scale into one matrix is also where a silent bug
+ * lives -- a heading applied about the wrong axis still renders *something*.
+ */
+export function placementMatrix(lon: number, lat: number, heightM: number,
                          headingDeg: number, scale: number): Matrix4 {
   return Matrix4.fromTranslationRotationScale(
     new TranslationRotationScale(

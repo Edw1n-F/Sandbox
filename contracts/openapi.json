@@ -3923,6 +3923,60 @@
         ]
       }
     },
+    "/api/scenes/{scene_id}/pins/{feature_id}/pin": {
+      "post": {
+        "description": "POST /api/scenes/{sceneId}/pins/{featureId}/pin -- put one back.\n\nThe inverse of `/unpin`, and the reason it exists: an unpin takes a row out\nof the next run but leaves the row in the staged plan, so putting it back is\na flag flip rather than a re-staging. Without this route the only way back\nwas to re-derive the feature and stage it again, which minted a *new* row\nand lost the provenance of the original.\n\n`pins.staged_features` already returns unpinned rows for exactly this\npurpose -- \"a user who just unpinned something needs to see it to pin it\nback\" -- and this is the route that makes the sentence true.\n\nIdempotent by row: pinning an already-pinned feature repeats the same\n``pinned: true`` write. A feature that is not staged in this scene is a 404,\nmatching `/unpin`.",
+        "operationId": "repin_intervention_api_scenes__scene_id__pins__feature_id__pin_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "feature_id",
+            "required": true,
+            "schema": {
+              "title": "Feature Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Repin Intervention Api Scenes  Scene Id  Pins  Feature Id  Pin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Repin Intervention",
+        "tags": [
+          "scenes"
+        ]
+      }
+    },
     "/api/scenes/{scene_id}/pins/{feature_id}/unpin": {
       "post": {
         "description": "POST /api/scenes/{sceneId}/pins/{featureId}/unpin -- take one out.\n\nIdempotent by row: unpinning an already-unpinned feature repeats the same\n``pinned: false`` write and returns the same acknowledgement. An unpin for a\nfeature that is not staged in this scene is a 404 -- the thing being removed\nis not there -- and never a silent success.",

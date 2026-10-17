@@ -20,6 +20,9 @@ function sandbox(over: Partial<SandboxState>): SandboxState {
     error: null,
     refresh: async () => {},
     remove: async () => {},
+    undoable: null,
+    undo: async () => {},
+    dismissUndo: () => {},
     ...over,
   }
 }

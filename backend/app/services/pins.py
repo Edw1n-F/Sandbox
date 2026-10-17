@@ -204,6 +204,30 @@ def unpin(scene_id: str, feature_id: str) -> dict[str, Any]:
     raise PinError(f"no staged feature {feature_id!r} in this scene")
 
 
+def repin(scene_id: str, feature_id: str) -> dict[str, Any]:
+    """Put an unpinned row back into the next run. Idempotent.
+
+    The inverse of :func:`unpin`, and the whole reason undo is a flag flip
+    rather than a re-staging: an unpin leaves the row in the plan, so putting it
+    back preserves the fingerprint, the provenance and the id. Re-staging the
+    same feature instead would mint a new row, which would make "undo" a
+    different intervention with a different history.
+    """
+    plan_id = staged_plan_id(scene_id)
+    if plan_id is None:
+        raise PinError("nothing is staged for this scene")
+    plan = db.read_doc(db.plan_path(plan_id))
+    rows: list[dict[str, Any]] = plan.get("interventions") or []
+    for row in rows:
+        if str(row.get("id")) == str(feature_id):
+            row["pinned"] = True
+            db.write_doc(db.intervention_path(row["id"]),
+                         {**row, "pinned": True})
+            _write_plan(plan, rows)
+            return {"featureId": row["id"], "pinned": True}
+    raise PinError(f"no staged feature {feature_id!r} in this scene")
+
+
 def staged_features(scene_id: str) -> list[dict[str, Any]]:
     """Every row of the staged plan, pinned or not, newest first.
 

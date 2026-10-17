@@ -29,6 +29,7 @@ import ProjectCatalog from './components/ProjectCatalog'
 import SceneNotice from './components/SceneNotice'
 import SlidersPanel from './components/SlidersPanel'
 import StatsPanel from './components/StatsPanel'
+import ParameterCardPanel from './components/ParameterCardPanel'
 import InterventionsPanel from './components/InterventionsPanel'
 import ViewButtons from './components/ViewButtons'
 import { usePlanStore } from './state/planStore'
@@ -154,6 +155,10 @@ export default function App() {
                 the toggled projects; deleting a row unpins it. */}
             <InterventionsPanel />
             <StatsPanel />
+            {/* The brief's section 2 table. Collapsed by default: a reference
+                table, not a status display, and it answers "what should I
+                distrust about this result" rather than "what is happening". */}
+            <ParameterCardPanel />
           </Box>
         </Box>
 

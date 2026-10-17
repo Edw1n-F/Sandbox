@@ -1559,3 +1559,34 @@ def post_run(scene_id: str, body: RunRequest) -> dict:
         )
     except run_service.RunInputsError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+
+
+@router.post("/scenes/{scene_id}/pins/{feature_id}/pin")
+def repin_intervention(scene_id: str, feature_id: str) -> dict:
+    """POST /api/scenes/{sceneId}/pins/{featureId}/pin -- put one back.
+
+    The inverse of `/unpin`, and the reason it exists: an unpin takes a row out
+    of the next run but leaves the row in the staged plan, so putting it back is
+    a flag flip rather than a re-staging. Without this route the only way back
+    was to re-derive the feature and stage it again, which minted a *new* row
+    and lost the provenance of the original.
+
+    `pins.staged_features` already returns unpinned rows for exactly this
+    purpose -- "a user who just unpinned something needs to see it to pin it
+    back" -- and this is the route that makes the sentence true.
+
+    Idempotent by row: pinning an already-pinned feature repeats the same
+    ``pinned: true`` write. A feature that is not staged in this scene is a 404,
+    matching `/unpin`.
+    """
+    from app import db
+    from app.services.pins import PinError, repin
+
+    if db.read_doc(db.scene_path(scene_id)) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="scene not found")
+    try:
+        return repin(scene_id, feature_id)
+    except PinError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail=str(exc)) from exc

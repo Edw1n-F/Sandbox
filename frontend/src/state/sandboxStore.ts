@@ -15,7 +15,7 @@ import { create } from 'zustand'
 
 import { errorMessage } from '@/api/client'
 import { fetchStagedPins, type StagedFeature } from '@/api/pinsApi'
-import { unpinFeature } from '@/api/sandboxApi'
+import { repinFeature, unpinFeature } from '@/api/sandboxApi'
 
 export interface SandboxState {
   /** The staged plan's id, or null before anything has been placed. */
@@ -27,12 +27,26 @@ export interface SandboxState {
   refresh: (sceneId: string) => Promise<void>
   /** Take one intervention off the sandbox (unpin), then re-read it. */
   remove: (sceneId: string, featureId: string) => Promise<void>
+  /**
+   * The last undoable action, or null.
+   *
+   * Only removals are undoable, and only the most recent one: an unpin leaves
+   * the row in the staged plan with its id and provenance intact, so putting it
+   * back is a flag flip. An *addition* has no inverse of that kind -- pinning a
+   * removed row is one call, while un-pinning an added one is a different
+   * guarantee (the row was never there before), and offering "undo" for it
+   * would overstate what the store can promise.
+   */
+  undoable: { featureId: string; label: string } | null
+  undo: (sceneId: string) => Promise<void>
+  dismissUndo: () => void
 }
 
 export const useSandboxStore = create<SandboxState>((set, get) => ({
   stagedPlanId: null,
   features: [],
   error: null,
+  undoable: null,
 
   refresh: async (sceneId) => {
     try {
@@ -48,14 +62,37 @@ export const useSandboxStore = create<SandboxState>((set, get) => ({
   },
 
   remove: async (sceneId, featureId) => {
+    // Remember what was removed BEFORE the write, so a failed request cannot
+    // leave an "Undo" button for something still on the sandbox.
+    const gone = get().features.find((f) => f.id === featureId)
     try {
       await unpinFeature(sceneId, featureId)
     } catch (err) {
       set({ error: errorMessage(err) })
       return
     }
+    set({
+      undoable: gone
+        ? { featureId, label: gone.interventionType.replace(/_/g, ' ') }
+        : null,
+    })
     await get().refresh(sceneId)
   },
+
+  undo: async (sceneId) => {
+    const pending = get().undoable
+    if (!pending) return
+    try {
+      await repinFeature(sceneId, pending.featureId)
+    } catch (err) {
+      set({ error: errorMessage(err) })
+      return
+    }
+    set({ undoable: null })
+    await get().refresh(sceneId)
+  },
+
+  dismissUndo: () => set({ undoable: null }),
 }))
 
 /**

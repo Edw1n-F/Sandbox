@@ -134,6 +134,17 @@ export async function unpinFeature(sceneId: string, featureId: string): Promise<
   await http.post(`/scenes/${sceneId}/pins/${featureId}/unpin`)
 }
 
+/**
+ * Put an unpinned row back into the next run.
+ *
+ * The inverse of `unpinFeature`. It is a flag flip rather than a re-stage, so
+ * the row keeps its id, fingerprint and provenance — which is what makes undo
+ * an *undo* rather than a second intervention with a different history.
+ */
+export async function repinFeature(sceneId: string, featureId: string): Promise<void> {
+  await http.post(`/scenes/${sceneId}/pins/${featureId}/pin`)
+}
+
 /** A placed intervention a change sentence refers to, with its card. */
 export interface ModifyTarget {
   featureId: string
@@ -227,5 +238,61 @@ export async function previewChange(
       rainfallMm: body.rainfallMm ?? 450,
     },
   )
+  return data
+}
+
+/**
+ * One row of the screening parameter card.
+ *
+ * ``value`` may be **null**, and that is a finding rather than a gap: a row
+ * this project has no number for (`soilGroup` — no soil survey exists) says so
+ * with a stated reason instead of being omitted. An absent row and a row we
+ * cannot fill look identical on the wire, and the difference between "we did
+ * not measure this" and "we forgot to include it" is exactly what the card
+ * exists to keep visible.
+ */
+export interface ParameterCardEntry {
+  key: string
+  label: string
+  value: number | null
+  unit: string
+  /** `MEASURED` | `DERIVED` | `ASSUMPTION` | `UNAVAILABLE`. */
+  status: string
+  /** What produced the value — or, for an unavailable row, what is absent. */
+  source: string
+  /** `null` unless a real acquisition date exists; never today's date. */
+  date: string | null
+  confidence: string
+  note: string
+}
+
+/** `GET /api/scenes/{sceneId}/parameter-card` response. */
+export interface ParameterCard {
+  sceneId: string
+  planId: string | null
+  status: string
+  /** Non-empty on every response: this is a screening artefact and says so. */
+  warning: string
+  /** The rasters the numbers came from, so a reader knows what they are reading. */
+  sources: Record<string, string>
+  /** The inputs the caller chose, or the defaults. */
+  inputs: Record<string, unknown>
+  entries: ParameterCardEntry[]
+}
+
+/**
+ * The numbers a reader needs *before* trusting a result (brief §2).
+ *
+ * Includes the rows this project cannot fill, each with a reason. Idempotent
+ * and reads the same ledger a run does, so the card cannot disagree with a run.
+ */
+export async function fetchParameterCard(
+  sceneId: string,
+  options: { planId?: string; rainfallMm?: number } = {},
+): Promise<ParameterCard> {
+  const params: Record<string, string | number> = {}
+  if (options.planId) params.plan_id = options.planId
+  if (options.rainfallMm !== undefined) params.rainfall_mm = options.rainfallMm
+  const { data } = await http.get<ParameterCard>(`/scenes/${sceneId}/parameter-card`, { params })
   return data
 }

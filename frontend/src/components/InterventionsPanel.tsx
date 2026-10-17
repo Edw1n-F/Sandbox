@@ -63,6 +63,9 @@ export default function InterventionsPanel() {
   const error = useSandboxStore((s) => s.error)
   const refresh = useSandboxStore((s) => s.refresh)
   const remove = useSandboxStore((s) => s.remove)
+  const undoable = useSandboxStore((s) => s.undoable)
+  const undo = useSandboxStore((s) => s.undo)
+  const dismissUndo = useSandboxStore((s) => s.dismissUndo)
 
   const [pending, setPending] = useState<StagedFeature | null>(null)
   const [busy, setBusy] = useState(false)
@@ -210,6 +213,42 @@ export default function InterventionsPanel() {
               )}
             </Box>
           ))}
+        </Stack>
+      )}
+      {/* Undo a removal.
+          Shown only after a removal, because that is the one action whose
+          inverse the sandbox can actually promise: an unpin leaves the row in
+          the staged plan with its id and provenance intact, so putting it back
+          is a flag flip rather than a re-stage. An addition has no equivalent
+          inverse, and offering "Undo" for it would claim more than the store
+          can deliver. */}
+      {undoable && (
+        <Stack
+          direction="row"
+          spacing={0.75}
+          alignItems="center"
+          sx={{ mt: 0.75, p: 0.5, borderRadius: 1, bgcolor: 'rgba(255,157,46,0.08)' }}
+        >
+          <Typography sx={{ fontSize: 10, color: 'text.secondary', flexGrow: 1 }}>
+            Removed {undoable.label}.
+          </Typography>
+          <Button
+            size="small"
+            disabled={busy}
+            onClick={() => {
+              if (sceneId) void undo(sceneId)
+            }}
+            sx={{ fontSize: 10, py: 0, minWidth: 0 }}
+          >
+            Undo
+          </Button>
+          <Button
+            size="small"
+            onClick={dismissUndo}
+            sx={{ fontSize: 10, py: 0, minWidth: 0, color: 'text.secondary' }}
+          >
+            Dismiss
+          </Button>
         </Stack>
       )}
       {error && (
