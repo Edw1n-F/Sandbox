@@ -40,7 +40,7 @@ import {
   type ChatTurn,
   type StreamEvent,
 } from '@/api/chatApi'
-import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
+import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal, type ProposalQuestion } from '@/api/planApi'
 import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import {
@@ -303,6 +303,55 @@ function CardView({ card }: { card: AnswerCard }) {
 }
 
 /**
+ * The assumptions one proposal rests on, and whether the planner has answered (Phase 2).
+ *
+ * Every question names a parameter the run actually reads, and each is rendered
+ * with its own state: `OPEN` is a prompt, `ANSWERED` echoes the planner's words
+ * *and* the server's parse of them, so a mismatched pair is visible rather than
+ * silently resolved. A question whose answer the server could not parse shows
+ * the class default still standing, which is the honest reading — the answer was
+ * read, and it did not apply.
+ *
+ * Restored on 18 Oct after a refactor of the chat routing dropped it. The
+ * `questions[]` field is still on the wire and still filled by the server; it
+ * had simply stopped being shown, which is the failure mode a payload cannot
+ * detect and why `verify-sandbox.mjs` asserts on the rendered text.
+ */
+function QuestionList({ questions }: { questions: ProposalQuestion[] }) {
+  return (
+    <Box sx={{ mt: 0.5, minWidth: 0 }}>
+      <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
+        ASSUMPTIONS ASKED ({questions.length})
+      </Typography>
+      {questions.map((q) => (
+        <Box key={q.id} sx={{ mt: 0.25, minWidth: 0 }}>
+          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+            {q.prompt}
+          </Typography>
+          <Typography
+            className="hud-mono"
+            sx={{
+              fontSize: 9,
+              lineHeight: 1.4,
+              overflowWrap: 'anywhere',
+              color: q.status === 'ANSWERED' ? '#5cff9d' : 'text.secondary',
+            }}
+          >
+            {q.id} · {q.status}
+            {q.answer ? ` · you: ${q.answer}` : ''}
+            {q.answeredValue !== null && q.answeredValue !== undefined
+              ? ` · read as ${q.answeredValue} ${q.unit}`.trimEnd()
+              : q.status === 'ANSWERED'
+                ? ' · not a number, so the class default stands'
+                : ''}
+          </Typography>
+        </Box>
+      ))}
+    </Box>
+  )
+}
+
+/**
  * The size / constraints / parameters of one proposal, read by field (§2.2).
  *
  * A proposal is presented with its evidence and its limits, not as a bare type:
@@ -359,9 +408,22 @@ function ProposalDetail({ proposal }: { proposal: InterventionProposal }) {
             : ''}
         </Typography>
       ))}
+      {proposal.questions && proposal.questions.length > 0 && (
+        <QuestionList questions={proposal.questions} />
+      )}
       {proposal.status && (
         <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25, overflowWrap: 'anywhere' }}>
           status: {proposal.status}
+        </Typography>
+      )}
+      {/* The proposal's own honesty label. Restored with the questions above:
+          this is the line that says the geometry is a screening contour, what
+          was clipped and why, and — once edited — that the depth is hand-set
+          rather than the class default. A gate that shows the numbers and not
+          this sentence is the overclaiming this project is built to prevent. */}
+      {proposal.warning && (
+        <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+          {proposal.warning}
         </Typography>
       )}
     </Box>
@@ -647,6 +709,9 @@ function ProposalReview({
         />
       ))}
       <RefusalList rejected={payload.rejected} />
+      {payload.questions && payload.questions.length > 0 && (
+        <QuestionList questions={payload.questions} />
+      )}
       {revalidate && (
         <Box sx={{ mt: 0.5 }}>
           <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
