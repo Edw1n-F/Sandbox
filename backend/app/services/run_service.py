@@ -462,6 +462,7 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
     # answer is -- the run gets no exemption from the number check.
     from app.agent import confidence, grounding, llm, prompts
     from app.agent.answer import ANSWER_SCHEMA, AnswerCard, GroundingReport
+    from app.agent.prompts.result_analytics import system_with_contract
 
     # The grounding check reads the same fact shape the chat uses, so the two
     # paths cannot disagree about what counts as a number this run produced.
@@ -483,7 +484,7 @@ def _llm_explanation(stats: dict[str, Any], rainfall_mm: float,
     reason: str | None = None
     try:
         turn = llm.complete_json(
-            system=prompts.RUN_SYSTEM,
+            system=system_with_contract(),
             messages=[llm.Message(role="user", text=prompts.user_turn(
                 "Explain the run that has just completed.", checkable))],
             schema=ANSWER_SCHEMA,

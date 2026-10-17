@@ -2080,22 +2080,9 @@ def build_prompt(instruction: str, grounding: Grounding) -> tuple[str, list[dict
                     "evidence": site["evidence"],
                     "metrics": site["metrics"],
                 })
-    system = (
-        "You are a flood-risk planner for a Hong Kong new development area. "
-        "You select intervention sites from a fixed candidate list derived from "
-        "the area's own terrain, land cover and flood model. You never invent "
-        "coordinates. Prefer fewer, better-justified sites over many. Every "
-        "site you choose must be defensible from the evidence given. If no site "
-        "is appropriate, return an empty selection list rather than forcing one. "
-        "Call select_intervention_sites for interventions. Call modify_massing "
-        "ONLY when the instruction concerns buildings: their height, a height "
-        "multiplier, density, orientation, or adding new blocks. Never return a "
-        "coordinate from either tool. "
-        "The study area can be divided by naming a scope when you call "
-        f"modify_massing -- one of {sorted(REGION_FRACTIONS)} -- so an "
-        "instruction about one part of the district is applied to that part only. "
-        "Omitting scope means the whole study area."
-    )
+    from app.agent.prompts.intervention import INTERVENTION_SYSTEM
+
+    system = INTERVENTION_SYSTEM.format(regions=", ".join(sorted(REGION_FRACTIONS)))
     payload: dict[str, Any] = {"instruction": instruction}
     if wants_catalogue:
         payload["candidate_sites"] = catalogue

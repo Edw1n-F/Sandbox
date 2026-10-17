@@ -61,6 +61,19 @@ describe('looksLikeIntervention', () => {
     expect(looksLikeIntervention('add a bike lane', INTENT_VOCABULARY)).toBe(false)
   })
 
+  it('takes the fast path for a plural noun, as the server does', () => {
+    // The server's _match_noun accepts `(?:e?s)?`, so "add two water reservoirs"
+    // is an intervention; the client fast path must agree, or the turn falls
+    // through to the chat round trip and produces a chat card *and* a gate.
+    for (const phrase of [
+      'add two water reservoirs',
+      'dig three retention basins in the north',
+      'create permeable pavings',
+    ]) {
+      expect(looksLikeIntervention(phrase, INTENT_VOCABULARY)).toBe(true)
+    }
+  })
+
   it('is not fooled by a substring', () => {
     // "drainage" contains "drain", but neither is a verb here; and "road" inside
     // "broad" must not match on a word boundary.

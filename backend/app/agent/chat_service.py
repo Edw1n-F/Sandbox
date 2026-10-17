@@ -21,16 +21,17 @@ import json
 import time
 from typing import Any, Iterator
 
-from app.agent import confidence, grounding, llm
+from app.agent import grounding, llm
 from app.agent.answer import (
-    ANSWER_SCHEMA,
+    SLIM_SCHEMA as ANSWER_SCHEMA,
     AnswerCard,
     GroundingReport,
     template_card,
     unsupported_capability_card,
 )
 from app.agent.intent import classify_turn, names_a_creation
-from app.agent.prompts import SYSTEM, json_system, user_turn
+from app.agent.prompts import user_turn
+from app.agent.prompts.chat import system_with_contract
 
 __all__ = ["answer", "build_facts", "stream_events"]
 # Not a style choice: reasoning models bill their thinking against the same
@@ -135,50 +136,41 @@ def _draft(
         # the prompt: without it a streamed reply is prose and `_parse_card`
         # returns None, which reads as "the model said nothing".
         chunks: list[str] = []
-        for delta in llm.stream_text(system=json_system(), messages=messages, max_tokens=MAX_TOKENS):
+        for delta in llm.stream_text(system=system_with_contract(), messages=messages, max_tokens=MAX_TOKENS):
             chunks.append(delta)
             on_delta(delta)
         return _parse_card("".join(chunks))
     turn = llm.complete_json(
-        system=SYSTEM, messages=messages, schema=ANSWER_SCHEMA, max_tokens=MAX_TOKENS
+        system=system_with_contract(), messages=messages, schema=ANSWER_SCHEMA, max_tokens=MAX_TOKENS
     )
     return _parse_card(turn.text)
 
 
 def _card_from(draft: dict[str, Any], facts: dict[str, Any], *, revised: bool) -> AnswerCard:
-    """Validate a draft against the model, then check its numbers, then cap it.
+    """Validate a draft against the model, then check its numbers.
 
-    The cap runs on the *interim* verdict (did the revision happen at all), not
-    on who is applying it; `_cap_residual` re-runs once the revision loop has
-    settled, which is the only point at which "still ungrounded" is knowable.
+    The chat is slim: title + sentence + intent only. Any field the slim prompt
+    did not ask for is dropped here, so a model that over-fills still yields a
+    lean card rather than the bloated one. The number check (`grounding`) runs
+    after the drop, so only the headline and the sentence are grounded, and an
+    ungrounded number is reported in `card.grounding` -- the frontend shows it
+    as a named list rather than as a Low confidence.
     """
     try:
         card = AnswerCard.model_validate(draft)
     except Exception:  # pydantic ValidationError and friends: fall back to a template
         return template_card(facts)
+    # Drop everything the slim chat does not ask for, so the wire stays lean.
+    card.eyebrow = None
+    card.cause = None
+    card.todo = None
+    card.stats = []
+    card.caveats = []
+    card.followups = []
+    card.confidence = None
     problems = grounding.check_card(card, facts)
     card.grounding = GroundingReport(ok=not problems, ungrounded=problems, revised=revised)
     card.source = "model"
-    card.confidence = confidence.apply_ladder(
-        card.confidence, confidence.cap_of(facts.get("data") or {})
-    )
-    return card
-
-
-def _cap_residual(card: AnswerCard, facts: dict[str, Any]) -> AnswerCard:
-    """Re-cap once grounding is final: a surviving ungrounded number is a Low.
-
-    Called after the revision loop, because `_card_from` cannot know whether a
-    failed check will be repaired on the retry. Re-applying is idempotent -- the
-    ladder reads the card's current level as the proposal -- so a card that was
-    already capped stays where it is.
-    """
-    if card.source != "model":
-        return card
-    residual = bool(card.grounding and not card.grounding.ok)
-    card.confidence = confidence.apply_ladder(
-        card.confidence, confidence.cap_of(facts.get("data") or {}), ungrounded=residual
-    )
     return card
 
 
@@ -255,7 +247,7 @@ def answer(question: str, facts: dict[str, Any],
     # Deterministic routing (DESIGN §2.5): the classifier runs after the card is
     # built and may only raise the intent, so a proposal-shaped instruction
     # routes to the gate even when no model answered.
-    return _cap_residual(_classify(question, card), facts)
+    return _classify(question, card)
 
 
 def stream_events(question: str, facts: dict[str, Any],
@@ -378,7 +370,6 @@ def stream_events(question: str, facts: dict[str, Any],
         card = template_card(facts)
         ground_result = "template card — no check needed"
     else:
-        card = _cap_residual(card, facts)
         ground_result = ("all numbers trace to the run" if (card.grounding and card.grounding.ok)
                          else f"{len(card.grounding.ungrounded) if card.grounding else 0} ungrounded")
     yield {"event": "step_finished", "index": 2, "title": ground_title, "desc": ground_desc,

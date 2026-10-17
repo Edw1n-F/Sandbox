@@ -40,7 +40,7 @@ import {
   type ChatTurn,
   type StreamEvent,
 } from '@/api/chatApi'
-import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal, type ProposalQuestion } from '@/api/planApi'
+import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
 import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import {
@@ -189,7 +189,7 @@ function ReceiptView({ receipt }: { receipt: Receipt }) {
  * rate-limited -- the normal state of a free tier.
  */
 function reasonOf(card: AnswerCard): string {
-  const caveat = card.caveats[0] ?? ''
+  const caveat = card.caveats?.[0] ?? ''
   if (caveat.startsWith('Assembled by code: ')) {
     return caveat.slice('Assembled by code: '.length).replace(/\.$/, '')
   }
@@ -247,21 +247,25 @@ function CardView({ card }: { card: AnswerCard }) {
         </Stack>
       )}
 
-      <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 1.25 }}>
-        <Box
-          className="hud-dot"
-          sx={{
-            color: card.confidence.level === 'High' ? '#5cff9d'
-              : card.confidence.level === 'Medium' ? '#ffd54f' : '#ff9d2e',
-          }}
-        />
-        <Typography sx={{ fontSize: 10.5 }}>
-          {card.confidence.level} confidence · {card.confidence.pct}%
-        </Typography>
-      </Stack>
-      <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: 0.25, lineHeight: 1.5 }}>
-        {card.confidence.note}
-      </Typography>
+      {card.confidence && (
+        <>
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mt: 1.25 }}>
+            <Box
+              className="hud-dot"
+              sx={{
+                color: card.confidence.level === 'High' ? '#5cff9d'
+                  : card.confidence.level === 'Medium' ? '#ffd54f' : '#ff9d2e',
+              }}
+            />
+            <Typography sx={{ fontSize: 10.5 }}>
+              {card.confidence.level} confidence · {card.confidence.pct}%
+            </Typography>
+          </Stack>
+          <Typography sx={{ fontSize: 10.5, color: 'text.secondary', mt: 0.25, lineHeight: 1.5 }}>
+            {card.confidence.note}
+          </Typography>
+        </>
+      )}
 
       {ungrounded.length > 0 && (
         <Box sx={{ mt: 1, p: 0.75, borderRadius: '4px', border: '1px solid', borderColor: 'rgba(255,157,46,0.45)', bgcolor: 'rgba(255,157,46,0.08)' }}>
@@ -299,49 +303,6 @@ function CardView({ card }: { card: AnswerCard }) {
 }
 
 /**
- * The assumptions one proposal rests on, and whether the planner has answered (Phase 2).
- *
- * Every question names a parameter the run actually reads, and each is rendered
- * with its own state: `OPEN` is a prompt, `ANSWERED` echoes the planner's words
- * *and* the server's parse of them, so a mismatched pair is visible rather than
- * silently resolved. A question whose answer the server could not parse shows
- * the class default still standing, which is the honest reading — the answer was
- * read, and it did not apply.
- */
-function QuestionList({ questions }: { questions: ProposalQuestion[] }) {
-  return (
-    <Box sx={{ mt: 0.5 }}>
-      <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
-        ASSUMPTIONS ASKED ({questions.length})
-      </Typography>
-      {questions.map((q) => (
-        <Box key={q.id} sx={{ mt: 0.25 }}>
-          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45 }}>
-            {q.prompt}
-          </Typography>
-          <Typography
-            className="hud-mono"
-            sx={{
-              fontSize: 9,
-              lineHeight: 1.4,
-              color: q.status === 'ANSWERED' ? '#5cff9d' : 'text.secondary',
-            }}
-          >
-            {q.id} · {q.status}
-            {q.answer ? ` · you: ${q.answer}` : ''}
-            {q.answeredValue !== null && q.answeredValue !== undefined
-              ? ` · read as ${q.answeredValue} ${q.unit}`.trimEnd()
-              : q.status === 'ANSWERED'
-                ? ' · not a number, so the class default stands'
-                : ''}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
-/**
  * The size / constraints / parameters of one proposal, read by field (§2.2).
  *
  * A proposal is presented with its evidence and its limits, not as a bare type:
@@ -355,60 +316,52 @@ function ProposalDetail({ proposal }: { proposal: InterventionProposal }) {
   const constraints = proposal.constraints
   const parameters = proposal.parameters ? Object.entries(proposal.parameters) : []
   return (
-    <Box sx={{ mt: 0.25 }}>
+    <Box sx={{ mt: 0.25, minWidth: 0 }}>
       {size && (
-        <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+        <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
           size: {size.cells} cells · {size.areaHa} ha · {(size.coverageFraction * 100).toFixed(2)}% of area
         </Typography>
       )}
       {constraints && (
-        <Box sx={{ mt: 0.25 }}>
+        <Box sx={{ mt: 0.25, minWidth: 0 }}>
           <Typography
             className="hud-mono"
-            sx={{ fontSize: 9.5, color: constraints.buildingsClear ? '#5cff9d' : '#ff6b6b', lineHeight: 1.4 }}
+            sx={{ fontSize: 9.5, color: constraints.buildingsClear ? '#5cff9d' : '#ff6b6b', lineHeight: 1.4, overflowWrap: 'anywhere' }}
           >
             buildings: {constraints.buildingsClear ? 'clear' : `overlaps ${constraints.buildingOverlapCells} cell(s)`}
             {constraints.buildingIds.length > 0 ? ` (${constraints.buildingIds.join(', ')})` : ''}
           </Typography>
           <Typography
             className="hud-mono"
-            sx={{ fontSize: 9.5, color: constraints.overlapCells === 0 ? 'text.secondary' : '#ff9d2e', lineHeight: 1.4 }}
+            sx={{ fontSize: 9.5, color: constraints.overlapCells === 0 ? 'text.secondary' : '#ff9d2e', lineHeight: 1.4, overflowWrap: 'anywhere' }}
           >
             overlap: {constraints.overlapCells} cell(s)
             {constraints.overlapsWith.length > 0 ? ` with ${constraints.overlapsWith.join(', ')}` : ''}
           </Typography>
           {constraints.clippedCells > 0 && (
-            <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+            <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
               clipped: {constraints.clippedCells} cell(s) ({(constraints.clippedFraction * 100).toFixed(1)}%)
             </Typography>
           )}
-          <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+          <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
             caps: single {constraints.withinSingleCap ? 'ok' : 'over'} · cumulative {constraints.withinCumulativeCap ? 'ok' : 'over'}
           </Typography>
-          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, mt: 0.25 }}>
+          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, mt: 0.25, overflowWrap: 'anywhere' }}>
             effect: {constraints.effect}{constraints.effectNote ? ` — ${constraints.effectNote}` : ''}
           </Typography>
         </Box>
       )}
       {parameters.map(([name, entry]) => (
-        <Typography key={name} className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+        <Typography key={name} className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4, overflowWrap: 'anywhere' }}>
           {name}: {entry.value} {entry.unit} · {entry.status} · {entry.source}
           {entry.edited && entry.defaultValue !== null && entry.defaultValue !== undefined
             ? ` (was ${entry.defaultValue} ${entry.unit})`
             : ''}
         </Typography>
       ))}
-      {proposal.questions && proposal.questions.length > 0 && (
-        <QuestionList questions={proposal.questions} />
-      )}
       {proposal.status && (
-        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25 }}>
+        <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25, overflowWrap: 'anywhere' }}>
           status: {proposal.status}
-        </Typography>
-      )}
-      {proposal.warning && (
-        <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45 }}>
-          {proposal.warning}
         </Typography>
       )}
     </Box>
@@ -653,14 +606,14 @@ function ProposalReview({
             />
           }
           label={
-            <Box>
-              <Typography sx={{ fontSize: 11.5, lineHeight: 1.3 }}>
+            <Box sx={{ minWidth: 0 }}>
+              <Typography sx={{ fontSize: 11.5, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
                 {p.interventionType}
                 {p.siteId ? ` · ${p.siteId}` : ''}
               </Typography>
               {p.rationale && (
                 <Typography
-                  sx={{ fontSize: 10.5, color: 'text.secondary', lineHeight: 1.3 }}
+                  sx={{ fontSize: 10.5, color: 'text.secondary', lineHeight: 1.3, overflowWrap: 'anywhere' }}
                 >
                   {p.rationale}
                 </Typography>
@@ -668,7 +621,7 @@ function ProposalReview({
               {p.basis && (
                 <Typography
                   className="hud-mono"
-                  sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.3 }}
+                  sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.3, overflowWrap: 'anywhere' }}
                 >
                   basis: {p.basis}
                 </Typography>
@@ -677,7 +630,7 @@ function ProposalReview({
               {checked[i] && (
                 // Not part of the checkbox label's click target: typing a depth
                 // must not toggle the proposal off.
-                <Box sx={{ mt: 0.75 }} onClick={(e) => e.preventDefault()}>
+                <Box sx={{ mt: 0.75, minWidth: 0 }} onClick={(e) => e.preventDefault()}>
                   <InputCard
                     inputs={inputs[i]}
                     answers={answers[i]}
@@ -690,13 +643,10 @@ function ProposalReview({
               )}
             </Box>
           }
-          sx={{ alignItems: 'flex-start', ml: 0, mr: 0 }}
+          sx={{ alignItems: 'flex-start', ml: 0, mr: 0, minWidth: 0 }}
         />
       ))}
       <RefusalList rejected={payload.rejected} />
-      {payload.questions && payload.questions.length > 0 && (
-        <QuestionList questions={payload.questions} />
-      )}
       {revalidate && (
         <Box sx={{ mt: 0.5 }}>
           <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
@@ -1243,6 +1193,15 @@ export default function ChatPanel() {
           })
           break
         case 'answer': {
+          // An intervention instruction does not answer a question about the
+          // run: it routes to the design loop. Rendering a chat card here put
+          // "No project is active…" in the thread next to the ai-plan gate, so
+          // the two are separated -- the intervention path skips the card and
+          // opens the gate directly.
+          if (event.answer.intent === 'intervention' && event.answer.intent_hint) {
+            void openProposalGate(event.answer.intent_hint, 'intent')
+            break
+          }
           setAnnouncement(`${event.answer.title}. ${event.answer.sentence}`)
           setMessages((prev) => [
             ...prev,
@@ -1255,13 +1214,6 @@ export default function ChatPanel() {
               chips: event.answer.followups,
             },
           ])
-          // Plan v2 §4 intent auto-route: when the LLM classified the user's
-          // turn as an intervention, open the ai-plan confirm gate without a
-          // second round trip. The card itself still renders -- the hint goes
-          // *in addition*, so the user sees why the gate opened.
-          if (event.answer.intent === 'intervention' && event.answer.intent_hint) {
-            void openProposalGate(event.answer.intent_hint, 'intent')
-          }
           break
         }
         case 'error':
@@ -1479,7 +1431,9 @@ export default function ChatPanel() {
               key={m.id}
               sx={{
                 alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '92%',
+                maxWidth: '100%',
+                minWidth: 0,
+                overflow: 'hidden',
                 px: 1.5,
                 py: 1.25,
                 borderRadius: m.role === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
@@ -1496,7 +1450,7 @@ export default function ChatPanel() {
               ) : (
                 <Typography
                   variant="body2"
-                  sx={{ fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', color: 'text.primary' }}
+                  sx={{ fontSize: 12.5, lineHeight: 1.55, whiteSpace: 'pre-wrap', color: 'text.primary', overflowWrap: 'anywhere' }}
                 >
                   {m.text}
                 </Typography>

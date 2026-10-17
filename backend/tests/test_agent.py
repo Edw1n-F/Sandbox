@@ -152,15 +152,51 @@ def test_the_system_prompt_introduces_no_number_a_card_could_echo_ungrounded() -
     """Any figure written into the prompt is one a model may copy into a card, and
     grounding would then reject it as "not from this run". An example like
     "-0.12 million m3" or a hard-coded site area does exactly that, so the prompt
-    may contain only the small integers grounding already treats as free."""
+    may contain only the small integers grounding already treats as free.
+
+    Checked against the slim chat prompt and the intervention prompt -- the two a
+    model may answer from directly. The run-explanation prompt is exempt: it
+    carries a deliberate `9056.822989472443` vs `9,057 m3` example of how NOT to
+    round, which is a formatting instruction, not a number to echo.
+    """
     import re
 
     from app.agent.prompts import SYSTEM
+    from app.agent.prompts.intervention import INTERVENTION_SYSTEM
 
-    for token in re.findall(r"\d+(?:\.\d+)?", SYSTEM):
-        assert "." not in token and int(token) <= 12, (
-            f"SYSTEM contains {token!r}, which a model could quote and fail grounding"
-        )
+    for name, prompt in (
+        ("SYSTEM", SYSTEM),
+        ("INTERVENTION_SYSTEM", INTERVENTION_SYSTEM),
+    ):
+        for token in re.findall(r"\d+(?:\.\d+)?", prompt):
+            assert "." not in token and int(token) <= 12, (
+                f"{name} contains {token!r}, which a model could quote and fail grounding"
+            )
+
+
+def test_the_intervention_prompt_offers_no_coordinate() -> None:
+    """The site-selection prompt shows the model a menu of site ids, never a
+    coordinate pair it could echo back as invented geometry."""
+    from app.agent.prompts.intervention import INTERVENTION_SYSTEM
+
+    assert "coordinate" in INTERVENTION_SYSTEM.lower()  # the rule is stated
+    for forbidden in ("°", "113.", "22.4", "lon", "lat"):
+        assert forbidden not in INTERVENTION_SYSTEM, forbidden
+
+
+def test_the_chat_contract_is_slim() -> None:
+    """The chat answers with title + sentence + intent only. The full card's
+    cause/todo/stats/caveats/confidence/followups must not leak back into the
+    chat's contract or its JSON schema, or the chat is the bloated card again."""
+    from app.agent.answer import SLIM_SCHEMA
+    from app.agent.prompts.chat import CHAT_CONTRACT
+
+    for field in ("cause", "todo", "stats", "caveats", "confidence", "followups", "eyebrow"):
+        assert field not in SLIM_SCHEMA["properties"], f"SLIM_SCHEMA grew {field}"
+        assert field not in CHAT_CONTRACT, f"CHAT_CONTRACT grew {field}"
+    for field in ("title", "sentence", "intent", "intent_hint"):
+        assert field in SLIM_SCHEMA["properties"], f"SLIM_SCHEMA lost {field}"
+    assert SLIM_SCHEMA["required"] == ["title", "sentence"], SLIM_SCHEMA["required"]
 
 
 def test_fact_values_admits_every_rounding_of_a_fact() -> None:

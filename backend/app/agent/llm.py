@@ -56,13 +56,6 @@ __all__ = [
     "use_provider",
 ]
 
-def json_contract() -> str:
-    """The reply contract, for endpoints that cannot be forced into JSON."""
-    from app.agent.prompts import JSON_CONTRACT
-
-    return JSON_CONTRACT
-
-
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_VERSION = "2023-06-01"
 TIMEOUT_S = 90
@@ -367,7 +360,7 @@ def _openai_json_once(model: str, system: str, messages: list[Message], max_toke
     body = {
         "model": model,
         "max_tokens": max_tokens,
-        "messages": [{"role": "system", "content": f"{system}\n\n{json_contract()}"}]
+        "messages": [{"role": "system", "content": system}]
         + [{"role": m.role, "content": m.text} for m in messages],
     }
     mode = (getattr(settings, "llm_json_mode", "auto") or "auto").lower()
@@ -438,9 +431,9 @@ class OpenAICompatibleProvider:
         payload = {
             "model": model,
             "max_tokens": max_tokens,
-            # Same contract as the non-streaming call: a stream cannot be forced
-            # into JSON, so it has to be asked for.
-            "messages": [{"role": "system", "content": f"{system}\n\n{json_contract()}"}]
+            # The contract must be in `system` (a stream cannot be forced into
+            # JSON): the caller passes the already-contracted system prompt.
+            "messages": [{"role": "system", "content": system}]
             + [{"role": m.role, "content": m.text} for m in messages],
             "stream": True,
         }

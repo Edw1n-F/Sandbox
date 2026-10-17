@@ -130,6 +130,22 @@ function wordRe(phrase: string): RegExp {
 }
 
 /**
+ * A noun matcher that also accepts an English plural, mirroring the server's
+ * `intent.py::_match_noun` (`\b{alias}(?:e?s)?\b`). The fast path must not miss
+ * "add two water reservoirs" just because the catalog lists the singular: the
+ * plural `s`/`es` sits inside the word boundary where `wordRe` fails to match.
+ */
+const nounReCache = new Map<string, RegExp>()
+function nounRe(phrase: string): RegExp {
+  let re = nounReCache.get(phrase)
+  if (!re) {
+    re = new RegExp(`\\b${escapeRegExp(phrase)}(?:e?s)?\\b`)
+    nounReCache.set(phrase, re)
+  }
+  return re
+}
+
+/**
  * Does this read as an intervention instruction rather than a question?
  *
  * The server's `parse_intervention_intent` requires a recognised **verb** *and*
@@ -151,5 +167,5 @@ export function looksLikeIntervention(text: string, vocab: IntentVocabulary): bo
     wordRe(v).test(lower),
   )
   if (!hasVerb) return false
-  return Object.keys(vocab.nouns).some((n) => wordRe(n).test(lower))
+  return Object.keys(vocab.nouns).some((n) => nounRe(n).test(lower))
 }

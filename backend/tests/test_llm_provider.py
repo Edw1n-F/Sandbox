@@ -149,7 +149,7 @@ def test_a_streamed_grounded_card_forwards_every_delta_in_order() -> None:
     card = _answer(events)
     assert card["source"] == "model", card
     assert card["grounding"] == {"ok": True, "ungrounded": [], "revised": False}, card["grounding"]
-    assert card["confidence"]["level"] == "Medium", "a clean run caps at Medium"
+    assert card["confidence"] is None, "the slim chat card carries no confidence"
     assert _step_results(events)[1] == "card drafted", _step_results(events)
     assert [c["method"] for c in fake.calls] == ["stream_text"], fake.calls
     assert fake.calls[0]["max_tokens"] == chat_service.MAX_TOKENS, fake.calls[0]
@@ -220,7 +220,6 @@ def test_an_ungrounded_number_is_sent_back_once_by_name_and_fixed() -> None:
 
     card = _answer(events)
     assert card["grounding"] == {"ok": True, "ungrounded": [], "revised": True}, card["grounding"]
-    assert card["confidence"]["level"] == "Medium", card["confidence"]
     assert _step_results(events)[2] == "all numbers trace to the run"
 
 
@@ -229,7 +228,7 @@ def test_a_number_still_ungrounded_after_revision_ends_low() -> None:
     _assert_well_formed(events)
     card = _answer(events)
     assert card["grounding"]["ok"] is False and card["grounding"]["revised"] is True, card
-    assert card["confidence"]["level"] == "Low", card["confidence"]
+    assert card["confidence"] is None, "the slim chat card carries no confidence"
     assert _step_results(events)[2] == "1 ungrounded", _step_results(events)
     assert fake.remaining == 0
 
@@ -239,7 +238,24 @@ def test_a_revision_that_errors_keeps_the_first_card_and_reports_it_low() -> Non
     _assert_well_formed(events)
     card = _answer(events)
     assert card["source"] == "model" and card["grounding"]["revised"] is False, card
-    assert card["confidence"]["level"] == "Low", card["confidence"]
+    assert card["confidence"] is None, "the slim chat card carries no confidence"
+
+
+def test_the_chat_card_is_slim_even_when_the_model_overfills() -> None:
+    """The chat answers with title + sentence + intent. A model that ignores the
+    slim prompt and fills cause/todo/stats/caveats/followups/confidence anyway
+    must still yield a lean card -- the bloat is dropped, not passed through."""
+    events, _ = _events([[json.dumps(GROUNDED)]])
+    _assert_well_formed(events)
+    card = _answer(events)
+    assert card["source"] == "model", card
+    assert card["cause"] is None, card["cause"]
+    assert card["todo"] is None, card["todo"]
+    assert card["stats"] == [], card["stats"]
+    assert card["caveats"] == [], card["caveats"]
+    assert card["followups"] == [], card["followups"]
+    assert card["confidence"] is None, card["confidence"]
+    assert card["title"] and card["sentence"], "the headline and answer survive"
 
 
 # --------------------------------------------------------------------------- #
@@ -279,7 +295,7 @@ def test_answer_revises_once_and_names_the_bad_number() -> None:
     assert fake.calls[0]["schema"] is chat_service.ANSWER_SCHEMA
     assert BAD_NUMBER in fake.calls[1]["messages"][-1].text, fake.calls[1]
     assert card.source == "model" and card.grounding and card.grounding.ok, card
-    assert card.grounding.revised is True and card.confidence.level == "Medium", card
+    assert card.grounding.revised is True and card.confidence is None, card
 
 
 def test_answer_keeps_a_residual_ungrounded_number_at_low() -> None:
@@ -287,7 +303,7 @@ def test_answer_keeps_a_residual_ungrounded_number_at_low() -> None:
     with llm.use_provider(fake):
         card = chat_service.answer(QUESTION, FACTS)
     assert card.grounding and not card.grounding.ok and card.grounding.revised, card.grounding
-    assert card.confidence.level == "Low", card.confidence
+    assert card.confidence is None, "the slim chat card carries no confidence"
 
 
 def test_answer_takes_the_json_out_of_prose() -> None:
@@ -471,7 +487,7 @@ def test_openai_auto_mode_drops_response_format_after_a_400() -> None:
     assert sent[0]["url"] == "https://llm.example/v1/chat/completions"
     assert sent[0]["headers"]["authorization"] == "Bearer k-test"
     system = sent[1]["payload"]["messages"][0]
-    assert system["role"] == "system" and system["content"] == f"SYS\n\n{llm.json_contract()}"
+    assert system["role"] == "system" and system["content"] == "SYS"
     assert sent[1]["payload"]["model"] == "m-primary" and sent[1]["payload"]["max_tokens"] == 900
     assert json.loads(turn.text) == GROUNDED and turn.usage.total_tokens == 8
 
@@ -507,7 +523,7 @@ def test_openai_stream_stops_at_done_and_reassembles_split_lines() -> None:
     assert out == ['{"ti', 'tle"}'], out
     p = sent[0]["payload"]
     assert p["stream"] is True and "response_format" not in p, p
-    assert p["messages"][0]["content"] == f"SYS\n\n{llm.json_contract()}", p["messages"][0]
+    assert p["messages"][0]["content"] == "SYS", p["messages"][0]
 
 
 def test_openai_complete_text_backs_off_on_the_same_model_before_advancing() -> None:

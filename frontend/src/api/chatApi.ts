@@ -52,7 +52,11 @@ export interface AnswerCard {
   l2: string
   todo?: string | null
   stats: StatItem[]
-  confidence: Confidence
+  /**
+   * Present on the full run card; absent (null) on the slim chat card, which
+   * answers with a headline and a sentence only.
+   */
+  confidence?: Confidence | null
   caveats: string[]
   followups: string[]
   source: 'model' | 'template'

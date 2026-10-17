@@ -21,6 +21,8 @@ NO_MODEL = "no language model is configured"
 
 __all__ = [
     "ANSWER_SCHEMA",
+    "FULL_SCHEMA",
+    "SLIM_SCHEMA",
     "AnswerCard",
     "Confidence",
     "NO_MODEL",
@@ -211,9 +213,10 @@ class AnswerCard(BaseModel):
         return out
 
 
-#: The JSON schema handed to the provider. Mirrors the model above, minus the
-#: fields only code fills (`source`, `grounding`).
-ANSWER_SCHEMA: dict[str, Any] = {
+#: The full JSON schema handed to the provider. Mirrors the model above, minus
+#: the fields only code fills (`source`, `grounding`). Used by the run
+#: explanation card, which fills every field.
+FULL_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "kind": {"type": "string", "enum": ["run", "general"]},
@@ -269,6 +272,30 @@ ANSWER_SCHEMA: dict[str, Any] = {
     # self-assessment was a bad trade. `AnswerCard` fills Low with a note that
     # names the omission, so a card that arrives without one is still labelled
     # honestly rather than discarded.
+    "required": ["title", "sentence"],
+}
+
+#: The full schema under its historical name. ``run_service`` and any caller
+#: that wants the complete card keep importing this; it is the same object as
+#: :data:`FULL_SCHEMA`, so an identity check in a test stays true.
+ANSWER_SCHEMA = FULL_SCHEMA
+
+#: The slim schema for the chat, which answers with a headline and a sentence
+#: only -- no cause/todo/stats/caveats/confidence/followups. The ``required``
+#: set stays just ``title``/``sentence``: ``intent`` has a ``"question"``
+#: default and ``classify_turn`` falls back to it, so requiring it here would
+#: make a small model that omits it drop the whole card. The prose contract
+#: (``chat.CHAT_CONTRACT``) writes ``intent`` as required; the schema stays
+#: permissive so the card still parses.
+SLIM_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["run", "general"]},
+        "title": {"type": "string", "maxLength": 120},
+        "sentence": {"type": "string", "maxLength": 400},
+        "intent": {"type": "string", "enum": ["question", "intervention", "ambiguous"]},
+        "intent_hint": {"type": "string", "maxLength": 120},
+    },
     "required": ["title", "sentence"],
 }
 
