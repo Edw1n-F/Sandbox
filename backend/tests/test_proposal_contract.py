@@ -1535,13 +1535,40 @@ def test_a_named_region_is_honoured_by_site_selection() -> None:
     checklist with one item, and the owner's report was "the generated proposals
     are all repeated".
 
-    Measured today: north 3, south 0, east 1, west 2, centre 1.
+    Regions are derived from the pool, not named here. The pool itself moves
+    when the wet grid is regenerated (unified to a 50 mm design storm on 17 Oct,
+    the reservoir pool fell from three sites to two and "south" stopped being
+    the empty one), and a hardcoded region made this test fail on correct
+    behaviour every time the artefact was rebuilt. What the test is about is the
+    *filter*, so it needs one region with a candidate and one without, whichever
+    they happen to be.
     """
+    from app.services.ai_plan import REGION_FRACTIONS, _match_region, _point_in_region
+
     grounding = ai_plan.load_grounding()
     heuristic = ai_plan.HeuristicProvider()
+    bounds = grounding.bounds
+    pool = list(grounding.reservoir_sites)
+    assert pool, "the fixture needs at least one reservoir candidate"
+
+    names = [r for r in REGION_FRACTIONS if r != "all"]
+
+    def sites_in(region: str) -> int:
+        return sum(
+            1 for s in pool
+            if _point_in_region(s["centroid"][0], s["centroid"][1], bounds, region))
+
+    occupied = [r for r in names if sites_in(r) > 0]
+    empty = [r for r in names if sites_in(r) == 0]
+    assert occupied, "every region is empty; the fixture has no candidate at all"
+    # A region genuinely holding no candidate is required for the second half.
+    # Picking one from the data rather than naming it keeps that requirement
+    # real instead of turning it into a claim about one rainy afternoon's grid.
+    if not empty:
+        return  # every region holds a candidate: the filter has nothing to prove
 
     sets: dict[str, list[str]] = {}
-    for region in ("north", "south", "east", "west", "centre"):
+    for region in occupied[:4] + empty[:1]:
         features = heuristic.propose(
             f"add a water reservoir in the {region}", grounding)
         sets[region] = [
@@ -1557,10 +1584,10 @@ def test_a_named_region_is_honoured_by_site_selection() -> None:
     # docstring calls that fallback "the exact bug this function exists to
     # remove". A site silently returned for the wrong region is worse than a
     # refusal a planner can act on.
-    assert sets["south"] == [], (
-        "south has no reservoir candidate and must stay empty; returning an "
-        "out-of-region site would present a re-sited proposal as the one "
-        "that was asked for")
+    assert sets[empty[0]] == [], (
+        f"{empty[0]} holds no reservoir candidate and must stay empty; "
+        "returning an out-of-region site would present a re-sited proposal as "
+        "the one that was asked for")
 
 
 def test_the_region_filter_preserves_each_sites_original_pool_index() -> None:
@@ -1604,8 +1631,26 @@ def test_region_selection_is_deterministic_and_unstated_counts_do_not_cap() -> N
     grounding = ai_plan.load_grounding()
     heuristic = ai_plan.HeuristicProvider()
 
-    first = heuristic.propose("add a water reservoir in the north", grounding)
-    second = heuristic.propose("add a water reservoir in the north", grounding)
+    # The region is chosen because it holds more than one candidate, not
+    # hardcoded: the pool moves whenever the wet grid is regenerated (the 50 mm
+    # unification on 17 Oct left "north" with one reservoir), and the claim here
+    # is about the count, not about which region happens to be crowded today.
+    from app.services.ai_plan import REGION_FRACTIONS, _point_in_region
+
+    pool = list(grounding.reservoir_sites)
+    bounds = grounding.bounds
+    crowded = [
+        r for r in REGION_FRACTIONS if r != "all"
+        and sum(1 for s in pool if _point_in_region(
+            s["centroid"][0], s["centroid"][1], bounds, r)) > 1
+    ]
+    if not crowded:
+        return  # no region holds two candidates: nothing for this check to say
+
+    region = crowded[0]
+    instruction = f"add a water reservoir in the {region}"
+    first = heuristic.propose(instruction, grounding)
+    second = heuristic.propose(instruction, grounding)
     assert [json.dumps(f["geometry"], sort_keys=True) for f in first] == [
         json.dumps(f["geometry"], sort_keys=True) for f in second
     ], "the same instruction selected different sites on a second call"

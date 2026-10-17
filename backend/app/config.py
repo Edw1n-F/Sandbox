@@ -20,6 +20,27 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 
+#: The one design storm every API default reads, in millimetres.
+#:
+#: It lives here rather than in `services/sandbox_model.py` because the wire
+#: schemas need it too, and a schema importing a *service* would pull numpy and
+#: `scripts/` into the contract layer (and risk an import cycle). `sandbox_model`
+#: re-exports it as `DEFAULT_RAINFALL_MM`, so there is still one number.
+#:
+#: **50 mm, unified 17 Oct 2026.** The run request, the sandbox, the suggester
+#: and the preview each defaulted to 450 while this and the scene's own
+#: `env_params.precipitation` said 50, so "the default rainfall" had two answers
+#: and which one you got depended on which endpoint you called.
+#:
+#: What that changes on this data, measured: the baseline unstored volume falls
+#: from 180,566 m3 to 9,057 m3, and the static wet-grid overlay -- generated at
+#: 450 -- pictures 16.8 ha of water where the ledger at 50 computes 0.8 ha.
+#: 50 mm is a one-hour design storm and 450 mm a 24-hour one, so this is not a
+#: rounding difference. The overlay needs regenerating at 50
+#: (`scripts/make_wetgrid.py --rainfall 50`) for the map and the ledger to agree.
+#: A caller may still ask for 450 explicitly; what is unified is the API default.
+DEFAULT_RAINFALL_MM = 50.0
+
 _logger = logging.getLogger(__name__)
 
 

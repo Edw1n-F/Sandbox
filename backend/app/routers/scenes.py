@@ -73,7 +73,7 @@ def list_plans(scene_id: str) -> PlanListRead:
 
 
 @router.get("/scenes/{scene_id}/suggestions")
-def get_suggestions(scene_id: str, rainfall_mm: float = 450.0,
+def get_suggestions(scene_id: str, rainfall_mm: float = DEFAULT_RAINFALL_MM,
                     max_per_axis: int = 3) -> dict:
     """GET /api/scenes/{sceneId}/suggestions -- the loop's suggest step.
 

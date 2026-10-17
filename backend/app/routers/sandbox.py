@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, status
 from pydantic import Field
 
+from app.config import DEFAULT_RAINFALL_MM
 from app.schemas.scene import WireModel
 
 router = APIRouter()
@@ -177,7 +178,7 @@ class SandboxPreviewRequest(WireModel):
     interventions: list[dict[str, Any]] = Field(default_factory=list)
     values: list[dict[str, Any] | None] = Field(default_factory=list)
     plan_ids: list[str] = Field(default_factory=list)
-    rainfall_mm: float = Field(default=450.0, ge=0, le=800)
+    rainfall_mm: float = Field(default=DEFAULT_RAINFALL_MM, ge=0, le=800)
 
 
 @router.post("/scenes/{scene_id}/sandbox/preview")

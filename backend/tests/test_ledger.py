@@ -90,10 +90,19 @@ def main() -> int:
         print("\n0/1 checks passed")
         return 1
 
-    sidecar = json.loads(
-        (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.json").read_text())["results"]
+    sidecar_doc = json.loads(
+        (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.json").read_text())
+    sidecar = sidecar_doc["results"]
+    # The wet grid is a rendered artefact of ONE storm, so its own rainfall is
+    # the only rainfall its numbers can be compared at. Comparing it against the
+    # API default instead made this check a statement about which constant the
+    # default happened to use -- and when the default moved from 450 to 50 on
+    # 17 Oct, this check failed while the code was right and the artefact was
+    # simply built at the other storm.
+    sidecar_rainfall = float(
+        (sidecar_doc.get("inputs") or {}).get("rainfall_mm") or DEFAULT_RAINFALL_MM)
 
-    base = ledger_for_scenario(grids, [])
+    base = ledger_for_scenario(grids, [], sidecar_rainfall)
     check("the buffer deficit is the script's unstored volume",
           abs(base["bufferDeficitM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
           f"{base['bufferDeficitM3']:,.1f} vs {sidecar['unstoredVolumeM3']:,.1f}")
@@ -106,8 +115,10 @@ def main() -> int:
 
     # --- a real intervention must actually reduce the deficit --- #
     ring = [[113.990, 22.435], [113.995, 22.435], [113.995, 22.440], [113.990, 22.440]]
-    reservoir = ledger_for_scenario(grids, [_feature("water_reservoir", ring)])
-    green = ledger_for_scenario(grids, [_feature("green_space", ring)])
+    reservoir = ledger_for_scenario(
+        grids, [_feature("water_reservoir", ring)], sidecar_rainfall)
+    green = ledger_for_scenario(
+        grids, [_feature("green_space", ring)], sidecar_rainfall)
     check("a reservoir reduces the deficit",
           reservoir["deltaUnstoredM3"] < 0,
           f"{reservoir['deltaUnstoredM3']:+,.0f} m3")
@@ -116,10 +127,22 @@ def main() -> int:
     check("and both report what they changed",
           reservoir["interventionsApplied"][0]["cellsChanged"] > 0,
           f"{reservoir['interventionsApplied'][0]['cellsChanged']} cells")
+    # Asserted on STORAGE CAPACITY, not on the unstored delta.
+    #
+    # At 50 mm the two have the same residual unstored volume -- correctly:
+    # a small storm's runoff fits inside either intervention's storage, so
+    # neither leaves anything unstored and the difference has nowhere to show
+    # in that figure. At 450 mm they diverge (-17,769 vs -2,479 m3), which is
+    # where the original assertion came from.
+    #
+    # What distinguishes them at every storm is the capacity they add, which is
+    # the quantity a reservoir is *for*. Asserting on it keeps the claim true at
+    # both design storms instead of only the one it was written at.
+    res_cap = reservoir["scenario"]["storageCapacityM3"]
+    green_cap = green["scenario"]["storageCapacityM3"]
     check("a reservoir stores more than green does",
-          reservoir["deltaUnstoredM3"] < green["deltaUnstoredM3"],
-          f"reservoir {reservoir['deltaUnstoredM3']:+,.0f} vs "
-          f"green {green['deltaUnstoredM3']:+,.0f}")
+          res_cap > green_cap * 2,
+          f"capacity {res_cap:,.0f} vs {green_cap:,.0f} m3")
 
     # --- operations with no land effect must say so, not fake one --- #
     for kind in ("massing_height", "drainage_alignment"):
@@ -243,7 +266,7 @@ def main() -> int:
           f"{len(live_ids)} live id(s), {len(absurd_live)} over-large")
 
     # --- the base ledger still matches the script after all of this --- #
-    led = storage_ledger(grids, grids.land_class)
+    led = storage_ledger(grids, grids.land_class, sidecar_rainfall)
     check("the unmodified ledger is unchanged by any of it",
           abs(led["unstoredM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
           f"{led['unstoredM3']:,.1f}")
@@ -254,7 +277,7 @@ def main() -> int:
     # sums, so its runoffInM3 must be the published headline rather than a
     # re-derived one. Two identities are asserted, and the second is the one that
     # catches an ADR-015 double count hiding inside a balanced cascade.
-    routed = routed_ledger(grids, grids.land_class)
+    routed = routed_ledger(grids, grids.land_class, sidecar_rainfall)
     check("the routed ledger is available",
           routed.get("status") == "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
           str(routed.get("status")))
@@ -269,7 +292,7 @@ def main() -> int:
           abs(routed["runoffInM3"] - sidecar["unstoredVolumeM3"]) < 1.0,
           f"{routed['runoffInM3']:,.1f} vs {sidecar['unstoredVolumeM3']:,.1f}")
 
-    gen_m, unstored_m = _runoff_and_unstored(grids.land_class, DEFAULT_RAINFALL_MM)
+    gen_m, unstored_m = _runoff_and_unstored(grids.land_class, sidecar_rainfall)
     area = grids.cell_area_m2
     generation = float(gen_m.sum() * area)
     local_retention = float((gen_m - unstored_m).sum() * area)
@@ -282,7 +305,10 @@ def main() -> int:
           bool((gen_m[grids.land_class == LAND_CLASSES.index("water")] == 0.0).all()),
           "water cells generate nothing, so they are never counted twice")
 
-    wetter = routed_ledger(grids, grids.land_class, DEFAULT_RAINFALL_MM * 1.5)
+    # Relative to the READING it is compared against, not to the API default:
+    # once the default moved to 50, `DEFAULT * 1.5` (75 mm) was *less* rain
+    # than the 450 mm baseline this check runs at, so the comparison inverted.
+    wetter = routed_ledger(grids, grids.land_class, sidecar_rainfall * 1.5)
     check("more rainfall raises the routed runoff",
           wetter["runoffInM3"] > routed["runoffInM3"],
           f"{wetter['runoffInM3']:,.0f} > {routed['runoffInM3']:,.0f}")
@@ -310,10 +336,16 @@ def main() -> int:
     #
     # wetgrid_hsk.npy is the level-pool depth field the cascade sits BESIDE. If a
     # refactor moved it, every published deficit would move with it silently.
+    #
+    # Re-pinned 17 Oct 2026 when the design storm was unified at 50 mm and the
+    # artefact regenerated at it (`make_wetgrid.py --rainfall 50`). The hash
+    # moves when the ARTEFACT is deliberately regenerated; that is the point of
+    # the pin, and it should fail whenever a code change moves the depth field
+    # without anyone saying so.
     wet_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.npy").read_bytes()).hexdigest()
     check("the wet-grid depth artefact is byte-identical",
-          wet_md5 == "516ff65e31e409289de088b53ea97e70", wet_md5)
+          wet_md5 == "62db7a0fae2f639d2e5d1b2bc37e2669", wet_md5)
     accum_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "flow_accum_hsk.npy").read_bytes()).hexdigest()
     check("the flow-accumulation artefact is unchanged",
@@ -322,7 +354,7 @@ def main() -> int:
     # The _runoff_and_unstored() refactor and the elevation_5m semantics change
     # (it now holds the Priority-Flood FILLED surface, where it previously held
     # the raw one) must not have moved the sea-level report's headline.
-    sea = sea_level_report(grids)
+    sea = sea_level_report(grids, sidecar_rainfall)
     check("the sea-level ground range is still the physical range",
           abs(sea["groundElevationM"]["min"] - 3.41) < 0.05
           and abs(sea["groundElevationM"]["max"] - 17.29) < 0.05,

@@ -1781,7 +1781,7 @@
             "type": "array"
           },
           "rainfallMm": {
-            "default": 450.0,
+            "default": 50.0,
             "maximum": 800.0,
             "minimum": 0.0,
             "title": "Rainfallmm",
@@ -2503,7 +2503,7 @@
         ]
       },
       "put": {
-        "description": "Overwrite one or more fields on the live `settings`.\n\nThis is in-memory only -- `.env` is not touched, so the overrides disappear\non restart. That is deliberate: a demo should not persist secrets without a\nclear write-to-disk opt-in, and running the deploy with the real key in the\nenvironment is already supported.",
+        "description": "Overwrite one or more fields on the live `settings` and persist them.\n\nThe edited fields are written to ``data/llm_config.json`` so the panel's\nchoices survive a restart; ``.env`` stays the deployment baseline for fields\nthe user never touched.",
         "operationId": "update_llm_config_api_llm_config_put",
         "requestBody": {
           "content": {
@@ -4743,7 +4743,7 @@
             "name": "rainfall_mm",
             "required": false,
             "schema": {
-              "default": 450.0,
+              "default": 50.0,
               "title": "Rainfall Mm",
               "type": "number"
             }

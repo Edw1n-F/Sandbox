@@ -148,8 +148,15 @@ def main() -> int:
     check("bigger green interventions score strictly better",
           all(a["cost"] > b["cost"] for a, b in zip(ordered, ordered[1:])),
           " > ".join(f"{c['id']}={c['cost']:,.0f}" for c in ordered))
+    # The claim is that one building cannot move the district, not that the
+    # share is under some particular number. That distinction matters now: the
+    # share is a ratio against the district's total, and when the default design
+    # storm moved from 450 mm to 50 mm the denominator fell ~20x while a
+    # building's own delta did not, so a threshold calibrated at 450 (1%) began
+    # failing on correct behaviour. One building moving a few percent of a
+    # small-storm district is still "this tool is for one building".
     check("the district-scale limit is stated, not buried",
-          result["bestChangeShareOfDistrict"] < 0.01,
+          result["bestChangeShareOfDistrict"] < 0.10,
           f"{result['bestChangeShareOfDistrict'] * 100:.4f}% of the district")
 
     # --- constraints --- #

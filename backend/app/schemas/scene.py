@@ -28,6 +28,8 @@ from pydantic import (
     model_validator,
 )
 from pydantic.alias_generators import to_camel
+
+from app.config import DEFAULT_RAINFALL_MM
 from typing_extensions import Self
 
 # --------------------------------------------------------------------------- #
@@ -386,7 +388,9 @@ class RunRequest(WireModel):
     entry, so a single-project client and a cumulative one share one code path.
     """
 
-    rainfall_mm: float = Field(default=50.0, ge=0.0, le=800.0)
+    # Defaulted from `DEFAULT_RAINFALL_MM`, not typed again: one design storm
+    # for the whole API (see that constant). A caller may still send 450.
+    rainfall_mm: float = Field(default=DEFAULT_RAINFALL_MM, ge=0.0, le=800.0)
     temperature_c: float = Field(default=30.0, ge=-10.0, le=50.0)
     # Screening tidal-backwater condition applied to the D8 outfall. One of
     # "low" / "mean" / "high" (see sandbox_model.TIDE_STATES); not a hydraulic

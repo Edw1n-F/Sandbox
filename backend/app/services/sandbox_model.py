@@ -64,6 +64,7 @@ for _extra in (BACKEND_DIR, BACKEND_DIR / "scripts"):
     if str(_extra) not in sys.path:
         sys.path.insert(0, str(_extra))
 
+from app.config import DEFAULT_RAINFALL_MM as _DEFAULT_RAINFALL_MM  # noqa: E402
 from app.config import settings  # noqa: E402
 
 # Reused rather than reimplemented. These are the project's physics, and a second
@@ -98,7 +99,11 @@ from hydrology import fill_and_spill, hand  # noqa: E402
 BUILDING_SHADE_M_PER_M = 0.35
 BUILDING_EXPOSURE_M2_PER_M = 1.8
 
-DEFAULT_RAINFALL_MM = 450.0
+# The design storm, re-exported from `app.config` so a caller that reads it
+# here and a schema that reads it there get the same number. The
+# reasoning and the measured consequences of the 17 Oct unification live
+# beside the definition.
+DEFAULT_RAINFALL_MM = _DEFAULT_RAINFALL_MM
 NEIGHBOURHOOD_M = 100.0
 M_PER_DEG_LAT = 110_540.0
 

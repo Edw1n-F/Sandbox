@@ -52,6 +52,17 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         print(f"  FAIL  {label}{f' -- {detail}' if detail else ''}")
 
 
+def _published_unstored() -> dict:
+    """The wet-grid sidecar's own published results."""
+    import json
+
+    from app.config import BACKEND_DIR
+
+    doc = json.loads(
+        (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.json").read_text())
+    return doc["results"]
+
+
 def main() -> int:
     # --- label_depressions on a two-pit DEM --- #
     #
@@ -192,8 +203,13 @@ def main() -> int:
                   and rec["routed"]["runoffInM3"] == rec["levelPool"]["unstoredM3"],
                   f"{rec['routed']['runoffInM3']} vs "
                   f"{rec['levelPool']['unstoredM3']}")
+            # Pinned against the wet-grid SIDECAR, not a typed number: the
+            # headline is whatever that artefact published, and the artefact is
+            # regenerated whenever the design storm changes. A literal here made
+            # this check a second copy of one run's output.
             check("and it equals the published headline, not a re-derivation",
-                  abs(rec["levelPool"]["unstoredM3"] - 180566.3) < 0.5,
+                  abs(rec["levelPool"]["unstoredM3"]
+                      - _published_unstored()["unstoredVolumeM3"]) < 0.5,
                   f"{rec['levelPool']['unstoredM3']}")
             check("the reconciliation is computed, not restated: a different rainfall changes it",
                   routed_ledger(grids, grids.land_class, rainfall_mm=550.0)
