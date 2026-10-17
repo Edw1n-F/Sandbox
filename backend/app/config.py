@@ -10,6 +10,8 @@ Measurement maths belongs in a projected CRS and is confined to
 ``scripts/`` -- see docs/ARCHITECTURE.md (Decision 1, ADR-007).
 """
 
+import json
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
+
+_logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -145,9 +149,63 @@ class Settings(BaseSettings):
         return f"{base}/model/{rel}"
 
 
+#: Settings fields the runtime UI may override and persist to disk. Stored under
+#: ``data/llm_config.json`` using these snake_case names; ``.env`` remains the
+#: deployment baseline the overrides layer on top of.
+LLM_OVERRIDE_FIELDS: tuple[str, ...] = (
+    "anthropic_api_key",
+    "anthropic_model",
+    "llm_base_url",
+    "llm_api_key",
+    "llm_model",
+    "llm_json_mode",
+    "llm_allow_no_key",
+)
+
+
+def _llm_config_file(s: Settings) -> Path:
+    """The on-disk location of runtime LLM overrides, inside the file store."""
+    return s.data_dir / "llm_config.json"
+
+
+def _read_llm_overrides(s: Settings) -> dict[str, object]:
+    """Load persisted runtime overrides, ignoring unknown keys and bad files."""
+    try:
+        raw = json.loads(_llm_config_file(s).read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if k in LLM_OVERRIDE_FIELDS}
+
+
+def persist_llm_overrides(updates: dict[str, object]) -> None:
+    """Merge `updates` into ``data/llm_config.json`` so they survive a restart.
+
+    Only the fields named in `updates` are touched: a field the user never edited
+    keeps its ``.env`` source. A failed write is logged, not raised -- the
+    in-memory value is already live, and the next save retries the write.
+    """
+    path = settings.data_dir / "llm_config.json"
+    merged = _read_llm_overrides(settings)
+    merged.update(updates)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        _logger.warning("could not persist LLM config to %s", path, exc_info=True)
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    s = Settings()
+    # Runtime overrides (from the config UI) win over the `.env` baseline, so a
+    # key typed into the panel is still there after the process restarts.
+    for key, value in _read_llm_overrides(s).items():
+        setattr(s, key, value)
+    return s
 
 
 settings = get_settings()

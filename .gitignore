@@ -75,6 +75,10 @@ backend/data/interventions/*
 !backend/data/plans/project-*.json
 !backend/data/interventions/project-*.json
 
+# Runtime LLM overrides written by PUT /api/llm-config. Holds the API key the
+# operator typed into the panel, so it is never committed.
+backend/data/llm_config.json
+
 # Agent memory, not project source
 .workbuddy/
 

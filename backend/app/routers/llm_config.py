@@ -1,8 +1,9 @@
 """LLM config routes (plan v2 §9).
 
-Runtime, in-memory overrides for the GenAI provider. The server never writes
-these back to ``.env``: a restart clears them, which is the correct default for
-a prototype where secrets are typed into a form rather than committed.
+Runtime overrides for the GenAI provider. A ``PUT`` updates the live `settings`
+**and** persists the edited fields to ``data/llm_config.json`` (see
+:func:`app.config.persist_llm_overrides`), so a key typed into the panel survives
+a restart instead of silently reverting to ``.env``.
 
 Policy:
 - ``GET`` returns the public fields (``baseUrl``, ``model``, ``jsonMode``,
@@ -17,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import Field
 
-from app.config import settings
+from app.config import persist_llm_overrides, settings
 from app.schemas.scene import WireModel
 
 router = APIRouter(tags=["llm-config"])
@@ -78,26 +79,28 @@ def get_llm_config() -> LLMConfigRead:
 
 @router.put("/llm-config")
 def update_llm_config(payload: LLMConfigUpdate) -> LLMConfigRead:
-    """Overwrite one or more fields on the live `settings`.
+    """Overwrite one or more fields on the live `settings` and persist them.
 
-    This is in-memory only -- `.env` is not touched, so the overrides disappear
-    on restart. That is deliberate: a demo should not persist secrets without a
-    clear write-to-disk opt-in, and running the deploy with the real key in the
-    environment is already supported.
+    The edited fields are written to ``data/llm_config.json`` so the panel's
+    choices survive a restart; ``.env`` stays the deployment baseline for fields
+    the user never touched.
     """
+    # Wire (camelCase) field -> settings attribute name, in one place so the
+    # Pydantic model, the live settings and the on-disk override cannot drift.
+    field_map = {
+        "anthropic_api_key": "anthropic_api_key",
+        "anthropic_model": "anthropic_model",
+        "base_url": "llm_base_url",
+        "api_key": "llm_api_key",
+        "model": "llm_model",
+        "json_mode": "llm_json_mode",
+        "allow_no_key": "llm_allow_no_key",
+    }
     data = payload.model_dump(exclude_none=True)
-    if "anthropic_api_key" in data:
-        settings.anthropic_api_key = data["anthropic_api_key"]
-    if "anthropic_model" in data:
-        settings.anthropic_model = data["anthropic_model"]
-    if "base_url" in data:
-        settings.llm_base_url = data["base_url"]
-    if "api_key" in data:
-        settings.llm_api_key = data["api_key"]
-    if "model" in data:
-        settings.llm_model = data["model"]
-    if "json_mode" in data:
-        settings.llm_json_mode = data["json_mode"]
-    if "allow_no_key" in data:
-        settings.llm_allow_no_key = data["allow_no_key"]
+    updates: dict[str, object] = {}
+    for wire_field, setting_name in field_map.items():
+        if wire_field in data:
+            setattr(settings, setting_name, data[wire_field])
+            updates[setting_name] = data[wire_field]
+    persist_llm_overrides(updates)
     return get_llm_config()

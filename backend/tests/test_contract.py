@@ -356,10 +356,9 @@ def test_llm_config_get_never_returns_the_api_key() -> None:
     assert "baseUrl" in body or "base_url" in body
 
 
-def test_llm_config_put_overrides_in_memory() -> None:
-    """A PUT updates the live settings; a GET reflects it; a restart would
-    clear it. The last part is implicit (we are in-process) -- the first two
-    are what the UI relies on."""
+def test_llm_config_put_overrides_and_persists() -> None:
+    """A PUT updates the live settings, a GET reflects it, and the edited
+    fields are written to ``data/llm_config.json`` so they survive a restart."""
     from app.config import settings
 
     before = {
@@ -367,6 +366,9 @@ def test_llm_config_put_overrides_in_memory() -> None:
         "model": settings.llm_model,
         "api_key": settings.llm_api_key,
     }
+    # `isolate_store` points `settings.data_dir` at a temp copy, so this write
+    # never touches the real store and never leaks the test key.
+    override_file = settings.data_dir / "llm_config.json"
     try:
         r = client.put(
             "/api/llm-config",
@@ -381,11 +383,19 @@ def test_llm_config_put_overrides_in_memory() -> None:
         assert got["configured"] is True
         # verify settings itself was updated
         assert settings.llm_api_key == "k"
+        # and the edited fields were persisted for the next process
+        persisted = json.loads(override_file.read_text(encoding="utf-8"))
+        assert persisted.get("llm_base_url") == "http://unit-test/v1"
+        assert persisted.get("llm_model") == "unit-test-model"
+        assert persisted.get("llm_api_key") == "k"
     finally:
-        # restore
+        # restore in-memory state and remove the persisted override so a stray
+        # run cannot leak the test key or reseed a later process
         settings.llm_base_url = before["base_url"]
         settings.llm_model = before["model"]
         settings.llm_api_key = before["api_key"]
+        if override_file.exists():
+            override_file.unlink()
 
 
 def test_ai_plan_allowed_types_rejects_garbage() -> None:
