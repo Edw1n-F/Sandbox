@@ -58,19 +58,19 @@ Two things in the tree got this wrong and are being removed:
 
 ---
 
-## Phase 2 — where the code actually is (uncommitted, blocked on a stale git lock)
+## Phase 2 — where the code actually is (committed 17 Oct 2026)
 
-Phase 2 (P0-2 parameter card, P0-3 `questions[]`, P0-4 editable assumptions) is **partially
-implemented and fully green**, but **not committed** — a stale `.git/index.lock` left by a
-crashed process is blocking every write, and the sandbox will not permit its removal.
+Phase 2 (P0-2 parameter card, P0-3 `questions[]`, P0-4 editable assumptions) is
+**implemented, committed and green**. The stale `.git/index.lock` that blocked writes is
+gone; every task below landed in `01d335c` and `850a972`.
 
 | Task | State |
 |---|---|
 | **T01** `rejected[]` reaches the wire | **Done.** All three `AIPlanResponse.model_validate` sites in `app/routers/scenes.py` now pass it, hoisted into one local so they cannot drift. The skipping `test_PENDING_proposals_do_not_overlap_each_other` is **deleted** and replaced by two tests that build their own fixtures and fail loudly. Gate 18 → **19**. |
 | **T02** parameter card | **Done.** `app/services/parameter_card.py` + `app/schemas/parameter_card.py` + `GET /api/scenes/{id}/parameter-card`; `_area_stats` gains `classAreaM2`; gross/net printed side by side; soil group, heat preset and tree cover refuse a value with a reason; `date` is `null` unless a real acquisition date exists. D2 and D3 fixed on the way. Gate → **21**. |
-| **T03** `questions[]` | **Not started.** |
-| **T04** editable assumptions + `apply_proposals` validates | **Not started.** The disclosure hole this closes is **live and verified**: `POST /ai-plan/apply` with a client-set `params.storageDepthM = 3.5` returns **200, persists, and is read back as 3.5**, while the server's own `parameters` block on that same proposal claims `value: 1.5, status: "ASSUMPTION", source: "…STORAGE_DEPTH_M['water'] (class default)"`. The served value and its provenance label disagree with no user action. |
-| **T05** mask unification + docs | **Not started.** |
+| **T03** `questions[]` | **Done** in `01d335c`. `ProposalQuestion` + `AnsweredQuestion`; `proposal_constraints.questions_for_kind` / `site_questions` generate them from code beside `parameters_for_kind`, so a question exists only for a parameter the run publishes. `id` is derived from `parameter` alone. An answered depth replaces the class default in `params.storageDepthM`. |
+| **T04** editable assumptions + `apply_proposals` validates | **Done** in `01d335c`. `parameters_for_kind(kind, override)` emits `USER_ASSUMPTION` + `defaultValue` + `edited`, and `_accepted_warning` replaces the class-assumption sentence rather than joining it. `apply_proposals` runs `validate_batch` before pinning (M6 closed), and an out-of-range depth is a 422 on both endpoints. `POST /ai-plan/revalidate` is the gate's third call. The disclosure hole described here is **closed and asserted** by `test_sandbox`. |
+| **T05** mask unification + docs | **Done** in `850a972`. `siting._rasters` and `ai_plan.load_grounding` both filter with `proposal_constraints.building_mask` — the gate's own union — and `DESIGN_intervention_proposals.md:84` states the union and the whole-shortfall rule for `clippedCells`. |
 
 **Verification already done on this tree (all under the *pinned* dependency set, not the stale
 `backend/.venv`):** `test_proposal_contract` **21/21**, every other backend suite green,
