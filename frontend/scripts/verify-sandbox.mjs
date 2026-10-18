@@ -132,19 +132,22 @@ const gate = page.getByRole('button', { name: /add \d+ to sandbox/i })
 await gate.waitFor({ timeout: 30000 })
 check('the confirm gate opens for a natural-language instruction', await gate.isVisible())
 
-// The questions the server generated travel with the proposal (Phase 2 R8/R9).
-const asked = page.getByText(/ASSUMPTIONS ASKED/i)
-check('the gate names the assumptions the proposal rests on', await asked.first().isVisible())
-const storageQuestion = page.getByText(/usableStorageDepth/i)
-check('the storage depth is one of them, by its stable id',
-  await storageQuestion.first().isVisible())
+// The details card asks only what the run reads, and asks it as a decision:
+// a read-only list of "OPEN" questions the planner cannot answer was removed on
+// 18 Oct, because a question with no way to answer it is worse than no question.
+check('the gate asks the planner to decide the details before adding',
+  await page.getByText(/DECIDE THE DETAILS/i).first().isVisible())
+check('the storage depth is asked as a question the run reads',
+  await page.getByText(/storage depth.*\?/i).first().isVisible())
+check('no unanswerable read-only questions are shown',
+  (await page.getByText(/ASSUMPTIONS ASKED/i).count()) === 0)
 
 // The card opens on the AI's estimate, so the numeric field is not rendered
 // until the planner chooses to enter their own value. Two checks, in order:
 // the estimate is *shown with its basis*, then choosing "Enter my own" reveals
 // the field the run would actually read.
 check('the input card shows the estimate it would use, and where it comes from',
-  await page.getByText(/estimate .*m\s*·/i).first().isVisible().catch(() => false))
+  await page.getByText(/AI estimate: [0-9.]+ m ·/i).first().isVisible().catch(() => false))
 await page.getByRole('button', { name: /enter my own/i }).first().click()
 const depthField = page.getByRole('spinbutton', { name: /storage depth/i })
 check('choosing to enter your own reveals the field for the depth the run reads',

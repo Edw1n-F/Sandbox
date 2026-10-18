@@ -23,18 +23,14 @@ import { useEffect, useState } from 'react'
 
 import HudPanel from '@/components/HudPanel'
 import InputCard from '@/components/InputCard'
-import { defaultAnswers, fieldError, toValues, type InputAnswers } from '@/components/inputAnswers'
+import { allAnswered, defaultAnswers, interventionName, toValues, type InputAnswers } from '@/components/inputAnswers'
 import { errorMessage } from '@/api/client'
 import type { StagedFeature } from '@/api/pinsApi'
 import { fetchInputs, modifyFeature, type SandboxInput } from '@/api/sandboxApi'
 import { useSandboxStore } from '@/state/sandboxStore'
 import { useSceneStore } from '@/state/sceneStore'
 
-/** `water_reservoir` -> "Water reservoir". */
-const kindLabel = (kind: string) => {
-  const words = kind.split('_').join(' ')
-  return words.charAt(0).toUpperCase() + words.slice(1)
-}
+const kindLabel = interventionName
 
 /** The values a row carries, each with whether the user gave it or the AI guessed it. */
 function valuesOf(feature: StagedFeature): string[] {
@@ -156,7 +152,8 @@ export default function InterventionsPanel() {
                     size="small"
                     aria-label={`Edit ${kindLabel(f.interventionType)}`}
                     disabled={busy}
-                    onClick={() => void startEdit(f)}
+                    aria-expanded={editing?.id === f.id}
+                    onClick={() => (editing?.id === f.id ? setEditing(null) : void startEdit(f))}
                     sx={{ color: 'text.secondary', '&:hover': { color: '#5cff9d' } }}
                   >
                     <span style={{ fontSize: 13, lineHeight: 1 }}>✎</span>
@@ -172,17 +169,22 @@ export default function InterventionsPanel() {
                   </IconButton>
                 </Stack>
               </Stack>
-              <Typography variant="caption" color="text.secondary" display="block" sx={{ fontSize: 10 }}>
-                {originOf(f)}
-              </Typography>
-              {valuesOf(f).map((line) => (
-                <Typography key={line} className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary' }}>
-                  {line}
-                </Typography>
-              ))}
               {editing?.id === f.id && (
-                <Box sx={{ mt: 0.75 }}>
+                <Box
+                  sx={{
+                    mt: 0.75, p: 1, borderRadius: 1.5,
+                    bgcolor: 'rgba(255,255,255,0.03)', border: '1px solid', borderColor: 'divider',
+                  }}
+                >
+                  <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
+                    SETTINGS
+                  </Typography>
+                  <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4, mb: 0.5 }}>
+                    {originOf(f)}
+                    {valuesOf(f).length > 0 ? ` · ${valuesOf(f).join(' · ')}` : ''}
+                  </Typography>
                   <InputCard
+                    variant="settings"
                     inputs={editing.inputs}
                     answers={editing.answers}
                     disabled={busy}
@@ -196,9 +198,7 @@ export default function InterventionsPanel() {
                       <Button
                         size="small"
                         variant="contained"
-                        disabled={
-                          busy || editing.inputs.some((i) => fieldError(i, editing.answers[i.key]) !== null)
-                        }
+                        disabled={busy || !allAnswered(editing.inputs, editing.answers)}
                         onClick={() => void saveEdit()}
                         sx={{ fontSize: 10.5 }}
                       >
