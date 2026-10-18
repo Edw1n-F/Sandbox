@@ -46,9 +46,18 @@ def test_mask_is_boolean_over_the_grid():
 
 
 def test_rendered_flood_is_transparent_under_buildings():
-    """The committed flood PNG must be blank wherever a footprint stands."""
+    """The committed flood PNG must be blank wherever a footprint stands.
+
+    The render masks with the *exact* building outline (``_exact_building_mask``,
+    the real polygon), not the axis-aligned envelope ``building_footprint_mask``
+    rasterises for the proposal gate: an AABB over-covers a rotated footprint's
+    diagonals and would demand transparency over street ponding. The assertion
+    therefore checks the same mask the render applied, so the two cannot drift.
+    """
     ov = load_overlay(5.0)
-    mask = building_footprint_mask(ov)
+    from make_wetgrid import _exact_building_mask
+
+    mask = _exact_building_mask(ov)
     png = settings.rasters_dir / "wetgrid_hsk.png"
     if mask is None or not png.exists():
         return

@@ -319,6 +319,12 @@ def test_every_proposal_kind_round_trips_through_ai_plan() -> None:
     if scene_id is None:
         print("    (skipped: no grounded scene in this environment)")
         return
+    # The staged plan is shared state: a prior test (or a manual probe) that
+    # pinned a reservoir leaves ground claimed, and the proposer then rightly
+    # offers nothing over it -- which this test would misread as "the kind
+    # emits nothing". Clear the suite's own pins first so the assertion tests
+    # the proposal path, not the leftovers of the test that ran before it.
+    _clear_staged(scene_id)
     bounds = _bounds()
     instructions = {
         "water_reservoir": "add a water reservoir in the north",

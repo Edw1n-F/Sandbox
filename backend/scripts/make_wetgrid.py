@@ -327,6 +327,13 @@ def flow_rgba(accumulation: np.ndarray) -> np.ndarray:
     # solid deep blue, not a pale hint. Start at a firmer floor and reach
     # near-opaque sooner so the blue itself carries the "how much" signal.
     alpha = (150.0 + 105.0 * t).astype(np.uint8)
+    # Cells with *zero* accumulation are transparent, not warm-grey. A masked
+    # cell (a building footprint the caller has set to 0.0) must vanish, not
+    # paint the roof's own wash of grey; and on this grid no natural cell is
+    # ever zero (D8 accumulation is >= 1 everywhere), so this only ever fires
+    # on the deliberately-masked cells -- it never erases a real low-flow cell
+    # from the warm-grey end of the ramp.
+    alpha[acc == 0] = 0
     return np.dstack(
         [rgb[..., 0].astype(np.uint8), rgb[..., 1].astype(np.uint8),
          rgb[..., 2].astype(np.uint8), alpha]
