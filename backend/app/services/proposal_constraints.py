@@ -54,7 +54,10 @@ from app.services.sandbox_model import (  # noqa: E402
     MAX_TOTAL_COVERAGE,
     _polygon_cells,
 )
-from app.services.siting import MIN_SITE_CELLS  # noqa: E402
+from app.services.siting import (  # noqa: E402
+    MIN_SITE_CELLS,
+    RESERVOIR_MIN_SITE_CELLS,
+)
 
 # --------------------------------------------------------------------------- #
 # The honesty labels (§2.2). UPPER_SNAKE statuses and a non-empty warning.
@@ -406,26 +409,30 @@ def overlap_cells(covered: Iterable[tuple[int, int]],
 
 
 def size_violations(covered: Iterable[tuple[int, int]], claimed: Any,
-                    total_cells: int) -> dict[str, Any]:
+                    total_cells: int,
+                    kind: str = "unknown") -> dict[str, Any]:
     """The cap checks (§2.1), stated as booleans plus the numbers behind them.
 
-    ``MIN_SITE_CELLS <= |covered| <= floor(0.25 * total)`` and
+    ``min_cells <= |covered| <= floor(0.25 * total)`` and
     ``|claimed U covered| <= floor(0.40 * total)``, with every threshold
-    imported, never re-typed.
+    imported, never re-typed. The floor is per-kind: point/linear facilities
+    (reservoir, drainage) use ``RESERVOIR_MIN_SITE_CELLS``, the areal pools use
+    ``MIN_SITE_CELLS`` -- see :func:`_min_cells`.
     """
     cells = len(list(covered))
+    min_cells = _min_cells(kind)
     max_single = int(math.floor(MAX_INTERVENTION_COVERAGE * total_cells))
     max_cumulative = int(math.floor(MAX_TOTAL_COVERAGE * total_cells))
     union = len(_as_cell_set(claimed) | set(covered))
     return {
-        "tooSmall": cells < MIN_SITE_CELLS,
+        "tooSmall": cells < min_cells,
         "overSingle": cells > max_single,
         "overCumulative": union > max_cumulative,
         "cells": cells,
         "maxSingle": max_single,
         "maxCumulative": max_cumulative,
         "union": union,
-        "minCells": MIN_SITE_CELLS,
+        "minCells": min_cells,
     }
 
 
@@ -912,6 +919,30 @@ def _site_id_of(candidate: Mapping[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
+# The intervention kinds that are *point/linear* facilities rather than areal
+# land-use changes, and so carry the smaller ``RESERVOIR_MIN_SITE_CELLS`` floor
+# instead of the areal ``MIN_SITE_CELLS``. ``drainage`` is the alias the
+# proposal path maps onto the same reservoir pool (see ``ai_plan.POOL_FOR_KIND``),
+# so it shares the reservoir floor rather than splitting a single facility
+# concept across two sizes.
+_RESERVOIR_KINDS = frozenset({"water_reservoir", "drainage"})
+
+
+def _min_cells(kind: str) -> int:
+    """The size floor for ``kind``: point/linear facilities are smaller.
+
+    ``siting.reservoir_candidates`` admits 20-cell (500 m2) neighbourhood-scale
+    detention basins, but the gate's global floor is 40 cells (1,000 m2) for the
+    areal pools (paving, greening). A reservoir candidate of 20-39 cells would be
+    refused ``TOO_SMALL`` the moment it reached the gate, so the gate reads the
+    same per-kind floor the siting pool was built with, instead of a single
+    number that can never match both.
+    """
+    if kind in _RESERVOIR_KINDS:
+        return RESERVOIR_MIN_SITE_CELLS
+    return MIN_SITE_CELLS
+
+
 def _requested_of(candidate: Mapping[str, Any]) -> dict[str, Any] | None:
     """The raw centre+size ask, from ``requested`` or ``placement`` (§2.2)."""
     params = candidate.get("params") or {}
@@ -1203,12 +1234,12 @@ def validate_proposal(grids: Any, candidate: Any, occupied: Any,
             survivors = covered - occ
             if survivors != covered:
                 dropped_buildings = len(covered) - len(survivors)
-                if len(survivors) < MIN_SITE_CELLS:
+                if len(survivors) < _min_cells(kind):
                     return _finalize(
                         grids, REJECT_STATUS, "BUILDING_OVERLAP",
                         why=("only %d of the site's %d cells survive the "
                              "building exclusion, below the %d-cell minimum"
-                             % (len(survivors), len(covered), MIN_SITE_CELLS)),
+                             % (len(survivors), len(covered), _min_cells(kind))),
                         coordinate_based=False, geometry=None,
                         covered=covered, clipped=dropped_buildings,
                         clipped_fraction=0.0,
@@ -1242,12 +1273,12 @@ def validate_proposal(grids: Any, candidate: Any, occupied: Any,
                 # ring could not include.
                 clipped = len(survivors) - len(covered)
                 clipped += dropped_buildings
-                if len(covered) < MIN_SITE_CELLS:
+                if len(covered) < _min_cells(kind):
                     return _finalize(
                         grids, REJECT_STATUS, "BUILDING_OVERLAP",
                         why=("the site's legal ground does not contour to a "
                              "single polygon of at least %d cells once "
-                             "buildings are excluded" % MIN_SITE_CELLS),
+                             "buildings are excluded" % _min_cells(kind)),
                         coordinate_based=False, geometry=None,
                         covered=covered, clipped=clipped, clipped_fraction=0.0,
                         occ=occ, claimed_set=claimed_set, owner_map=owner_map,
@@ -1259,7 +1290,7 @@ def validate_proposal(grids: Any, candidate: Any, occupied: Any,
     building_overlap = building_overlap_cells(covered, occupied)
     overlap = overlap_cells(covered, claimed_set)
     overlaps_with = _owners_of(overlap, owner_map)
-    viol = size_violations(covered, claimed_set, total)
+    viol = size_violations(covered, claimed_set, total, kind=kind)
 
     reason: str | None = None
     why = ""
@@ -1413,10 +1444,11 @@ def _finalize(
     accepted = reason is None
     if viol is None:
         viol = size_violations(covered, claimed_set,
-                               grids.rows * grids.cols) if covered else {
+                               grids.rows * grids.cols,
+                               kind=kind) if covered else {
             "tooSmall": True, "overSingle": False, "overCumulative": False,
             "cells": 0, "maxSingle": 0, "maxCumulative": 0, "union": 0,
-            "minCells": MIN_SITE_CELLS,
+            "minCells": _min_cells(kind),
         }
     overlaps_with = overlaps_with or []
 

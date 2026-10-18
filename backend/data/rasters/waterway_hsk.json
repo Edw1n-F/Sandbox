@@ -1,0 +1,34 @@
+{
+  "artefact": "waterway-mask",
+  "generated": "2026-10-18",
+  "status": "REAL_WATERWAY_FROM_OSM",
+  "source": {
+    "name": "OpenStreetMap waterway ways (Tin Shui Wai Nullah)",
+    "path": "D:\\\u7814\u7a76\u751f\\\u9ed1\u5ba2\u677eSDG\\sandbox\\T1\\backend\\data\\reference\\waterways_raw.json",
+    "crs": "EPSG:2326 (HK1980)",
+    "licence": "ODbL",
+    "ways": 35,
+    "channelHalfWidthM": 15.0,
+    "method": "waterway ways buffered to a ribbon and point-in-polygon rasterised onto the analysis grid"
+  },
+  "grid": {
+    "rows": 117,
+    "cols": 148,
+    "resolutionM": 5.0,
+    "bounds": [
+      113.9922,
+      22.431,
+      113.9994,
+      22.4363
+    ],
+    "orientation": "north-up, row 0 = northernmost"
+  },
+  "results": {
+    "waterwayCells": 685,
+    "waterwayFraction": 0.0396
+  },
+  "caveats": [
+    "Channel width is a screening constant (half-width 15 m), not a survey of the nullah's true bank-to-bank width.",
+    "The mask covers the channel bed a basin must not sit on; the broader floodplain is deliberately left in the candidate pool."
+  ]
+}

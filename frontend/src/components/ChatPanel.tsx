@@ -859,6 +859,7 @@ function asDraft(s: SandboxSuggestion): InterventionProposal {
 function estimateLine(s: SandboxSuggestion): string {
   const e = s.estimate
   if (s.axis === 'drainage') return `adds ~${Math.round(e.storageAddedM3).toLocaleString('en-US')} m³ storage`
+  if (s.axis === 'flood') return `${e.floodRisk != null ? Math.round(e.floodRisk).toLocaleString('en-US') : '—'} m³ inflow`
   if (s.axis === 'heat') return `heat index ${e.heatIndexDelta > 0 ? '+' : ''}${e.heatIndexDelta}`
   return `runoff Δ ${e.runoffDeltaM3 > 0 ? '+' : ''}${Math.round(e.runoffDeltaM3)} m³`
 }

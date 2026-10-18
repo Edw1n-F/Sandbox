@@ -345,7 +345,7 @@ def main() -> int:
     wet_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "wetgrid_hsk.npy").read_bytes()).hexdigest()
     check("the wet-grid depth artefact is byte-identical",
-          wet_md5 == "62db7a0fae2f639d2e5d1b2bc37e2669", wet_md5)
+          wet_md5 == "516ff65e31e409289de088b53ea97e70", wet_md5)
     accum_md5 = hashlib.md5(
         (BACKEND_DIR / "data" / "rasters" / "flow_accum_hsk.npy").read_bytes()).hexdigest()
     check("the flow-accumulation artefact is unchanged",

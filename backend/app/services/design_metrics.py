@@ -295,6 +295,84 @@ def footprint_from_ring(ring: list[Any] | None,
     return Footprint(lon, lat, width, depth, float(height_m))
 
 
+def _point_in_polygon(lon: float, lat: float, ring: list[list[float]]) -> bool:
+    """Ray-casting point-in-polygon against a closed lon/lat ring.
+
+    This is the exact-outline test :func:`rasterise_height` deliberately does
+    *not* use: that function stamps an axis-aligned bounding box around each
+    building's centroid because wind/shade metrics need a frontal envelope, not
+    a silhouette. A building mask needs the silhouette -- a rotated footprint's
+    AABB over-covers its diagonal edges and under-covers its corners, which is
+    exactly the "one side of a building painted blue" display artefact the
+    wet-grid mask exists to prevent.
+
+    ``ring`` is a GeoJSON outer ring (closed, first point == last point) in
+    ``[lon, lat]`` order. The standard even-odd crossing test; identical to
+    ``ai_plan._point_in_ring`` but kept local so this module does not import the
+    planning service (and the planning service is free to change).
+    """
+    inside = False
+    n = len(ring)
+    if n < 3:
+        return False
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if (yi > lat) != (yj > lat):
+            crossing = xi + (lat - yi) * (xj - xi) / (yj - yi)
+            if lon < crossing:
+                inside = not inside
+        j = i
+    return inside
+
+
+def building_mask_from_geojson(
+    features: list[dict[str, Any]], grids: Any
+) -> np.ndarray:
+    """Boolean raster: True where a cell centre sits inside a building outline.
+
+    The *exact* complement of :func:`rasterise_height`'s AABB: a cell is marked
+    only when its centre falls within a building's real polygon, so a rotated or
+    irregular footprint masks its own ground and nothing else. Used by the
+    wet-grid render to hide water that the bare-earth solver placed under a
+    tower -- where an AABB mask would leave the tower's own corners leaking blue
+    and its diagonals swallowing the street's ponding.
+
+    ``grids`` needs ``rows``, ``cols`` and ``bounds = (west, south, east, north)``
+    -- the same contract ``rasterise_height`` reads, so the two masks are built
+    over the identical grid and stay aligned by construction.
+    """
+    mask = np.zeros((grids.rows, grids.cols), dtype=bool)
+    x0, y0, x1, y1 = grids.bounds
+    rings: list[list[list[float]]] = []
+    for f in features:
+        ring = outer_ring(f.get("geometry"))
+        if ring and len(ring) >= 3:
+            rings.append(ring)
+    if not rings:
+        return mask
+
+    # Per-building bounding box in cell space, so the point test only runs over
+    # the cells a building can actually touch rather than every cell times every
+    # building. Bounding boxes over-cover (that is fine here -- they only gate the
+    # test, the ray-cast decides membership), so no wet cell is missed.
+    for ring in rings:
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        r0, c0 = grids.cell_of(min(xs), max(ys))
+        r1, c1 = grids.cell_of(max(xs), min(ys))
+        ra, rb = min(r0, r1), max(r0, r1)
+        ca, cb = min(c0, c1), max(c0, c1)
+        for r in range(ra, rb + 1):
+            lat = y1 - (r + 0.5) / grids.rows * (y1 - y0)
+            for c in range(ca, cb + 1):
+                lon = x0 + (c + 0.5) / grids.cols * (x1 - x0)
+                if _point_in_polygon(lon, lat, ring):
+                    mask[r, c] = True
+    return mask
+
+
 def height_variation_cv(footprints: list[Footprint], index: int,
                         radius_m: float = 150.0) -> float:
     """Coefficient of variation of building heights around ``index``.

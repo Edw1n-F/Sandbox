@@ -383,48 +383,62 @@ def load_grounding(claimed: Any = None) -> Grounding:
         """
         return mask if occupied is None else (mask & ~occupied)
 
-    # --- reservoirs: the deepest connected basins of the wet grid ----------
-    depth_file = settings.rasters_dir / "wetgrid_hsk.npy"
-    if depth_file.exists():
-        depth = np.load(depth_file).astype(np.float64)
-        if depth.shape == (ov.rows, ov.cols):
-            mask = free_of_buildings(depth >= 0.35)
-            # The true cell mask, contoured -- not a 15x15 window at the
-            # deepest spot (main's approach at the merge) and not the bounding
-            # box (the original). A window is a box: it claims cells that are
-            # not in the basin, and it discards the basin's own shape, which is
-            # what the catalog and the suggester both site on.
-            #
-            # The pool is ordered by AREA (`_components_cells` is largest-first),
-            # so the evidence names the size rank and not "deepest". The two
-            # happen to agree for the first two basins today, but they are not
-            # the same ordering: measured on this data, the 4th-largest basin is
-            # 2.28 m deep against the 2nd's 1.90 m, so "deepest" on `sites[1]`
-            # is simply untrue. The depth itself is published per site as
-            # `maxDepthM`, which is the number a planner should rank on.
-            for rank, comp in enumerate(
-                    _components_cells(mask, 40, connectivity=4)[:3], start=1):
-                min_r, min_c = comp["min_r"], comp["min_c"]
-                max_r, max_c = comp["max_r"], comp["max_c"]
-                sub = depth[min_r:max_r + 1, min_c:max_c + 1]
-                g.reservoir_sites.append(site(
-                    comp["cells"],
-                    "water_reservoir",
-                    "%s connected basin of the computed wet grid, contoured "
-                    "to its true cell mask" % _ranked(rank),
-                    {
-                        "maxDepthM": round(float(sub.max()), 2),
-                        "wetCells": comp["size"],
-                        "wetAreaHa": round(comp["size"] * cell_w * cell_h / 10_000.0, 1),
-                    },
-                ))
-        else:
-            g.notes.append(
-                f"wetgrid_hsk.npy is {depth.shape}, expected "
-                f"{(ov.rows, ov.cols)}; re-run make_wetgrid.py"
-            )
+    # --- reservoirs: gentle-slope beds under a convergence (preventive) ------
+    # The same candidate pool the suggester ranks the flood axis on, so the AI
+    # plans and the suggestions cannot disagree about where a reservoir belongs.
+    # Reuses ``siting.reservoir_candidates`` (see that module for the rule): a
+    # reservoir site is a contiguous patch of gentle raw slope (below
+    # RESERVOIR_SLOPE_MAX) that sits under a real convergence (its summed direct
+    # inflow clears RESERVOIR_MIN_INFLOW_M3), with the channel, the boundary
+    # outlets and the building footprints excluded. Ranked by inflow.
+    #
+    # The old rule (``depth >= 0.35`` of the wet grid) sited reservoirs on the
+    # ground that *already* ponds; this rule sites them where flooding would
+    # first *appear*, which is where interception is actually useful.
+    try:
+        from app.services.siting import (
+            reservoir_candidates,
+            RESERVOIR_MIN_SITE_CELLS,
+        )
+    except ImportError:  # pragma: no cover - scripts/ off sys.path
+        reservoir_candidates = None  # type: ignore[assignment]
+
+    if reservoir_candidates is not None:
+        # No [:3] truncation: the reservoir pool is already small (a handful of
+        # gentle-slope beds), and truncating it to the top three by inflow would
+        # drop a bed that is the *only* candidate in some region (e.g. the west),
+        # turning "add a reservoir in the west" into an empty region. The pool
+        # is the whole ranked list; the provider's own max_features cap and the
+        # per-batch gate bound how many actually become proposals.
+        _inflow_ordinal = ("the greatest", "the second-greatest",
+                           "the third-greatest")
+        for rank, cand in enumerate(reservoir_candidates(), start=1):
+            cells = cand["cells"]
+            # siting excludes the *footprint* mask; re-subtract the gate's own
+            # building mask here so the pool and the gate agree (see the note
+            # above about the footprint/gate mask drift). If this drops the site
+            # below the floor it is skipped rather than offered half-on-a-roof.
+            if occupied is not None:
+                kept = [(int(r), int(c)) for (r, c) in cells
+                        if not occupied[int(r), int(c)]]
+                if len(kept) < RESERVOIR_MIN_SITE_CELLS:
+                    continue
+                cells = kept
+            g.reservoir_sites.append(site(
+                cells,
+                "water_reservoir",
+                "%s gentle-slope bed under a convergence by direct inflow, "
+                "contoured to its true cell mask"
+                % (_inflow_ordinal[rank - 1] if rank <= 3
+                   else "the %dth-greatest" % rank),
+                {
+                    "inflowM3": round(float(cand["totalInflowM3"]), 1),
+                    "cells": len(cells),
+                },
+            ))
     else:
-        g.notes.append("no wetgrid_hsk.npy; run scripts/make_wetgrid.py")
+        g.notes.append("siting.reservoir_candidates unavailable; no reservoir "
+                       "sites offered")
 
     # --- green space: the largest contiguous vegetated blocks --------------
     # Bound to a local variable and freed of buildings first, so the component

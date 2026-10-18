@@ -165,8 +165,10 @@ export default function App() {
         {/* Bottom-centre: view buttons */}
         <ViewButtons />
 
-        {/* Bottom-left: intervention legend, hidden until a plan has features. */}
-        <InterventionLegend />
+        {/* Bottom-left: intervention legend, hidden until a plan has features.
+            When the chat panel is open it shifts right of it, so it never covers
+            the chat input box at the panel's bottom. */}
+        <InterventionLegend offsetLeft={chatOpen ? CHAT_WIDTH + 12 : 12} />
 
         {/* Top-left: brand block + chat toggle */}
         <Box sx={{ position: 'absolute', top: 12, left: chatOpen ? CHAT_WIDTH + 12 : 12, zIndex: 1300, transition: 'left 0.2s' }}>

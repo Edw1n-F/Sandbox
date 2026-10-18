@@ -40,7 +40,6 @@ from app.config import settings  # noqa: E402
 from hydrology import condition as condition_dem, fill_and_spill  # noqa: E402
 from _overlay_common import (  # noqa: E402
     attach_to_scene,
-    building_footprint_mask,
     COUNTED_AS,
     CN_SOURCE,
     CURVE_NUMBER_HSG_D,
@@ -211,6 +210,32 @@ def compute(rainfall_mm: float, resolution_m: float, sink_fill: bool = True,
     }
 
 
+def _exact_building_mask(ov) -> "np.ndarray | None":
+    """Exact building-outline mask for the wet-grid PNG, or ``None``.
+
+    ``_overlay_common.building_footprint_mask`` returns the axis-aligned
+    bounding-box envelope, which is the right raster for the proposal gate's
+    "never looser than the pool filter" contract but the wrong one for painting:
+    an AABB over-covers a rotated footprint's diagonals (swallowing street
+    ponding) and under-covers its corners (leaving a sliver of the tower blue).
+    This follows the real polygon.
+    """
+    import json as _json
+
+    from app.services.design_metrics import building_mask_from_geojson
+
+    path = settings.rasters_dir / "buildings_hsk.json"
+    if not path.exists():
+        return None
+    try:
+        features = _json.loads(path.read_text(encoding="utf-8")).get("features") or []
+    except (OSError, ValueError):
+        return None
+    if not features:
+        return None
+    return building_mask_from_geojson(features, ov)
+
+
 def to_rgba(depth_field: np.ndarray) -> np.ndarray:
     """Depth field -> RGBA, transparent where dry, deep blue where wet."""
     norm = np.clip(
@@ -248,6 +273,94 @@ def flood_rgba(depth_field: np.ndarray,
     green = (90 + 120 * (1.0 - norm)).astype(np.uint8)
     blue = np.full_like(alpha, 235)
     return np.dstack([red, green, blue, alpha])
+
+
+def flow_rgba(accumulation: np.ndarray) -> np.ndarray:
+    """D8 flow accumulation -> RGBA precipitation-flow map.
+
+    Renders *where rain goes*, not how deep the ponding is: every cell is
+    coloured by the number of upstream cells draining through it (log-scaled,
+    because D8 accumulation spans three orders of magnitude and a linear ramp
+    would render the whole site as one flat colour with a single dark river).
+    Low accumulation (ridges, flats) is a pale yellow-green wash that lets the
+    terrain show through; high accumulation (the drainage network) deepens
+    through teal into dark blue. Deeper blue == more water passing through.
+
+    This replaces the old ponding-depth ramp as the flood-layer render: the
+    depth field answers "how deep does it pond in the depressions", while the
+    accumulation field answers "where does the rain actually flow" -- the
+    question the siting axis is built on, and the one the picture should show.
+    """
+    acc = np.asarray(accumulation, dtype=np.float64)
+    positive = acc[acc > 0]
+    if positive.size == 0:
+        return np.zeros((*acc.shape, 4), dtype=np.uint8)
+    # Log scale with wide percentile anchors. The spread is what makes the
+    # contrast legible: anchoring the low end at the 1st percentile and the high
+    # end at the 99th spreads the bulk of cells across the whole ramp instead of
+    # pinning them in a narrow band. log1p(1) == 0 keeps a single-cell trickle
+    # at the very bottom of the scale.
+    log_acc = np.log1p(acc)
+    lo = np.log1p(max(float(np.percentile(positive, 1)), 0.0))
+    hi = np.log1p(max(float(np.percentile(positive, 99)), 2.0))
+    t = np.clip((log_acc - lo) / max(hi - lo, 1e-9), 0.0, 1.0)
+    # A gamma lift spreads the mid-tones so small differences in the common
+    # range (the 5-100 cell band most of the site lives in) become visible,
+    # instead of all reading as near-identical light blue.
+    t = t ** 0.75
+
+    # Three-stop ramp, blue-led so "more flow" reads as "bluer", with a neutral
+    # warm grey (not yellow) as the low-value colour:
+    #   warm grey (t=0) -> mid blue (t=0.5) -> deep blue (t=1)
+    stops = np.array(
+        [[186.0, 184.0, 178.0], [96.0, 138.0, 196.0], [12.0, 42.0, 108.0]]
+    )
+    rgb = np.empty((*acc.shape, 3), dtype=np.float64)
+    for i in range(2):
+        lo_t, hi_t = i / 2.0, (i + 1) / 2.0
+        seg = np.clip((t - lo_t) / (hi_t - lo_t), 0.0, 1.0)
+        rgb = np.where((t >= lo_t)[..., None],
+                       stops[i] + (stops[i + 1] - stops[i]) * seg[..., None], rgb)
+    rgb[t >= 1.0] = stops[2]
+
+    # Alpha now rises steeply and early: the drainage network must read as
+    # solid deep blue, not a pale hint. Start at a firmer floor and reach
+    # near-opaque sooner so the blue itself carries the "how much" signal.
+    alpha = (150.0 + 105.0 * t).astype(np.uint8)
+    return np.dstack(
+        [rgb[..., 0].astype(np.uint8), rgb[..., 1].astype(np.uint8),
+         rgb[..., 2].astype(np.uint8), alpha]
+    )
+
+
+def runoff_accumulation(
+    filled: np.ndarray, receiver: np.ndarray, runoff_m3: np.ndarray
+) -> np.ndarray:
+    """CN-weighted runoff volume accumulated down the D8 cascade, in m3.
+
+    This is :func:`hydrology.flow_accumulation` with the per-cell seed changed
+    from a unit count to the cell's own ``runoff_m3`` (SCS-CN runoff less
+    retained storage). The result at a cell is the total upstream volume
+    passing through it -- the "how much water arrives here" picture the
+    precipitation-flow overlay should show, and the field that actually
+    responds to interventions: paving a slope raises its ``runoff_m3`` and thus
+    every downstream cell's accumulation, where the bare cell-count field is
+    scenario-independent.
+
+    Same forward pass in decreasing elevation order, so a cell is final once
+    processed. ``receiver`` and ``runoff_m3`` are flat, in the same
+    ``row*cols+col`` index space.
+    """
+    filled = np.asarray(filled, dtype=np.float64)
+    rows, cols = filled.shape
+    order = np.argsort(filled, axis=None)[::-1]  # descending elevation
+    acc = np.asarray(runoff_m3, dtype=np.float64).ravel().copy()
+    receiver = np.asarray(receiver).ravel()
+    for idx in order:
+        target = receiver[idx]
+        if target >= 0:
+            acc[target] += acc[idx]
+    return acc.reshape(rows, cols)
 
 
 def routed_summary(cascade: dict | None) -> dict:
@@ -351,11 +464,19 @@ def main() -> int:
     # Render-time building mask: the depth field is solved on bare earth, so a
     # wet cell can fall under a tower; painted onto 3D Tiles that would show
     # water on a roof. The data (wetgrid_hsk.npy below) keeps every cell.
-    render_depth = result["depth_field"]
-    footprint = building_footprint_mask(ov)
+    #
+    # The mask follows the *real* building outlines (point-in-polygon), not the
+    # axis-aligned envelopes `building_footprint_mask` rasterises for the
+    # proposal gate. An AABB mask over-covers a rotated footprint's diagonals
+    # and under-covers its corners, so a tower's own edge would leak blue.
+    render_accum = result["accumulation"]
+    footprint = _exact_building_mask(ov)
     if footprint is not None:
-        render_depth = np.where(footprint, 0.0, render_depth)
-    Image.fromarray(to_rgba(render_depth), mode="RGBA").save(out)
+        render_accum = np.where(footprint, 0.0, render_accum)
+    # The static overlay is the precipitation-flow picture (D8 accumulation,
+    # deeper blue == more upstream drainage), not the ponding-depth field. The
+    # depth field stays in wetgrid_hsk.npy for anything that needs the numbers.
+    Image.fromarray(flow_rgba(render_accum), mode="RGBA").save(out)
 
     # Also write the depth field as float32 metres.
     #

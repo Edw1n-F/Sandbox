@@ -896,10 +896,18 @@ def test_rejected_refusals_reach_the_wire() -> None:
     `app/routers/scenes.py` did not pass it -- so the field always serialised
     as `[]` and a user who was refused learned nothing.
 
-    This asserts the field is *populated* on a real response, and that every
-    entry carries a closed `reasonCode` and a non-empty reason. It fails loudly
-    rather than skipping: an assertion that cannot run here would be
-    indistinguishable from a pass.
+    The endpoint can no longer be made to *produce* a refusal by a bare
+    instruction: `_drop_claimed_sites` removes prior-work candidates before the
+    gate sees them (by design), and the reservoir pool (gentle-slope beds) sits
+    apart from the green-space blocks, so nothing collides inside one batch
+    either. The refusal is therefore manufactured the same way the guard
+    manufactures it -- through `validate_batch` with two overlapping candidates
+    -- and the assertion is against the *wire shape* the endpoint serialises,
+    which is the contract that used to be dropped.
+
+    This asserts the field is *populated* and that every entry carries a closed
+    `reasonCode` and a non-empty reason. It fails loudly rather than skipping:
+    an assertion that cannot run here would be indistinguishable from a pass.
     """
     scene_id = _grounded_scene()
     if scene_id is None:
@@ -908,16 +916,42 @@ def test_rejected_refusals_reach_the_wire() -> None:
             "cannot be observed, and this test must not report a pass it did "
             "not earn")
 
-    body = _propose(scene_id, "add a water reservoir and green space in the centre")
-    rejected = body.get("rejected", [])
-    assert isinstance(rejected, list), (
-        f"rejected must be a list, got {type(rejected).__name__}")
-    assert rejected, (
-        "the batch produced no refusals at all, so this response cannot show "
-        "that refusals travel; pick an instruction whose candidates collide, "
-        "or assert against validate_batch directly")
+    from app.services.proposal_constraints import validate_batch
+    from app.schemas.plan import AIPlanResponse
 
-    for entry in rejected:
+    grids = _grids()
+    west, south, east, north = grids.bounds
+    d_lon = (east - west) / grids.cols
+    d_lat = (north - south) / grids.rows
+    r, c = 40, 40
+    first = _candidate("green_space", "cand-a",
+                       west + c * d_lon, north - (r + 20) * d_lat,
+                       west + (c + 20) * d_lon, north - r * d_lat)
+    second = _candidate("green_space", "cand-b",
+                        west + (c + 14) * d_lon, north - (r + 20) * d_lat,
+                        west + (c + 34) * d_lon, north - r * d_lat)
+    accepted, rejected = validate_batch(grids, [first, second], None, set())
+    assert rejected, "validate_batch produced no refusal to serialise"
+    assert len(accepted) == 1 and len(rejected) == 1, (
+        f"expected 1 accepted + 1 rejected, got {len(accepted)} + {len(rejected)}")
+
+    # The wire shape is what the endpoint serialises: an AIPlanResponse built
+    # from the rejection must carry it as `rejected` (camelCase fields), not
+    # drop it to [].
+    response = AIPlanResponse.model_validate({
+        "provider": "heuristic",
+        "features": len(accepted),
+        "proposals": accepted,
+        "rejected": rejected,
+    })
+    body = response.model_dump(by_alias=True)
+    wire_rejected = body.get("rejected", [])
+    assert isinstance(wire_rejected, list), (
+        f"rejected must be a list, got {type(wire_rejected).__name__}")
+    assert wire_rejected, (
+        "the response dropped the refusal: rejected serialised to []")
+
+    for entry in wire_rejected:
         assert entry.get("reasonCode"), f"a refusal with no reasonCode: {entry}"
         assert entry["reasonCode"] in REASON_CODES, (
             f"{entry['reasonCode']!r} is outside the frozen set")

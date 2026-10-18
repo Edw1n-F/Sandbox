@@ -123,6 +123,57 @@ def main() -> int:
           again["massBalance"] == slope_res["massBalance"]
           and np.array_equal(again["depthField"], slope_res["depthField"]), "")
 
+    # --- flat resolution: an open plateau routes, a closed plateau ponds --- #
+    #
+    # A *plateau* is a flat patch Priority-Flood did not raise (filled == raw)
+    # where D8 finds no strictly-lower neighbour, so every cell is receiver==-1.
+    # The old cascade counted such water as "discharged" even though it never
+    # left the grid. The fix routes an open plateau (one with a downhill escape
+    # on its rim) across to that escape, and ponds a closed plateau (a true pit).
+    #
+    # Open plateau: a 20x20 flat 10.0 surface with a single 9.0 column on the
+    # east edge as the downhill escape. Priority-Flood leaves the 10.0 interior
+    # untouched (it already drains east), so filled == raw and D8 deadlocks on
+    # the interior 10.0 cells -- exactly the real-grid defect. Water must cross
+    # the flat to the 9.0 edge and leave, not vanish.
+    plateau_raw = np.full((20, 20), 10.0)
+    plateau_raw[:, 19] = 9.0
+    plateau_filled = priority_flood(plateau_raw)
+    plateau_recv = d8_flow_direction(plateau_filled)
+    interior_flat = (plateau_filled == 10.0) & (plateau_recv.reshape(20, 20) < 0)
+    check("the plateau interior is genuinely flat (D8-deadlocked)",
+          int(interior_flat.sum()) > 0,
+          f"{int(interior_flat.sum())} deadlocked cells")
+    plateau_runoff = np.zeros((20, 20))
+    plateau_runoff[:, :19] = 0.1   # runoff only on the flat interior
+    plateau = fill_and_spill(plateau_filled, plateau_raw, plateau_recv,
+                             plateau_runoff, 1.0)
+    check("an open plateau routes its water out instead of vanishing",
+          plateau["massBalance"]["balanced"] is True
+          and plateau["dischargedM3"] > 0.99 * plateau["runoffInM3"],
+          f"discharged {plateau['dischargedM3']:.2f} of "
+          f"{plateau['runoffInM3']:.2f} m3")
+    check("and stores none of it on the flat (no phantom ponding)",
+          plateau["storedM3"] == 0.0, f"{plateau['storedM3']}")
+
+    # Closed plateau: the flat interior is surrounded by higher ground on all
+    # sides, so it has no downhill escape -- a true pit that must pond.
+    closed_raw = np.full((20, 20), 10.0)
+    closed_raw[:2, :] = 12.0
+    closed_raw[-2:, :] = 12.0
+    closed_raw[:, :2] = 12.0
+    closed_raw[:, -2:] = 12.0
+    closed_filled = priority_flood(closed_raw)
+    closed_recv = d8_flow_direction(closed_filled)
+    closed_runoff = np.zeros((20, 20))
+    closed_runoff[2:-2, 2:-2] = 0.1
+    closed = fill_and_spill(closed_filled, closed_raw, closed_recv,
+                            closed_runoff, 1.0)
+    check("a closed plateau ponds its water (a true pit, nothing escapes)",
+          closed["massBalance"]["balanced"] is True
+          and closed["storedM3"] > 0.99 * closed["runoffInM3"],
+          f"stored {closed['storedM3']:.2f} of {closed['runoffInM3']:.2f} m3")
+
     # --- mass_balance raises on a leak --- #
     try:
         mass_balance(100.0, 10.0, 50.0)

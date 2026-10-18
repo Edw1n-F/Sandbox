@@ -41,7 +41,7 @@ const ENTRIES: LegendEntry[] = [
   { kind: 'road', label: 'Road', color: '#6e7681', heightM: 2, extrusionMeaning: 'surface' },
 ]
 
-export default function InterventionLegend() {
+export default function InterventionLegend({ offsetLeft = 12 }: { offsetLeft?: number }) {
   const show = useSceneStore((s) => s.layers.interventions)
   // The sandbox's placed interventions: the layer the viewer draws.
   const features = useSandboxStore((s) => s.features)
@@ -55,7 +55,11 @@ export default function InterventionLegend() {
     <Box
       sx={{
         position: 'absolute',
-        left: 12,
+        // The chat panel owns the full-height 340px strip at the left edge, and
+        // its input box sits at the bottom of it. A legend pinned at `left: 12`
+        // lands on top of that input box (the legend's z-index is higher), so the
+        // caller passes the panel width + gutter when the chat is open.
+        left: offsetLeft,
         bottom: 16,
         zIndex: 1200,
         px: 1.25,

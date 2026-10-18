@@ -85,7 +85,7 @@ def test_suggestions_carry_a_status_and_a_human_warning() -> None:
 
 
 def test_no_combined_score_anywhere_in_the_output() -> None:
-    """The three axes must never be collapsed into one number."""
+    """The four axes must never be collapsed into one number."""
     out = suggest.suggest()
     forbidden = ("score", "combined", "best", "rank", "verdict", "grade")
     for axis in out["axes"]:
@@ -99,7 +99,7 @@ def test_no_combined_score_anywhere_in_the_output() -> None:
             for key in candidate["estimate"]:
                 assert not any(word in key.lower() for word in forbidden), (
                     f"{axis['axis']}.estimate.{key} sounds like a judgement")
-    assert [a["axis"] for a in out["axes"]] == ["drainage", "heat", "runoff"], (
+    assert [a["axis"] for a in out["axes"]] == ["drainage", "flood", "heat", "runoff"], (
         "axes are reported in a fixed order, never sorted by score")
 
 

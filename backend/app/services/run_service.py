@@ -66,8 +66,8 @@ from app.services.sandbox_model import (  # noqa: E402
 from make_wetgrid import (  # noqa: E402
     FLOOD_DEPTH_M,
     _fill_to_volume,
-    flood_rgba,
-    to_rgba,
+    flow_rgba,
+    runoff_accumulation,
 )
 from _overlay_common import HEAT_INDEX, LAND_CLASSES  # noqa: E402
 from hydrology import fill_and_spill  # noqa: E402
@@ -262,6 +262,7 @@ def _heat_terms(grids: Grids, scene_id: str,
         shade_mask,
         sky_view_factor_raster,
         cell_fad,
+        building_mask_from_geojson,
     )
     from app.services.ai_plan import _point_in_ring
 
@@ -305,6 +306,12 @@ def _heat_terms(grids: Grids, scene_id: str,
                 # solved on bare earth, so without this a pond under a tower
                 # would paint the tower's roof once classified onto 3D Tiles.
                 "height": height,
+                # Exact building outline mask for the wet-grid render. The
+                # height raster above is the AABB the wind/shade metrics need;
+                # a mask made from it over-covers rotated footprints' diagonals
+                # and under-covers their corners, leaving a sliver of a tower
+                # painted blue. This one follows the real polygon.
+                "building_mask": building_mask_from_geojson(features, grids),
             }
     _HEAT_TERMS_CACHE.clear()
     _HEAT_TERMS_CACHE.update({"key": key, "terms": terms})
@@ -799,14 +806,36 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
     # because the overlay is classified onto 3D Tiles (there is no per-tileset
     # way to exempt buildings), that pond would render on the roof. Suppress it
     # in the PNG only — the ledger and the .npy keep every solved cell.
-    footprint = (terms["height"] > 0) if (terms and "height" in terms) else None
-    wet_render = routed_depth if routed_depth is not None else depth_field
-    if footprint is not None:
-        wet_render = np.where(footprint, 0.0, wet_render)
-    if routed_depth is not None:
-        Image.fromarray(flood_rgba(wet_render), mode="RGBA").save(wet_png)
+    #
+    # The mask follows the *real* building outlines (point-in-polygon), not the
+    # axis-aligned envelopes the wind/shade metrics rasterise. An AABB mask
+    # over-covers a rotated footprint's diagonals and under-covers its corners,
+    # so a tower's own edge would leak blue — the exact artefact this fixes.
+    footprint = None
+    if terms:
+        if "building_mask" in terms:
+            footprint = terms["building_mask"]
+        elif "height" in terms:
+            footprint = terms["height"] > 0
+    # The flood layer renders the precipitation-FLOW picture as CN-weighted
+    # runoff accumulated down the D8 cascade: each cell's SCS-CN runoff (less
+    # retained storage) is routed to its receiver, and the overlay shows the
+    # total upstream volume passing through each cell. This is the field that
+    # responds to interventions -- paving raises a cell's runoff and thus every
+    # downstream cell's accumulation, a green roof or detention basin lowers
+    # it -- where the bare cell-count accumulation is scenario-independent.
+    #
+    # Falls back to the static cell-count accumulation when routing inputs are
+    # absent, and says so in the sidecar.
+    if grids.receiver is not None and grids.elevation_5m is not None:
+        flow_render = runoff_accumulation(
+            grids.elevation_5m, grids.receiver, unstored_m * cell_area
+        )
     else:
-        Image.fromarray(to_rgba(wet_render), mode="RGBA").save(wet_png)
+        flow_render = np.asarray(grids.accumulation, dtype=np.float64)
+    if footprint is not None:
+        flow_render = np.where(footprint, 0.0, flow_render)
+    Image.fromarray(flow_rgba(flow_render), mode="RGBA").save(wet_png)
     Image.fromarray(anomaly_rgba(scen_temp["anomalyC"]), mode="RGBA").save(heat_png)
 
     generated = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -832,6 +861,18 @@ def run_scenario(scene_id: str, rainfall_mm: float, temperature_c: float,
             "routed": routed_depth is not None,
             "floodedCells": flood_cells,
             "floodAreaHa": round(flood_area_ha, 2) if flood_area_ha is not None else None,
+        },
+        "flow": {
+            "field": (
+                "cnWeightedRunoffAccumulation"
+                if grids.receiver is not None and grids.elevation_5m is not None
+                else "cellCountAccumulation"
+            ),
+            "note": (
+                "Overlay shows each cell's total upstream CN-weighted runoff "
+                "(m3), routed down the D8 cascade. Responds to interventions: "
+                "paving raises downstream accumulation, retention lowers it."
+            ),
         },
         "results": {
             "unstoredVolumeM3": round(volume_m3, 1),

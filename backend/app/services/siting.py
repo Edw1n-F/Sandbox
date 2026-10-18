@@ -45,16 +45,83 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 # 1,000 m2, roughly one small playground.
 MIN_SITE_CELLS = 40
 
-# The deep-basin threshold for a reservoir candidate. 1.0 m of computed depth is
-# where a level-pool basin stops being a puddle: at 450 mm the study area's
-# basin is 5,163 cells as a whole (29.8% of the site, which the ledger's 25%
-# single-intervention cap refuses as a land-use change) and 2,469 cells at 1 m
-# or more. The threshold is stated here so it can be argued with.
-RESERVOIR_MIN_DEPTH_M = 1.0
+# The reservoir rule is the *preventive* screening form of flood risk, and it
+# answers a sharper question than "which cells drain a lot of water". Under pure
+# D8 the *total* accumulation is monotonically non-decreasing down every flow
+# path — a cell's accumulation is simply the sum of its upstream cells, so the
+# biggest values always sit at the bottom of the largest basins (the channel
+# mouth, the boundary outlet). Those are the places the water already *leaves*,
+# the opposite of where a detention basin helps.
+#
+# The right place to catch water is the *local* peak of risk along a path: the
+# ground where a lot of water arrives while the terrain's own ability to pass it
+# on is weakest. The score is the ratio the design brief's risk model suggests,
+#
+#     R = inflow / (S + epsilon)
+#
+# ``inflow`` is the water arriving at a place (the direct upstream runoff, CN
+# weighted); ``S`` is the raw-DEM steepest-descent slope — the "conveyance".
+# The numerator and the denominator are of *different geometric kinds*, and that
+# is load-bearing. The slope is an *areal* signal: a gentle-slope region is a
+# contiguous patch (the flat bed where a convergence sits). The inflow is a
+# *point* signal: it spikes at the one cell where a branch meets the flat, and
+# falls back to a single branch on either side. Intersecting the two cell-by-cell
+# (``(slope < S_thr) & (inflow > I_thr)``) shatters the gentle-slope patch into
+# hundreds of one-cell fragments that never clear the site floor. So the pool is
+# built in two stages, not one:
+#
+#   1. the *candidate faces* are the contiguous gentle-slope patches
+#      (``S < RESERVOIR_SLOPE_MAX``), which is what a detention basin is actually
+#      sited on;
+#   2. each face is *ranked* by the inflow it receives (the summed direct inflow
+#      over its cells), so the flat patches that actually sit under a convergence
+#      beat the flat patches that merely drain one branch.
+#
+# The slope is taken from the *raw* DEM, not the Priority-Flood-filled surface:
+# the filler flattens every filled pit to its epsilon (1e-5) slope, so a
+# filled-surface slope is a restatement of the fill amount and the two would
+# multiply the same pit twice. The raw slope is the independent conveyance term,
+# and it is what the real flooding agrees with: the cells that actually pond in
+# the simulation (wet depth >= 0.3 m) have a median raw slope of 0.022 against a
+# grid median of 0.097, and fill == 0 on 99.7 % of them.
+#
+# RESERVOIR_SLOPE_MAX: the raw-slope ceiling of a candidate face, in m/m. 0.03
+# sits just above the median slope of the cells that really pond (0.022), so it
+# covers the genuine flat beds while keeping the pool to a handful of patches.
+RESERVOIR_SLOPE_MAX = 0.03
 
-# The halo, in 5 m cells, within which hard standing counts as "next to" a
-# vegetated block. Three cells is 15 m: the width of a planted verge.
-GREEN_HALO_CELLS = 3
+# RESERVOIR_MIN_INFLOW_M3: the minimum summed direct inflow a *face* must
+# receive to be a real convergence rather than a flat that merely drains one
+# branch. It is applied to the whole patch (not per cell), so it ranks faces
+# without shattering them.
+RESERVOIR_MIN_INFLOW_M3 = 300.0
+
+# RESERVOIR_CHANNEL_QUANTILE: the *total* weighted-accumulation quantile above
+# which a cell is "the channel" — the ultimate conveyor of water to the
+# boundary. The reservoir must NOT be sited here: a channel is where the water
+# already goes, so a basin there would block the very drain it is meant to
+# protect. This is kept as a hard exclusion on the *monotonic* accumulation
+# field, which is what actually delineates the channel; the risk ratio alone
+# cannot, because it is local.
+RESERVOIR_CHANNEL_QUANTILE = 0.99
+
+# RESERVOIR_MIN_SITE_CELLS: the component floor for a reservoir candidate. A
+# detention basin is a point/linear facility, not a big areal land-use change,
+# so it is allowed to be smaller than the 40-cell (1,000 m2) floor the areal
+# pools (paving, greening) use. 20 cells is 500 m2 — a half-football-pitch
+# street-scale detention basin — which is a realistic lower bound for the
+# neighbourhood-scale basins this 0.43 km2 site would actually host.
+RESERVOIR_MIN_SITE_CELLS = 20
+
+# Greening a cell only helps if it is currently hot (hard) AND the surrounding
+# block is dense enough to be a heat island. GREEN_BLOCK_RADIUS_CELLS is the
+# radius (in cells) over which building density is measured; a block is "dense"
+# when at least GREEN_MIN_DENSE_FRACTION of that window is built on. The median
+# building density on this study area is ~0.45, so the threshold is set above it
+# to isolate the densest, hottest core rather than the whole city (85% of which
+# is paved).
+GREEN_BLOCK_RADIUS_CELLS = 5
+GREEN_MIN_DENSE_FRACTION = 0.55
 
 # Working depth for an underground tank candidate. Assumption, not a
 # measurement: see ``scripts/_overlay_common.STORAGE_DEPTH_M``.
@@ -81,31 +148,6 @@ def _overlay():
     return load_overlay()
 
 
-def _halo(mask: np.ndarray, cells: int) -> np.ndarray:
-    """Grow ``mask`` by ``cells`` in every direction (Chebyshev dilation).
-
-    ``np.roll`` shifts plus a border restore: the radius is small and constant,
-    so the obvious implementation is also the fast one, and there is no reason
-    to import scipy for one morphological step.
-    """
-    out = mask.copy()
-    for dr in range(-cells, cells + 1):
-        for dc in range(-cells, cells + 1):
-            out |= np.roll(np.roll(mask, dr, axis=0), dc, axis=1)
-    out[:cells, :] |= mask[:cells, :]
-    out[-cells:, :] |= mask[-cells:, :]
-    out[:, :cells] |= mask[:, :cells]
-    out[:, -cells:] |= mask[:, -cells:]
-    return out
-
-
-def _mask_of(cells: list[tuple[int, int]], shape: tuple[int, int]) -> np.ndarray:
-    out = np.zeros(shape, dtype=bool)
-    for r, c in cells:
-        out[r, c] = True
-    return out
-
-
 def _sites(mask: np.ndarray, *, kind: str, why: str,
            min_size: int = MIN_SITE_CELLS) -> list[dict[str, Any]]:
     """4-connected components of ``mask`` as candidate sites, largest first.
@@ -123,7 +165,7 @@ def _sites(mask: np.ndarray, *, kind: str, why: str,
         ring_centroid,
     )
 
-    ov, _buildings, _depth = _rasters()
+    ov, _buildings, _depth, _accum, _fill = _rasters()
     out: list[dict[str, Any]] = []
     for component in connected_components(mask, min_size, connectivity=4):
         contour = contour_ring(component["cells"], bounds=ov.bounds,
@@ -146,7 +188,7 @@ def _sites(mask: np.ndarray, *, kind: str, why: str,
 
 
 @lru_cache(maxsize=1)
-def _rasters() -> tuple[Any, Any, Any]:
+def _rasters() -> tuple[Any, Any, Any, Any, Any]:
     ov = _overlay()
     # The *gate's* building authority, not this module's own loose envelope.
     #
@@ -181,11 +223,35 @@ def _rasters() -> tuple[Any, Any, Any]:
         depth = np.load(depth_path).astype(np.float64)
         if depth.shape != (ov.rows, ov.cols):
             depth = None
-    return ov, buildings, depth
+
+    # D8 flow accumulation (cells draining through each cell), written by the
+    # offline conditioning pass. Loads lazily and tolerates absence exactly like
+    # the depth raster: a pool that needs it returns empty rather than erroring.
+    accum_path = settings.rasters_dir / "flow_accum_hsk.npy"
+    accumulation = None
+    if accum_path.exists():
+        accumulation = np.load(accum_path).astype(np.float64)
+        if accumulation.shape != (ov.rows, ov.cols):
+            accumulation = None
+
+    # Priority-Flood fill amount (filled - raw): how far the raw DEM had to be
+    # raised so the cell gained a downhill path. This is the "poor drainage"
+    # signal — a genuine depression, not a proxy like absolute elevation. Derived
+    # from the two conditioning-pass rasters so it tolerates absence like the
+    # accumulation field above.
+    fill_path = settings.rasters_dir / "flow_filled_hsk.npy"
+    raw_path = settings.rasters_dir / "flow_raw_elev_hsk.npy"
+    fill = None
+    if fill_path.exists() and raw_path.exists():
+        filled = np.load(fill_path).astype(np.float64)
+        raw = np.load(raw_path).astype(np.float64)
+        if filled.shape == (ov.rows, ov.cols) and raw.shape == (ov.rows, ov.cols):
+            fill = filled - raw
+    return ov, buildings, depth, accumulation, fill
 
 
 def _class_mask(name: str) -> np.ndarray:
-    ov, _buildings, _depth = _rasters()
+    ov, _buildings, _depth, _accum, _fill = _rasters()
     from _overlay_common import LAND_CLASSES
 
     return ov.land_class == LAND_CLASSES.index(name)
@@ -199,7 +265,7 @@ def hard_standing() -> np.ndarray:
     footprints are the surveyed 396 (Open3dhk fused with Overture), so the
     exclusion is measured rather than assumed.
     """
-    ov, buildings, _ = _rasters()
+    ov, buildings, _depth, _accum, _fill = _rasters()
     mask = _class_mask("paved") | _class_mask("bare")
     if buildings is not None:
         mask = mask & ~buildings
@@ -213,46 +279,304 @@ def vegetated() -> np.ndarray:
 
 def basin_depth() -> np.ndarray | None:
     """The 450 mm level-pool depth field, or None when it has not been run."""
-    _ov, _buildings, depth = _rasters()
+    _ov, _buildings, depth, _accum, _fill = _rasters()
     return depth
 
 
-def reservoir_candidates() -> list[dict[str, Any]]:
-    """Deep sub-basins of the computed wet grid.
+def flow_accumulation() -> np.ndarray | None:
+    """D8 flow accumulation (cells draining through each cell), or None when the
+    conditioning pass has not been run."""
+    _ov, _buildings, _depth, accumulation, _fill = _rasters()
+    return accumulation
 
-    Deliberately the *deep* part, not the whole basin: the whole basin is 29.8%
-    of this 741 m x 587 m study area and the ledger's 25% single-intervention
-    cap refuses it as a land-use change. A reservoir belongs where the water
-    already pools anyway.
+
+def waterway_mask() -> np.ndarray | None:
+    """The surveyed watercourse (Tin Shui Wai Nullah) as a boolean mask.
+
+    The channel exclusion. It is measured geometry, not a derived proxy: the
+    study area is crossed by the Tin Shui Wai Nullah, an open drainage nullah
+    (OSM ``waterway=drain``), rasterised by ``scripts/make_waterway_mask.py``.
+    Where this exists it is the right authority for "this is the watercourse",
+    because the D8 flow-accumulation top quantile only catches the downstream
+    reach where accumulation actually peaks — the nullah is NOT uniformly
+    deep-blue in the accumulation field, so the quantile cut misses most of it.
     """
-    depth = basin_depth()
-    if depth is None:
+    _ov, _buildings, _depth, _accum, _fill = _rasters()
+    path = settings.rasters_dir / "waterway_hsk.npy"
+    if not path.exists():
+        return None
+    mask = np.load(path).astype(bool)
+    if mask.shape != (_ov.rows, _ov.cols):
+        return None
+    return mask
+
+
+def boundary_outlets() -> np.ndarray | None:
+    """The grid-edge cells water actually drains out of, as a boolean mask.
+
+    A D8 ``receiver == -1`` marks an outlet, but that is not the same as "the
+    boundary". After flat resolution an *interior* flat cell with no downhill
+    neighbour is also an outlet (362 of them here) even though it does not sit
+    on the edge — its water does not leave the scene, it pools there. The true
+    discharge points are the ``receiver == -1`` cells on the outermost ring of
+    the grid (82 here): every drop that leaves the study area crosses one of
+    these.
+
+    These are the *opposite* of flood risk — they are where the drainage
+    succeeds — so a reservoir candidate must never be sited on them. A basin on
+    the discharge ring would sit on the exit the water already has, blocking the
+    relief it is meant to provide, not adding any.
+    """
+    _ov, _buildings, _depth, _accum, _fill = _rasters()
+    from hydrology import condition
+
+    ov = _overlay()
+    receiver = condition(ov.elevation)["receiver"]
+    outlet = receiver == -1
+    rows, cols = ov.rows, ov.cols
+    # Keep only the outlets on the outermost ring.
+    on_edge = np.zeros_like(outlet)
+    on_edge[0, :] = True
+    on_edge[rows - 1, :] = True
+    on_edge[:, 0] = True
+    on_edge[:, cols - 1] = True
+    return outlet & on_edge
+
+
+def _raw_slope() -> np.ndarray | None:
+    """Steepest-descent slope of the *raw* DEM, per cell, as a fraction (m/m).
+
+    This is the independent "how fast can this cell shed water" signal. It is
+    computed from the raw DEM, not the Priority-Flood-filled surface, because
+    the filled surface flattens every filled pit to the epsilon slope (1e-5 m/m)
+    — a filled-surface slope is then a restatement of the fill amount, and using
+    both would multiply the same depression twice. The raw slope is the honest
+    terrain-conveyance term.
+
+    The slope is the maximum ``(elev - neighbour) / distance`` over the eight
+    neighbours, the same steepest-descent rule D8 uses (so a cell's slope is its
+    downhill drop toward its own D8 receiver). ``distance`` is cell-count based:
+    1 for orthogonal, sqrt(2) for diagonal. Outlets (no downhill neighbour) get
+    0, which the risk ratio's epsilon guards against.
+    """
+    _ov, _buildings, _depth, _accum, _fill = _rasters()
+    ov = _overlay()
+    raw_path = settings.rasters_dir / "flow_raw_elev_hsk.npy"
+    if not raw_path.exists():
+        return None
+    raw = np.load(raw_path).astype(np.float64)
+    rows, cols = ov.rows, ov.cols
+    if raw.shape != (rows, cols):
+        return None
+    slope = np.zeros((rows, cols), dtype=np.float64)
+    for r in range(rows):
+        for c in range(cols):
+            best = 0.0
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    dist = 2.0 ** 0.5 if (dr and dc) else 1.0
+                    s = (raw[r, c] - raw[nr, nc]) / dist
+                    if s > best:
+                        best = s
+            slope[r, c] = best
+    return slope
+
+
+def _direct_inflow() -> np.ndarray | None:
+    """The *direct* upstream inflow each cell receives, in m3.
+
+    Each upstream cell sheds its SCS-CN ``unstored_m3`` into its D8 receiver;
+    ``_direct_inflow[c]`` is the sum of that runoff over ``c``'s immediate
+    upstream neighbours. Unlike the total D8 accumulation this is NOT monotonic
+    down a path: it spikes where several branches converge and falls back to a
+    single branch between junctions, so it is the local "water collects here"
+    signal the risk ratio needs as its numerator.
+
+    The weighting is by each cell's *runoff volume* (CN-weighted), not a bare
+    count, so a paved roof contributes more than a lawn of equal area. On this
+    85 %-paved grid the two nearly coincide, but the weighted field is the
+    physically correct one and does not go stale when land cover changes.
+    """
+    _ov, _buildings, _depth, _accum, _fill = _rasters()
+    ov = _overlay()
+    from hydrology import condition
+
+    receiver = condition(ov.elevation)["receiver"].ravel()
+    from app.services.sandbox_model import _runoff_and_unstored
+
+    _runoff_m, unstored_m = _runoff_and_unstored(ov.land_class, 450.0)
+    cell_area = ov.cell_m * ov.cell_m
+    unstored_m3 = (unstored_m * cell_area).ravel()
+    inflow = np.zeros_like(unstored_m3)
+    valid = receiver >= 0
+    np.add.at(inflow, receiver[valid], unstored_m3[valid])
+    return inflow.reshape(ov.rows, ov.cols)
+
+
+def reservoir_candidates() -> list[dict[str, Any]]:
+    """Gentle-slope patches that sit under a convergence: the preventive risk.
+
+    A reservoir (detention basin) exists to catch excess inflow before it
+    overwhelms the downstream, so its site is where flood risk *peaks locally*
+    along a drainage path — the ground where a lot of water arrives while the
+    terrain's own ability to pass it on is weakest.
+
+    The risk model is ``R = inflow / slope``, but the numerator and denominator
+    are of different geometric kinds, so they are applied in two stages rather
+    than intersected per cell (which shatters the patches into one-cell
+    fragments — see the module comment):
+
+    1. the **faces** are the contiguous patches of raw slope under
+       ``RESERVOIR_SLOPE_MAX`` (the "conveyance is weak here" areal signal);
+    2. each face is kept only if its summed direct inflow clears
+       ``RESERVOIR_MIN_INFLOW_M3`` — i.e. it actually sits under a convergence,
+       not merely draining a single branch — and the faces are returned in
+       descending ``totalInflowM3`` so the flat bed under the most water leads.
+
+    The slope is deliberately *not* divided by when ranking: it has already done
+    its filtering work as the admission gate, so re-amplifying it as a ranking
+    denominator would only let a face's few steeper edge cells (which the
+    4-connected labelling pulls in) skew the ordering. Inflow is the direct,
+    stable source of flood risk, so it is the ranking key.
+
+    The channel (the monotonic total-accumulation top
+    ``RESERVOIR_CHANNEL_QUANTILE``) and the boundary outlets are excluded: both
+    are where the water already drains away, the inverse of flood risk. Surveyed
+    building footprints are excluded for the same reason as every other pool.
+
+    The old rule (``depth >= 1.0 m`` static ponding) sited reservoirs on ground
+    that *already* floods; the fill-intersection rule that followed sited them
+    on a building-density proxy (fill >= 0.1 m cells are 87 % paved). This rule
+    sites them where flooding would first *appear* — the flat bed under a
+    convergence that the interception is actually useful at.
+    """
+    slope = _raw_slope()
+    inflow = _direct_inflow()
+    if slope is None or inflow is None:
         return []
-    return _sites(depth >= RESERVOIR_MIN_DEPTH_M, kind="water_reservoir",
-                  why=f"connected sub-basin of the 450 mm level-pool wet grid "
-                      f"at {RESERVOIR_MIN_DEPTH_M} m depth or more")
+    _ov, buildings, _depth, accum, _fill = _rasters()
+    if buildings is None:
+        return []
+
+    # The areal signal: gentle-slope ground, cleared of everything that is not a
+    # site (channel, outlet, building). This is the face a basin sits on.
+    mask = slope < RESERVOIR_SLOPE_MAX
+    # The surveyed watercourse is the channel exclusion. It is preferred over the
+    # accumulation-quantile cut (kept as a fallback below) because the nullah is
+    # measured geometry and is NOT uniformly deep-blue in the accumulation field,
+    # so the quantile only catches its downstream reach.
+    waterway = waterway_mask()
+    if waterway is not None:
+        mask = mask & ~waterway
+    else:
+        channel = None
+        if accum is not None:
+            channel_thr = float(np.quantile(accum, RESERVOIR_CHANNEL_QUANTILE))
+            channel = accum >= channel_thr
+            mask = mask & ~channel
+    outlets = boundary_outlets()
+    if outlets is not None:
+        mask = mask & ~outlets
+    mask = mask & ~buildings
+
+    from app.services.intervention_geometry import (
+        connected_components,
+        contour_ring,
+        polygon_area_ha,
+        ring_centroid,
+    )
+
+    ov = _overlay()
+    cols = ov.cols
+    out: list[dict[str, Any]] = []
+    for component in connected_components(mask, RESERVOIR_MIN_SITE_CELLS,
+                                          connectivity=4):
+        cells = np.asarray(component["cells"], dtype=np.int64)
+        rs, cs = cells[:, 0], cells[:, 1]
+        total_inflow = float(inflow[rs, cs].sum())
+        if total_inflow < RESERVOIR_MIN_INFLOW_M3:
+            continue
+        contour = contour_ring(component["cells"], bounds=ov.bounds,
+                               rows=ov.rows, cols=cols)
+        if contour is None:  # pragma: no cover - components are non-empty
+            continue
+        geometry, enclosed, _of = contour
+        out.append({
+            "kind": "water_reservoir",
+            "geometry": geometry,
+            "centroid": ring_centroid(geometry["coordinates"][0]),
+            "areaHa": polygon_area_ha(geometry["coordinates"],
+                                      ov.bounds[1], ov.bounds[3]),
+            "cells": component["cells"],
+            "coveredCellCount": enclosed,
+            # The flood-risk score's own part, published so the suggester can
+            # rank the faces by inflow without re-deriving it. The slope was
+            # already the admission gate (this function only keeps patches under
+            # RESERVOIR_SLOPE_MAX), so it is not divided by again — the inflow
+            # alone is the direct source of risk. totalInflowM3 is the summed
+            # direct upstream runoff (the inflow term); see the module comment
+            # for why the two signals are applied in stages, not multiplied.
+            "totalInflowM3": total_inflow,
+            "evidence": (f"gentle-slope bed (raw slope < {RESERVOIR_SLOPE_MAX}) "
+                         f"receiving {total_inflow:.0f} m3 of direct inflow"),
+        })
+    out.sort(key=lambda s: -s["totalInflowM3"])
+    return out
+
+
+def _building_density(buildings: np.ndarray) -> np.ndarray:
+    """Fraction of built-on cells within a radius window, per cell.
+
+    A dense block is a heat island: paving it greener yields more cooling than
+    greening an isolated hard patch. The density is a box-windowed mean of the
+    building mask, computed with an integral image so it is O(rows*cols) rather
+    than O(rows*cols*radius^2). The window is clipped at the grid edge, so an
+    edge cell divides by its actual (smaller) window size rather than by the
+    full window.
+    """
+    b = buildings.astype(np.float64)
+    rows, cols = b.shape
+    ii = np.zeros((rows + 1, cols + 1), dtype=np.float64)
+    ii[1:, 1:] = b.cumsum(axis=0).cumsum(axis=1)
+    radius = GREEN_BLOCK_RADIUS_CELLS
+    density = np.empty_like(b)
+    for r in range(rows):
+        for c in range(cols):
+            r0 = max(0, r - radius)
+            r1 = min(rows, r + radius + 1)
+            c0 = max(0, c - radius)
+            c1 = min(cols, c + radius + 1)
+            total = ii[r1, c1] - ii[r0, c1] - ii[r1, c0] + ii[r0, c0]
+            density[r, c] = total / ((r1 - r0) * (c1 - c0))
+    return density
 
 
 def green_candidates() -> list[dict[str, Any]]:
-    """Hard standing within the halo of the largest vegetated block.
+    """Hot hard ground inside dense built blocks: the urban-heat-island core.
 
-    Greening already-green ground changes nothing, so a green candidate must be
-    somewhere that is currently hard. The halo rule is stated, not derived: it
-    is the planted-verge width around the study area's biggest park, and it can
-    be argued with by changing ``GREEN_HALO_CELLS``.
+    A green candidate's value is cooling, so it is a cell that holds heat
+    (``paved``/``bare``) inside a block dense enough to be a heat island (the
+    building density over a local window reaches ``GREEN_MIN_DENSE_FRACTION``).
+    Greening an isolated hard patch in a park-lined suburb cools little; greening
+    the dense core cools the most. The old rule (hard standing in the halo of the
+    largest vegetated block) dropped candidates into the river bed once the river
+    was mis-classed as ``green`` by WorldCover, and was blind to heat entirely.
     """
-    green = vegetated()
-    from app.services.intervention_geometry import connected_components
-
-    blocks = connected_components(green, MIN_SITE_CELLS, connectivity=4)
-    if not blocks:
-        return []
-    biggest = _mask_of(blocks[0]["cells"], green.shape)
-    target = _halo(biggest, GREEN_HALO_CELLS) & ~biggest & hard_standing()
-    return _sites(target, kind="green_space",
-                  why=f"paved or bare ground within {GREEN_HALO_CELLS} cells "
-                      f"({GREEN_HALO_CELLS * 5} m) of the study area's largest "
-                      f"vegetated block, buildings excluded")
+    ov, buildings, _depth, _accum, _fill = _rasters()
+    mask = _class_mask("paved") | _class_mask("bare")
+    if buildings is not None:
+        mask = mask & ~buildings
+        mask = mask & (_building_density(buildings) >= GREEN_MIN_DENSE_FRACTION)
+    return _sites(mask, kind="green_space",
+                  why=f"paved or bare ground in dense built blocks (building "
+                      f"density >= {GREEN_MIN_DENSE_FRACTION:.0%} over a "
+                      f"{2 * GREEN_BLOCK_RADIUS_CELLS + 1}-cell window), "
+                      f"surveyed building footprints excluded")
 
 
 def paving_candidates() -> list[dict[str, Any]]:
@@ -306,6 +630,10 @@ def _stamp() -> tuple[float, ...]:
     paths = (
         settings.data_dir / "landclass_hsk.npy",
         settings.rasters_dir / "wetgrid_hsk.npy",
+        settings.rasters_dir / "flow_accum_hsk.npy",
+        settings.rasters_dir / "flow_raw_elev_hsk.npy",
+        settings.rasters_dir / "flow_filled_hsk.npy",
+        settings.rasters_dir / "flow_receiver_hsk.npy",
         BACKEND_DIR / "data" / "rasters" / "buildings_hsk.json",
     )
     return tuple(p.stat().st_mtime if p.exists() else -1.0 for p in paths)

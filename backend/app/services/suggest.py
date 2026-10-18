@@ -54,11 +54,12 @@ from app.services.sandbox_model import Grids, load_grids
 STATUS = "SITES_FROM_MEASURED_RASTERS"
 
 # Axes in report order. No score, no ordering between them.
-AXIS_ORDER = ("drainage", "heat", "runoff")
+AXIS_ORDER = ("drainage", "flood", "heat", "runoff")
 
 # Which pools belong to which axis, and the number each is ranked by.
 _POOL_FOR_AXIS: dict[str, tuple[str, ...]] = {
     "drainage": ("water_reservoir", "underground_tank", "flood_storage"),
+    "flood": ("water_reservoir",),
     "heat": ("green_space",),
     "runoff": ("permeable_paving", "underground_tank"),
 }
@@ -68,6 +69,11 @@ _AXIS_BASIS = {
         "storage is footprint cells x the working depth the class (or the "
         "intervention's own storageDepthM) gives; runoff avoided is the "
         "SCS-CN depth change per cell, summed over the footprint"
+    ),
+    "flood": (
+        "flood-risk ratio R = direct upstream inflow (m3) / raw-DEM slope (m/m): "
+        "where a convergence meets a flat bed the water collects and over-tops; "
+        "each face is ranked by its summed inflow over its mean slope"
     ),
     "heat": (
         "cells converted from hard standing to vegetated ground, with the "
@@ -164,6 +170,18 @@ def _estimate(grids: Grids, site: dict[str, Any],
     if effect.get("to") is not None:
         storage_added_m3 = _storage_depth(site) * covered * cell_area
 
+    # The flood axis ranks by *inflow alone*: totalInflowM3 is the water that
+    # arrives at the site, and it is the direct source of flood risk. The slope
+    # was already the *admission* gate (``siting.reservoir_candidates`` only
+    # keeps patches under RESERVOIR_SLOPE_MAX), so dividing by it again would
+    # only re-amplify a signal that has already done its filtering work. The
+    # reservoir pool publishes ``totalInflowM3``; every other kind has none, so
+    # the risk is None there and the flood axis (which only draws from the
+    # reservoir pool) is the only place it is read.
+    flood_risk = None
+    if site.get("totalInflowM3") is not None:
+        flood_risk = round(float(site["totalInflowM3"]), 1)
+
     return {
         "cellsCovered": covered,
         "cellsOfSite": len(cells),
@@ -178,6 +196,7 @@ def _estimate(grids: Grids, site: dict[str, Any],
         "runoffDeltaM3": round(runoff_avoided_m3, 1),
         "storageAddedM3": round(storage_added_m3, 1),
         "heatIndexDelta": round(_heat_delta(before, after), 3),
+        "floodRisk": flood_risk,
         "basis": _AXIS_BASIS[
             "drainage" if site["kind"] in ("water_reservoir", "underground_tank",
                                            "flood_storage")
@@ -339,6 +358,8 @@ def suggest(rainfall_mm: float = 450.0,
             "drainage": lambda c: (c["estimate"]["storageAddedM3"],
                                     c["estimate"]["runoffDeltaM3"],
                                     c["site"]["cells"]),
+            "flood": lambda c: (c["estimate"]["floodRisk"] or 0.0,
+                                c["site"]["cells"]),
             "heat": lambda c: (c["estimate"]["heatIndexDelta"],
                                c["site"]["cells"]),
             "runoff": lambda c: (c["estimate"]["runoffDeltaM3"],

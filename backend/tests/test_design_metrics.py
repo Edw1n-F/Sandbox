@@ -640,6 +640,40 @@ def main() -> int:
     check("and the rounded public FAD agrees to its own 4-dp rounding",
           worst_abs < 5e-5, f"worst absolute gap {worst_abs:.2e}")
 
+    # --- building mask: exact outline vs the AABB envelope --- #
+    #
+    # rasterise_height() stamps one axis-aligned bounding box per footprint, which
+    # is the right raster for wind/shade (a frontal envelope) but the wrong one
+    # for hiding water under a building. A rotated footprint's AABB over-covers
+    # its diagonals and under-covers its corners -- the "one side of a tower
+    # painted blue" artefact the wet-grid mask exists to prevent. The exact mask
+    # must follow the polygon, so it covers strictly fewer cells than the AABB
+    # (the AABB swallows courtyards and gaps) while still covering every cell the
+    # polygon-exact raster does.
+    from app.services.design_metrics import building_mask_from_geojson, rasterise_height
+
+    exact_mask = building_mask_from_geojson(features, grids)
+    aabb_mask = rasterise_height(fps, grids) > 0
+    check("the exact mask follows the polygons, so it is no larger than the AABB",
+          int(exact_mask.sum()) < int(aabb_mask.sum()),
+          f"exact {int(exact_mask.sum())} vs AABB {int(aabb_mask.sum())} cells")
+    check("but it still covers real building cells (not empty)",
+          int(exact_mask.sum()) > 0, f"{int(exact_mask.sum())} cells")
+    # Every exact cell must lie inside some building outline. The AABB can only
+    # *add* cells, never miss one the exact mask claims -- in principle. In
+    # practice the AABB is built from a *centroid* + width/depth, so an
+    # off-centre or rotated footprint leaves cells that the exact polygon covers
+    # but the AABB rectangle does not. Those are precisely the cells that leak
+    # blue in the display: the exact mask must claim them, which is the point.
+    check("the exact mask claims cells the AABB misses (the leak this fixes)",
+          int((exact_mask & ~aabb_mask).sum()) > 0,
+          f"{int((exact_mask & ~aabb_mask).sum())} cells the AABB misses")
+    # The AABB over-covers: it marks cells the exact mask does not, which is the
+    # courtyard/gap leakage a display mask must not have.
+    check("the AABB over-covers (marks non-building cells)",
+          int((aabb_mask & ~exact_mask).sum()) > 0,
+          f"{int((aabb_mask & ~exact_mask).sum())} cells")
+
     print(f"\n{PASSED}/{PASSED + FAILED} passed")
     return 1 if FAILED else 0
 

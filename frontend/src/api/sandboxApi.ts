@@ -41,6 +41,7 @@ export interface SandboxSuggestion {
     runoffDeltaM3: number
     storageAddedM3: number
     heatIndexDelta: number
+    floodRisk: number | null
     basis: string
   }
   feature: SandboxFeature

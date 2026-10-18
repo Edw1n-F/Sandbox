@@ -292,6 +292,180 @@ def label_depressions(
     }
 
 
+def _resolve_flat_directions(
+    filled: np.ndarray,
+    raw: np.ndarray,
+    receiver: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, dict]:
+    """Give D8-deadlocked flat cells a defined flow direction to a real outlet.
+
+    A *flat* cell is one Priority-Flood did not raise (``filled == raw``, so it
+    has no depression capacity) **and** D8 could not point downhill
+    (``receiver == -1``). These are not pits: they are plateaus (roofs and roads
+    flattened by low-resolution resampling) whose 8-neighbourhood is all at the
+    same elevation, so the steepest-descent rule finds no strictly-lower target
+    and leaves the cell directionless. The old cascade counted whatever reached
+    such a cell as ``discharged`` -- water that never actually left the scene,
+    worth roughly half the runoff on the real grid.
+
+    The fix is **flat resolution** (Garbrecht & Martz 1997; the same idea as
+    Barnes et al.'s epsilon, applied explicitly rather than by infinitesimal
+    slope): route each flat component to its *outlet* -- the flat cell(s) on the
+    component's rim that touch either a strictly-lower neighbour or an
+    equal-elevation neighbour that already has a D8 direction. A component with
+    no outlet is a genuine endorheic pit and is reported (``closed``) so the
+    caller can pond it instead of routing it.
+
+    Returns the receiver with flat cells redirected (outlets and non-flat cells
+    unchanged), the component label grid (0 = not flat), and a per-component
+    ``closed`` summary. Deterministic: components seed in row-major order, the
+    outlet search and the inward BFS use a fixed neighbour order.
+    """
+    filled = np.asarray(filled, dtype=np.float64)
+    raw = np.asarray(raw, dtype=np.float64)
+    rows, cols = filled.shape
+    n = rows * cols
+    filled_f = filled.ravel()
+    raw_f = raw.ravel()
+    recv = np.asarray(receiver, dtype=np.int64).ravel()
+
+    # Flat = no depression capacity AND no receiver. Edge cells stay outlets.
+    flat = (filled_f <= raw_f + 1e-9) & (recv < 0)
+    flat = flat.reshape(rows, cols)
+    flat[0, :] = False
+    flat[-1, :] = False
+    flat[:, 0] = False
+    flat[:, -1] = False
+
+    labels = np.zeros((rows, cols), dtype=np.int32)
+    resolved = recv.copy()
+    closed: dict[int, bool] = {}
+
+    unvisited = set(zip(*[a.tolist() for a in np.nonzero(flat)]))
+    count = 0
+    while unvisited:
+        seed = unvisited.pop()
+        count += 1
+        stack = [seed]
+        cells: list[tuple[int, int]] = [seed]
+        while stack:
+            r, c = stack.pop()
+            labels[r, c] = count
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < rows and 0 <= nc < cols and flat[nr, nc]:
+                        if (nr, nc) in unvisited:
+                            unvisited.discard((nr, nc))
+                            stack.append((nr, nc))
+                            cells.append((nr, nc))
+
+        # Find the component's outlets: rim cells that touch a strictly-lower
+        # neighbour, or an equal-elevation neighbour that already has a D8
+        # direction. Both are places water can genuinely leave the flat.
+        outlet_cells: list[tuple[int, int]] = []
+        cell_set = set(cells)
+        for r, c in cells:
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    if (nr, nc) in cell_set:
+                        continue
+                    nidx = nr * cols + nc
+                    if filled_f[nidx] < filled_f[r * cols + c] - 1e-9:
+                        outlet_cells.append((r, c))
+                    elif abs(filled_f[nidx] - filled_f[r * cols + c]) < 1e-9 and recv[nidx] >= 0:
+                        outlet_cells.append((r, c))
+
+        if not outlet_cells:
+            closed[count] = True
+            continue
+        closed[count] = False
+
+        # BFS inward from the outlets: every flat cell points to whichever
+        # neighbour is one step closer to an outlet (a reverse shortest-path
+        # field), so water flows across the flat to leave. Outlet cells keep
+        # their own best escape -- a strictly-lower neighbour, else an
+        # equal-elevation neighbour's receiver.
+        from collections import deque
+
+        dist = {c: 0 for c in set(outlet_cells)}
+        q = deque(set(outlet_cells))
+        while q:
+            r, c = q.popleft()
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    if (nr, nc) not in cell_set or (nr, nc) in dist:
+                        continue
+                    dist[(nr, nc)] = dist[(r, c)] + 1
+                    q.append((nr, nc))
+
+        for r, c in cells:
+            idx = r * cols + c
+            if (r, c) in set(outlet_cells):
+                # Outlet: prefer a strictly-lower neighbour, else follow an
+                # equal-elevation neighbour's existing direction.
+                best = -1
+                best_elev = filled_f[idx]
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                    nr, nc = r + dr, c + dc
+                    if not (0 <= nr < rows and 0 <= nc < cols):
+                        continue
+                    if (nr, nc) in cell_set:
+                        continue
+                    nidx = nr * cols + nc
+                    if filled_f[nidx] < best_elev - 1e-9:
+                        best = nidx
+                        best_elev = filled_f[nidx]
+                if best < 0:
+                    # No strictly-lower neighbour: follow an equal-elevation
+                    # neighbour's receiver (it has a defined direction).
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            if dr == 0 and dc == 0:
+                                continue
+                            nr, nc = r + dr, c + dc
+                            if not (0 <= nr < rows and 0 <= nc < cols):
+                                continue
+                            if (nr, nc) in cell_set:
+                                continue
+                            nidx = nr * cols + nc
+                            if abs(filled_f[nidx] - filled_f[idx]) < 1e-9 and recv[nidx] >= 0:
+                                best = nidx
+                                break
+                        if best >= 0:
+                            break
+                resolved[idx] = best
+            else:
+                # Interior cell: point to the neighbour one step closer to an
+                # outlet (BFS distance decreases).
+                d = dist[(r, c)]
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if (nr, nc) in dist and dist[(nr, nc)] == d - 1:
+                            resolved[idx] = nr * cols + nc
+                            break
+
+    return resolved, labels, {"count": count, "closed": closed}
+
+
 def mass_balance(
     runoff_in_m3: float,
     stored_m3: float,
@@ -407,21 +581,64 @@ def fill_and_spill(
     )
     cap = cap + np.where(outlet, tailwater_cap, 0.0)
 
+    # Resolve D8-deadlocked flat plateaus: redirect each flat cell to a real
+    # outlet so water crosses the flat instead of being counted as discharged.
+    # A closed component (no outlet) is a true pit and is ponded below.
+    routed_recv, flat_labels, flat_info = _resolve_flat_directions(
+        filled, raw, receiver
+    )
+    closed_labels = {
+        label for label, is_closed in flat_info["closed"].items() if is_closed
+    }
+    closed_mask = np.zeros(n, dtype=bool)
+    if closed_labels:
+        flat_labels_flat = flat_labels.ravel()
+        closed_mask = np.isin(flat_labels_flat, list(closed_labels))
+
     inflow = runoff.copy()
     stored = np.zeros(n, dtype=np.float64)
     order = np.argsort(-filled_f, kind="stable")
 
+    # Flat resolution reintroduces *equal-elevation* edges (a flat cell points
+    # sideways to a same-height neighbour), which a single decreasing-elevation
+    # pass cannot topologically order. Route iteratively: keep a ``pending``
+    # buffer of water not yet stored or passed on, and sweep until it is empty.
+    # Every non-closed cell stores up to its capacity then pushes the excess
+    # down ``routed_recv``; a closed cell ponds everything. Flat cells have
+    # ``cap == 0`` so they merely relay, and the sweep carries their water
+    # across the plateau to the outlet and then downhill.
+    pending = runoff.copy()
     discharged = 0.0
-    for idx in order:
-        amount = float(inflow[idx])
-        s = amount if amount < cap[idx] else float(cap[idx])
-        stored[idx] = s
-        route = amount - s
-        target = int(recv[idx])
-        if target >= 0:
-            inflow[target] += route
-        else:
-            discharged += route
+    for _round in range(n + 1):
+        moved = False
+        for idx in order:
+            amount = float(pending[idx])
+            if amount <= 0.0:
+                continue
+            if closed_mask[idx]:
+                # True pit: pond all inflow, no routing.
+                stored[idx] += amount
+                pending[idx] = 0.0
+                moved = True
+                continue
+            room = cap[idx] - stored[idx]
+            take = amount if amount < room else float(room)
+            if take > 0.0:
+                stored[idx] += take
+            pending[idx] = 0.0
+            route = amount - take
+            if route <= 0.0:
+                if take > 0.0:
+                    moved = True
+                continue
+            target = int(routed_recv[idx])
+            if target >= 0:
+                pending[target] += route
+            else:
+                discharged += route
+            moved = True
+        if not moved:
+            break
 
     runoff_total = float(runoff.sum())
     stored_total = float(stored.sum())

@@ -15,7 +15,7 @@
   "landCoverSource": "esa-worldcover",
   "warning": "Real elevation and real ESA WorldCover land cover. The surface is Priority-Flood conditioned and D8 flow accumulation is computed and reported, but the runoff VOLUME is still allocated by solving for a water level rather than routed downhill cell by cell. It is a screening view, not a flood prediction.",
   "inputs": {
-    "rainfall_mm": 50.0,
+    "rainfall_mm": 450.0,
     "resolution_m": 5.0,
     "rows": 117,
     "cols": 148,
@@ -59,13 +59,13 @@
     "verticalDatum": "mPD"
   },
   "results": {
-    "runoffVolumeM3": 17379.4,
-    "unstoredVolumeM3": 9056.8,
-    "wetCells": 329,
-    "wetAreaHa": 0.83,
+    "runoffVolumeM3": 189266.6,
+    "unstoredVolumeM3": 180566.3,
+    "wetCells": 6725,
+    "wetAreaHa": 16.89,
     "totalAreaHa": 43.5,
-    "wetAreaFraction": 0.019,
-    "meanDepthInWetAreaM": 1.0958
+    "wetAreaFraction": 0.3884,
+    "meanDepthInWetAreaM": 1.0688
   },
   "render": {
     "minVisibleDepthM": 0.02,
@@ -87,20 +87,20 @@
   "routed": {
     "status": "SCREENING_ROUTED_NOT_A_FLOOD_PREDICTION",
     "warning": "Not a flood prediction. Not engineering-grade. Screening-level D8 fill-and-spill on a Priority-Flood conditioned 5 m surface.",
-    "runoffInM3": 9056.8,
-    "storedM3": 2514.2,
-    "dischargedM3": 6542.6,
+    "runoffInM3": 180566.3,
+    "storedM3": 7109.9,
+    "dischargedM3": 173456.5,
     "massBalance": {
-      "runoffInM3": 9056.822822250724,
-      "storedM3": 2514.2102110541273,
-      "dischargedM3": 6542.612611196591,
-      "residualM3": 5.4569682106375694e-12,
-      "relativeResidual": 6.02525666863101e-16,
+      "runoffInM3": 180566.34303411705,
+      "storedM3": 7109.882160055616,
+      "dischargedM3": 173456.46087406142,
+      "residualM3": 0.0,
+      "relativeResidual": 0.0,
       "tol": 1e-06,
       "balanced": true
     },
-    "wetCells": 1936,
-    "maxDepthM": 0.8079,
+    "wetCells": 2036,
+    "maxDepthM": 2.481,
     "depressions": {
       "count": 251,
       "maxDepthM": 2.2524
