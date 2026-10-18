@@ -21,6 +21,17 @@ A Hack4SDG prototype for exploring planning scenarios in Hung Shui Kiu / Ha Tsue
 5. Read the stats panel, then ask the chat why the numbers changed or what to try next.
 6. Adjust or delete interventions in the Interventions panel and run again to compare.
 
+## Where GenAI is used
+
+The language model explains results and picks from options the analysis has already worked out. It never produces the numbers itself.
+
+- **Chat answers** (`backend/app/agent/chat_service.py`): turns a question about a run into a structured answer card. Every number in the card is checked against the run's outputs. If a number doesn't match, the card goes back to the model once with the problem named. Anything still unmatched is flagged in the card.
+- **Run explanation** (`backend/app/services/run_service.py`): after each run, the model writes a short card on what the run changed.
+- **Interventions from plain language** (`backend/app/services/ai_plan.py`): the model turns an instruction like "add a retention pond in the north" into a choice from a fixed list of candidate sites drawn from the terrain, land cover and flood data. It can't invent coordinates. Building-height and density requests go to a separate massing tool. Anything the AI proposes starts as a draft, and nothing is calculated on it until the user confirms it.
+- **Estimated values**: on the details card, the user can let the AI estimate a value instead of entering one. Estimated values are labelled differently from values the user entered.
+
+Telling a question apart from an intervention request is done by fixed rules, not the model. The app supports Anthropic or any OpenAI-compatible endpoint (`backend/app/agent/llm.py`) and forces structured output. If no model is set up, it falls back to template cards, labelled as templates, and a rule-based parser.
+
 ## Stack
 
 - **Backend:** FastAPI (Python 3.14), with numpy, scipy, rasterio and trimesh for the analysis. Data is stored as files in `backend/data` (`STORE_MODE=file`).
