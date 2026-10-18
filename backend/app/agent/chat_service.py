@@ -115,14 +115,29 @@ def _parse_card(raw: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+#: How long the chat waits on the *fallback* draft after the stream has failed.
+#:
+#: Measured 18 Oct on the free tier: the stream 429s in under a second, then the
+#: unstreamed retry walked the whole model chain with backoff and took 30 s
+#: before the template card appeared -- with the user watching a spinner. A
+#: retry that is going to be throttled anyway should give up fast; the template
+#: card is labelled as code-assembled, so failing fast loses nothing honest.
+RETRY_DEADLINE_S = 8.0
+
+
 def _draft(
     facts: dict[str, Any],
     question: str,
     history: list[dict[str, str]] | None,
     *,
     on_delta: Any = None,
+    deadline_s: float | None = None,
 ) -> dict[str, Any] | None:
     """One structured draft. `on_delta` receives text as it streams, if given.
+
+    ``deadline_s`` bounds the non-streaming call in wall-clock time -- the whole
+    model chain, not one request -- so a throttled provider fails fast into the
+    template card instead of holding the chat for half a minute.
 
     Streaming and structured output pull in opposite directions: a forced tool
     call guarantees parseable JSON but does not stream, and a streamed reply
@@ -141,7 +156,8 @@ def _draft(
             on_delta(delta)
         return _parse_card("".join(chunks))
     turn = llm.complete_json(
-        system=system_with_contract(), messages=messages, schema=ANSWER_SCHEMA, max_tokens=MAX_TOKENS
+        system=system_with_contract(), messages=messages, schema=ANSWER_SCHEMA,
+        max_tokens=MAX_TOKENS, deadline_s=deadline_s,
     )
     return _parse_card(turn.text)
 
@@ -296,7 +312,7 @@ def stream_events(question: str, facts: dict[str, Any],
         same call the stream silently dropped.
         """
         try:
-            return _draft(facts, question, history)
+            return _draft(facts, question, history, deadline_s=RETRY_DEADLINE_S)
         except (llm.ProviderUnavailable, llm.LLMError):
             return None
 

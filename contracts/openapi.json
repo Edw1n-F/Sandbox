@@ -801,6 +801,30 @@
         "title": "LLMConfigUpdate",
         "type": "object"
       },
+      "MassingAssessRequest": {
+        "additionalProperties": false,
+        "description": "A height instruction, in the planner's own words.",
+        "properties": {
+          "instruction": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Instruction",
+            "type": "string"
+          },
+          "rainfallMm": {
+            "default": 50.0,
+            "maximum": 800.0,
+            "minimum": 0.0,
+            "title": "Rainfallmm",
+            "type": "number"
+          }
+        },
+        "required": [
+          "instruction"
+        ],
+        "title": "MassingAssessRequest",
+        "type": "object"
+      },
       "ParameterCard": {
         "additionalProperties": false,
         "description": "`GET /api/scenes/{sceneId}/parameter-card` response.\n\n``sources`` names the rasters the numbers came from, so a reader can tell\nwhether they are looking at the committed analysis or a synthetic fallback\nwithout reading any individual row. ``inputs`` echoes the four values the\ncaller chose (or the defaults), because a card whose inputs are not visible\ncannot be compared against another card.",
@@ -3713,6 +3737,61 @@
         "summary": "Get Ledger",
         "tags": [
           "scenes"
+        ]
+      }
+    },
+    "/api/scenes/{scene_id}/massing/assess": {
+      "post": {
+        "description": "Score a height change to the existing buildings. Writes nothing.",
+        "operationId": "assess_massing_api_scenes__scene_id__massing_assess_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scene_id",
+            "required": true,
+            "schema": {
+              "title": "Scene Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MassingAssessRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assess Massing Api Scenes  Scene Id  Massing Assess Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assess Massing",
+        "tags": [
+          "massing"
         ]
       }
     },

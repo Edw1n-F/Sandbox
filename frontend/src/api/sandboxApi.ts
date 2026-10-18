@@ -296,3 +296,35 @@ export async function fetchParameterCard(
   const { data } = await http.get<ParameterCard>(`/scenes/${sceneId}/parameter-card`, { params })
   return data
 }
+
+/** What `POST /api/scenes/{sceneId}/massing/assess` returns: a what-if, not a placement. */
+export interface MassingAssessment {
+  status: string
+  /** Non-empty: nothing was applied, and the axes are never combined. */
+  warning: string
+  ops: Array<Record<string, unknown>>
+  massing: { baselineMeanHeightM?: number; candidateMeanHeightM?: number } | null
+  /** One plain sentence per axis: shade, ventilation, drainage. */
+  tradeoffs: string[]
+  combinedScore: null
+  whyNoCombinedScore: string
+}
+
+/**
+ * Score a height change to the existing buildings, from the planner's sentence.
+ *
+ * Writes nothing: a height change to the district is a what-if, reported with
+ * its shade, ventilation and drainage trade-offs, and never added to the
+ * sandbox. A sentence with no height change in it is a 422.
+ */
+export async function assessMassing(
+  sceneId: string,
+  instruction: string,
+  rainfallMm?: number,
+): Promise<MassingAssessment> {
+  const { data } = await http.post<MassingAssessment>(`/scenes/${sceneId}/massing/assess`, {
+    instruction,
+    ...(rainfallMm !== undefined ? { rainfallMm } : {}),
+  })
+  return data
+}
