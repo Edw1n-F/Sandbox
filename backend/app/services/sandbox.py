@@ -137,9 +137,22 @@ def inputs_for(kind: str, params: dict[str, Any] | None = None) -> list[dict[str
 
     params = params or {}
     own = params.get("storageDepthM", params.get("storage_depth_m"))
-    if own is not None:
+    origin = (params.get("inputSources") or {}).get("storageDepthM")
+    if own is not None and origin == "user":
+        # A placed row the planner set by hand: the estimate offered back is
+        # their own number, and it says so.
+        estimate = float(own)
+        basis = "the value you entered"
+    elif own is not None and (_server_issued(params) or origin is None):
         estimate = float(own)
         basis = "measured for this site (the wet grid's depth, or the candidate's own value)"
+    elif own is not None:
+        # A placed row whose depth was the AI's estimate. Calling that
+        # "measured" was false: apply_inputs writes the class default into
+        # params, so a re-opened card must describe it as the default it is.
+        estimate = float(own)
+        basis = (f"the '{storage_class}' storage-class default, an assumption, "
+                 f"not a survey")
     else:
         estimate = float(STORAGE_DEPTH_M[storage_class])
         basis = f"the '{storage_class}' storage-class default, an assumption, not a survey"

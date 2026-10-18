@@ -88,6 +88,14 @@ def main() -> int:
           left["inputSources"] == {"storageDepthM": "ai_estimate"} and left["storageDepthM"] == 1.5,
           str(left))
     given = sandbox.apply_inputs("water_reservoir", {}, {"storageDepthM": 3})
+    # Re-opening a placed row must describe its depth by where it came from.
+    # apply_inputs writes the class default into params, so a row left to the AI
+    # used to come back labelled "measured for this site" -- a guess re-presented
+    # as a measurement in the edit panel.
+    reopened = sandbox.inputs_for("water_reservoir", left)[0]
+    check("a re-opened AI-estimated depth is still called a default, not a measurement",
+          "default" in reopened["estimateBasis"] and "measured" not in reopened["estimateBasis"],
+          reopened["estimateBasis"])
     check("a value the user typed is kept, labelled as theirs",
           given["inputSources"] == {"storageDepthM": "user"} and given["storageDepthM"] == 3.0)
     try:

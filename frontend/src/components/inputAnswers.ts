@@ -43,3 +43,20 @@ export function toValues(inputs: SandboxInput[], answers: InputAnswers): Record<
   }
   return out
 }
+
+/**
+ * Is every field answered? The one rule the Add and Save buttons share.
+ *
+ * "Let the AI estimate" is an answer; "Enter my own" with an empty or
+ * out-of-range number is not. So the button stays disabled only while a typed
+ * value is unusable, never because the planner chose the estimate.
+ */
+export function allAnswered(inputs: SandboxInput[], answers: InputAnswers | undefined): boolean {
+  return inputs.every((input) => fieldError(input, answers?.[input.key]) === null)
+}
+
+/** `water_reservoir` -> "Water reservoir": the one name the chat and the panel both use. */
+export function interventionName(kind: string): string {
+  const words = kind.split('_').join(' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}

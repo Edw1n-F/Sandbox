@@ -40,7 +40,7 @@ import {
   type ChatTurn,
   type StreamEvent,
 } from '@/api/chatApi'
-import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal, type ProposalQuestion } from '@/api/planApi'
+import { applyAiPlan, createAiPlan, revalidateAiPlan, type AiPlanResult, type InterventionProposal } from '@/api/planApi'
 import { INTENT_VOCABULARY, looksLikeIntervention } from '@/api/intentVocabulary'
 import { buildReceipt, type Receipt } from '@/api/receipt'
 import {
@@ -58,7 +58,7 @@ import {
   type SandboxSuggestion,
 } from '@/api/sandboxApi'
 import InputCard from './InputCard'
-import { defaultAnswers, fieldError, toValues, type InputAnswers } from './inputAnswers'
+import { allAnswered, defaultAnswers, interventionName, toValues, type InputAnswers } from './inputAnswers'
 import { usePlanStore } from '@/state/planStore'
 import { useSandboxStore } from '@/state/sandboxStore'
 import { useSceneStore } from '@/state/sceneStore'
@@ -303,52 +303,17 @@ function CardView({ card }: { card: AnswerCard }) {
 }
 
 /**
- * The assumptions one proposal rests on, and whether the planner has answered (Phase 2).
- *
- * Every question names a parameter the run actually reads, and each is rendered
- * with its own state: `OPEN` is a prompt, `ANSWERED` echoes the planner's words
- * *and* the server's parse of them, so a mismatched pair is visible rather than
- * silently resolved. A question whose answer the server could not parse shows
- * the class default still standing, which is the honest reading — the answer was
- * read, and it did not apply.
- *
- * Restored on 18 Oct after a refactor of the chat routing dropped it. The
- * `questions[]` field is still on the wire and still filled by the server; it
- * had simply stopped being shown, which is the failure mode a payload cannot
- * detect and why `verify-sandbox.mjs` asserts on the rendered text.
+ * One plain line about where and how big a proposal is: what a planner reads
+ * before deciding, with the full constraint report folded away under it.
  */
-function QuestionList({ questions }: { questions: ProposalQuestion[] }) {
-  return (
-    <Box sx={{ mt: 0.5, minWidth: 0 }}>
-      <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
-        ASSUMPTIONS ASKED ({questions.length})
-      </Typography>
-      {questions.map((q) => (
-        <Box key={q.id} sx={{ mt: 0.25, minWidth: 0 }}>
-          <Typography sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
-            {q.prompt}
-          </Typography>
-          <Typography
-            className="hud-mono"
-            sx={{
-              fontSize: 9,
-              lineHeight: 1.4,
-              overflowWrap: 'anywhere',
-              color: q.status === 'ANSWERED' ? '#5cff9d' : 'text.secondary',
-            }}
-          >
-            {q.id} · {q.status}
-            {q.answer ? ` · you: ${q.answer}` : ''}
-            {q.answeredValue !== null && q.answeredValue !== undefined
-              ? ` · read as ${q.answeredValue} ${q.unit}`.trimEnd()
-              : q.status === 'ANSWERED'
-                ? ' · not a number, so the class default stands'
-                : ''}
-          </Typography>
-        </Box>
-      ))}
-    </Box>
-  )
+function summaryLine(p: InterventionProposal): string {
+  const parts: string[] = []
+  if (p.size) parts.push(`${p.size.areaHa} ha`)
+  if (p.constraints) {
+    parts.push(p.constraints.buildingsClear ? 'clear of buildings' : 'overlaps buildings')
+    if (p.constraints.clippedCells > 0) parts.push(`${p.constraints.clippedCells} cells clipped`)
+  }
+  return parts.join(' · ')
 }
 
 /**
@@ -408,22 +373,9 @@ function ProposalDetail({ proposal }: { proposal: InterventionProposal }) {
             : ''}
         </Typography>
       ))}
-      {proposal.questions && proposal.questions.length > 0 && (
-        <QuestionList questions={proposal.questions} />
-      )}
       {proposal.status && (
         <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary', lineHeight: 1.4, mt: 0.25, overflowWrap: 'anywhere' }}>
           status: {proposal.status}
-        </Typography>
-      )}
-      {/* The proposal's own honesty label. Restored with the questions above:
-          this is the line that says the geometry is a screening contour, what
-          was clipped and why, and — once edited — that the depth is hand-set
-          rather than the class default. A gate that shows the numbers and not
-          this sentence is the overclaiming this project is built to prevent. */}
-      {proposal.warning && (
-        <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45, overflowWrap: 'anywhere' }}>
-          {proposal.warning}
         </Typography>
       )}
     </Box>
@@ -538,8 +490,7 @@ function ProposalReview({
     const checkedNow = payload.proposals.map((_, i) => checked[i] ?? true)
     if (!checkedNow.some(Boolean)) return
     if (payload.proposals.some((_, i) =>
-      checkedNow[i] && inputs[i]?.some((input) =>
-        fieldError(input, (answers[i] ?? {})[input.key]) !== null))) return
+      checkedNow[i] && !allAnswered(inputs[i] ?? [], answers[i]))) return
     const edited = payload.proposals.map((p, i) => {
       const typed = toValues(inputs[i] ?? [], answers[i] ?? {})
       return Object.keys(typed).length === 0
@@ -594,7 +545,7 @@ function ProposalReview({
   const anyChecked = checked.some(Boolean)
   // A checked proposal with a field the run would refuse holds Apply back.
   const invalid = payload.proposals.some(
-    (_, i) => checked[i] && inputs[i].some((input) => fieldError(input, answers[i][input.key]) !== null),
+    (_, i) => checked[i] && !allAnswered(inputs[i], answers[i]),
   )
 
   // Measure the checked candidates without applying them (Phase 4 T01). Writes
@@ -669,30 +620,38 @@ function ProposalReview({
           }
           label={
             <Box sx={{ minWidth: 0 }}>
-              <Typography sx={{ fontSize: 11.5, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
-                {p.interventionType}
-                {p.siteId ? ` · ${p.siteId}` : ''}
+              <Typography sx={{ fontSize: 12, fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+                {interventionName(p.interventionType)}
+              </Typography>
+              <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
+                {summaryLine(p)}
               </Typography>
               {p.rationale && (
-                <Typography
-                  sx={{ fontSize: 10.5, color: 'text.secondary', lineHeight: 1.3, overflowWrap: 'anywhere' }}
-                >
+                <Typography sx={{ fontSize: 10.5, color: 'text.secondary', lineHeight: 1.35, mt: 0.25, overflowWrap: 'anywhere' }}>
                   {p.rationale}
                 </Typography>
               )}
-              {p.basis && (
-                <Typography
-                  className="hud-mono"
-                  sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.3, overflowWrap: 'anywhere' }}
-                >
-                  basis: {p.basis}
+              {/* The proposal's own honesty label: that the geometry is a
+                  screening contour, what was clipped and why, and -- once edited
+                  -- that the depth is hand-set rather than the class default. It
+                  stays outside the folded evidence on purpose: a gate that shows
+                  the numbers and hides this sentence is the overclaiming this
+                  project is built to prevent. */}
+              {p.warning && (
+                <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45, mt: 0.25, overflowWrap: 'anywhere' }}>
+                  {p.warning}
                 </Typography>
               )}
-              <ProposalDetail proposal={p} />
               {checked[i] && (
                 // Not part of the checkbox label's click target: typing a depth
                 // must not toggle the proposal off.
-                <Box sx={{ mt: 0.75, minWidth: 0 }} onClick={(e) => e.preventDefault()}>
+                <Box
+                  sx={{ mt: 0.75, p: 0.75, minWidth: 0, borderRadius: 1, border: '1px solid', borderColor: 'divider' }}
+                  onClick={(e) => e.preventDefault()}
+                >
+                  <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary', mb: 0.5 }}>
+                    DECIDE THE DETAILS
+                  </Typography>
                   <InputCard
                     inputs={inputs[i]}
                     answers={answers[i]}
@@ -703,15 +662,23 @@ function ProposalReview({
                   />
                 </Box>
               )}
+              <Box component="details" sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
+                <Box component="summary" sx={{ fontSize: 9.5, color: 'text.secondary', cursor: 'pointer' }}>
+                  Evidence and constraints
+                </Box>
+                {p.basis && (
+                  <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.3, overflowWrap: 'anywhere' }}>
+                    basis: {p.basis}
+                  </Typography>
+                )}
+                <ProposalDetail proposal={p} />
+              </Box>
             </Box>
           }
           sx={{ alignItems: 'flex-start', ml: 0, mr: 0, minWidth: 0 }}
         />
       ))}
       <RefusalList rejected={payload.rejected} />
-      {payload.questions && payload.questions.length > 0 && (
-        <QuestionList questions={payload.questions} />
-      )}
       {revalidate && (
         <Box sx={{ mt: 0.5 }}>
           <Typography className="hud-mono" sx={{ fontSize: 9.5, color: 'text.secondary', lineHeight: 1.4 }}>
@@ -883,7 +850,7 @@ function SuggestionStage({
   const [answers, setAnswers] = useState<InputAnswers>(() => defaultAnswers(suggestion.inputs))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const invalid = suggestion.inputs.some((i) => fieldError(i, answers[i.key]) !== null)
+  const invalid = !allAnswered(suggestion.inputs, answers)
 
   if (staging.resolved) return null
 
@@ -1013,7 +980,7 @@ function ModifyReview({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   if (modify.resolved) return null
-  const invalid = target.inputs.some((i) => fieldError(i, answers[i.key]) !== null)
+  const invalid = !allAnswered(target.inputs, answers)
 
   const save = async () => {
     setBusy(true)
