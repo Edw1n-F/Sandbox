@@ -90,6 +90,13 @@ export const INTENT_VOCABULARY: IntentVocabulary = {
     basin: 'water_reservoir',
     'floodable park': 'flood_storage',
     wetland: 'flood_storage',
+    // 18 Oct: "add trees" was refused. Trees are modelled as the `green`
+    // land class, so the plain words map there; "street trees" is whole so it
+    // outranks "street" -> road.
+    trees: 'green_space',
+    tree: 'green_space',
+    'street trees': 'green_space',
+    planting: 'green_space',
   },
   kinds: {
     water_reservoir: 'water reservoir',
@@ -157,12 +164,24 @@ function nounRe(phrase: string): RegExp {
  * A `false` here is not a verdict: the SSE round trip still runs and its
  * `answer` event is the authority.
  */
+/** Mirrors `ai_plan._FALSE_FRIENDS`. */
+const FALSE_FRIENDS = [
+  'car park', 'carpark', 'parking', 'park and ride', 'business park',
+  'industrial park', 'science park', 'theme park', 'railroad',
+]
+
 export function looksLikeIntervention(text: string, vocab: IntentVocabulary): boolean {
   const trimmed = text.trim()
   if (trimmed === '') return false
   if (/\?\s*$/.test(trimmed)) return false
 
-  const lower = trimmed.toLowerCase().replace(/-/g, ' ')
+  // Compound phrases that contain a noun but are not it ("car park" is not a
+  // park), blanked the same way the server's `_mask_false_friends` does, so the
+  // fast path and the server agree on what was asked for.
+  const lower = FALSE_FRIENDS.reduce(
+    (t, phrase) => t.replace(wordRe(phrase), (m) => ' '.repeat(m.length)),
+    trimmed.toLowerCase().replace(/-/g, ' '),
+  )
   const hasVerb = [...vocab.interventionVerbs, ...vocab.removalVerbs].some((v) =>
     wordRe(v).test(lower),
   )

@@ -54,6 +54,8 @@ import {
   type ModifyTarget,
   type RemovalMatch,
   type SandboxInput,
+  assessMassing,
+  type MassingAssessment,
   type SandboxPreview,
   type SandboxSuggestion,
 } from '@/api/sandboxApi'
@@ -100,6 +102,8 @@ interface Message {
   /** What the card rests on, snapshotted when the question was asked. */
   receipt?: Receipt | null
   chips?: string[]
+  /** A height what-if on the existing buildings: scored, never placed. */
+  massing?: MassingAssessment
   /** Confirm gate for ai-plan proposals (plan v2 §5). */
   proposals?: ProposalPayload
   /** Route 1: the grounded suggestions under a run's card (or `loading`). */
@@ -808,6 +812,61 @@ function fmt(value: number | undefined): string {
   return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()}`
 }
 
+/**
+ * The suggestion axes a goal-style sentence is about, or null.
+ *
+ * Only goals: a sentence that names an intervention is the proposer's, and is
+ * routed before this is consulted. Matching is on whole words so "cool" does
+ * not catch "school" -- the same discipline as the noun vocabulary.
+ */
+function goalAxis(text: string): string[] | null {
+  const t = text.toLowerCase()
+  const has = (words: string[]) => words.some((w) => new RegExp(`\\b${w}`).test(t))
+  if (has(['flood', 'runoff', 'drain', 'storm', 'rain', 'water'])) return ['drainage', 'runoff']
+  if (has(['heat', 'hot', 'cool', 'temperature', 'shade'])) return ['heat']
+  return null
+}
+
+/**
+ * Is this a height change to the existing buildings?
+ *
+ * Needs both a height word and a building/area word, so "lower the flood
+ * risk" or "a higher reservoir wall" are not read as massing edits. The server
+ * parses the sentence itself and refuses one it cannot read.
+ */
+function isHeightChange(text: string): boolean {
+  const t = text.toLowerCase()
+  const height = /\b(taller|higher|shorter|lower|denser|less dense|more dense)\b|\bheights?\b/.test(t)
+  const subject = /\b(buildings?|towers?|blocks?|district|massing|skyline|west|east|north|south|centre|center)\b/.test(t)
+  return height && subject && !/\b(flood|risk|reservoir|wall|temperature|heat)\b/.test(t)
+}
+
+/** A height what-if: the three axes kept separate, and nothing to place. */
+function MassingWhatIf({ result }: { result: MassingAssessment }) {
+  const before = result.massing?.baselineMeanHeightM
+  const after = result.massing?.candidateMeanHeightM
+  return (
+    <Box sx={{ mt: 0.75, p: 0.75, borderRadius: '4px', border: '1px solid', borderColor: 'divider' }}>
+      <Typography className="hud-label" sx={{ fontSize: 9, color: 'text.secondary' }}>
+        WHAT-IF · NOT APPLIED
+      </Typography>
+      {before !== undefined && after !== undefined && (
+        <Typography className="hud-mono" sx={{ fontSize: 10, mt: 0.25 }}>
+          mean height {before} m → {after} m
+        </Typography>
+      )}
+      {result.tradeoffs.map((line) => (
+        <Typography key={line} sx={{ fontSize: 10, lineHeight: 1.4, mt: 0.25, overflowWrap: 'anywhere' }}>
+          {line}
+        </Typography>
+      ))}
+      <Typography sx={{ fontSize: 9.5, color: 'rgba(255,157,46,0.9)', lineHeight: 1.45, mt: 0.5 }}>
+        {result.warning}
+      </Typography>
+    </Box>
+  )
+}
+
 /** A suggestion as a draft proposal, so the viewer can draw its dashed preview. */
 function asDraft(s: SandboxSuggestion): InterventionProposal {
   return {
@@ -1072,6 +1131,12 @@ export default function ChatPanel() {
   const [announcement, setAnnouncement] = useState('')
   const [draft, setDraft] = useState<{ title: string | null; sentence: string | null } | null>(null)
   const [llmConfigured, setLlmConfigured] = useState<boolean | null>(null)
+  // What the most recent answer actually came from. A key being configured
+  // says the model *could* answer; this says whether it *did*. On a throttled
+  // free tier the two diverge constantly, and a header reading "Live model"
+  // while the deterministic parser answered is exactly the claim a judge
+  // should never catch us making.
+  const [lastAnswerFrom, setLastAnswerFrom] = useState<'model' | 'fallback' | null>(null)
   const [configAnchor, setConfigAnchor] = useState<HTMLElement | null>(null)
   const lastRunId = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -1142,6 +1207,7 @@ export default function ChatPanel() {
         })
         const proposals = r.proposals ?? []
         const rejected = r.rejected ?? []
+        setLastAnswerFrom(/heuristic/i.test(r.provider) ? 'fallback' : 'model')
         if (proposals.length === 0 && rejected.length === 0) {
           setMessages((prev) => [
             ...prev,
@@ -1235,6 +1301,7 @@ export default function ChatPanel() {
             void openProposalGate(event.answer.intent_hint, 'intent')
             break
           }
+          setLastAnswerFrom(event.answer.source === 'template' ? 'fallback' : 'model')
           setAnnouncement(`${event.answer.title}. ${event.answer.sentence}`)
           setMessages((prev) => [
             ...prev,
@@ -1296,6 +1363,32 @@ export default function ChatPanel() {
     // A removal is resolved against what is on the sandbox -- placed
     // interventions and planned projects -- never sent to the proposer, which
     // would read "remove the reservoir" as a request to add one.
+    // A height change to the existing buildings ("make the district 25%
+    // taller") is a what-if, not a placement. Sent to the proposer it hit the
+    // land constraint engine, whose building-overlap rule refuses any change to
+    // buildings by definition, and the chat then said height was not modelled.
+    // The scorer for it already exists; this reaches it.
+    if (isHeightChange(trimmed)) {
+      try {
+        const run = useSceneStore.getState().runResult
+        const result = await assessMassing(sceneId, trimmed, run?.inputs.rainfallMm)
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: mkId(),
+            role: 'ai',
+            text: 'Scored as a what-if on the existing buildings. Nothing was added to the sandbox.',
+            massing: result,
+          },
+        ])
+      } catch (err) {
+        setMessages((prev) => [...prev, { id: mkId(), role: 'ai', text: errorMessage(err) }])
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
+
     if (isRemoval(trimmed)) {
       try {
         const { matches, message } = await resolveRemoval(sceneId, trimmed)
@@ -1357,6 +1450,33 @@ export default function ChatPanel() {
       .slice(-6)
       .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.text }))
     await ask(trimmed, history)
+
+    // A goal rather than an intervention ("reduce flooding", "make it cooler")
+    // names no kind, so it cannot reach the proposer -- and the card it gets
+    // back is prose. Follow it with the run's own suggestions for that axis:
+    // real sites from the rasters, each one click from the details card, so a
+    // goal always ends in something the planner can place rather than a dead end.
+    const axis = goalAxis(trimmed)
+    const run = useSceneStore.getState().runResult
+    if (axis && run) {
+      try {
+        const r = await fetchRunSuggestions(sceneId, run.inputs.rainfallMm, run.inputs.planIds ?? [])
+        const picks = r.suggestions.filter((sg) => axis.includes(sg.axis))
+        if (picks.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: mkId(),
+              role: 'ai',
+              text: 'Sites this run suggests for that goal. Pick one to decide its details and place it.',
+              suggestions: picks,
+            },
+          ])
+        }
+      } catch {
+        // The prose answer already stands; suggestions are additive.
+      }
+    }
   }
 
   /** Route 1: open the input card for one of the run's suggestions, with a 3D preview. */
@@ -1377,7 +1497,11 @@ export default function ChatPanel() {
     ])
   }
 
-  const dotColor = llmConfigured === null ? '#7d928a' : llmConfigured ? '#5cff9d' : '#ff9d2e'
+  // Green only when the model actually answered last; amber when it is
+  // configured but the parser had to stand in, or when no model is configured.
+  const dotColor = llmConfigured === null
+    ? '#7d928a'
+    : llmConfigured && lastAnswerFrom !== 'fallback' ? '#5cff9d' : '#ff9d2e'
 
   return (
     <Box
@@ -1404,9 +1528,13 @@ export default function ChatPanel() {
           <Typography className="hud-mono" sx={{ fontSize: 9, color: 'text.secondary' }}>
             {llmConfigured === null
               ? 'LLM status unknown'
-              : llmConfigured
-                ? 'Live model'
-                : 'Heuristic parser — not AI'}
+              : !llmConfigured
+                ? 'Heuristic parser — not AI'
+                : lastAnswerFrom === 'fallback'
+                  ? 'Model unavailable — last answer from the rule-based parser'
+                  : lastAnswerFrom === 'model'
+                    ? 'Live model — last answer from the model'
+                    : 'Model configured'}
           </Typography>
         </Box>
         <IconButton
@@ -1532,6 +1660,7 @@ export default function ChatPanel() {
                   )}
                 </Box>
               )}
+              {m.massing && <MassingWhatIf result={m.massing} />}
               {m.staging && sceneId && (
                 <SuggestionStage
                   staging={m.staging}

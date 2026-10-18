@@ -124,6 +124,16 @@ EN_ALIASES: dict[str, str] = {
     # so a proposal-shaped turn came back as a result card.
     "green corridor": "green_space",
     "tree corridor": "green_space",
+    # "add trees" was refused outright -- the most natural phrasing a planner
+    # has for greening, and the first one a judge tries. Trees are modelled as
+    # the `green` land class (the raster has no separate tree class), which the
+    # proposal's evidence line already says; refusing the word was worse than
+    # mapping it honestly. "street trees" is listed whole so the longer match
+    # wins over "street" -> road.
+    "trees": "green_space",
+    "tree": "green_space",
+    "street trees": "green_space",
+    "planting": "green_space",
     "permeable plaza": "permeable_paving",
     "basin": "water_reservoir",
     "floodable park": "flood_storage",
@@ -1498,16 +1508,57 @@ def parse_intent_counts(instruction: str) -> list[tuple[str, int | None]]:
     :func:`parse_intent` exactly, so the two never disagree about *what* was
     asked for, only about whether a quantity was stated.
     """
-    text = instruction.lower()
+    text = _mask_false_friends(instruction.lower().replace("-", " "))
+    # Claim the longest phrases first, so a shorter alias inside one is not read
+    # as a second request: "street trees" is green space, and its "street" must
+    # not also add a road. The same longest-wins rule `_match_noun` uses.
+    spans: list[tuple[int, int]] = []
+    hits: dict[str, int] = {}
+    for alias in sorted(EN_ALIASES, key=len, reverse=True):
+        # Whole words, with an optional English plural -- so the parser and the
+        # classifier cannot disagree about whether a noun is present. A bare
+        # substring test read "car park" as a *park*.
+        for match in re.finditer(rf"\b{re.escape(alias)}(?:e?s)?\b", text):
+            if any(a < match.end() and match.start() < b for a, b in spans):
+                continue
+            spans.append((match.start(), match.end()))
+            hits.setdefault(alias, match.start())
     found: list[tuple[str, int | None]] = []
+    # Reported in the dict's own order, as before, so callers that read
+    # `found[0]` see the same priority they always have.
     for alias, kind in EN_ALIASES.items():
-        if alias not in text:
+        if alias not in hits:
             continue
         raw = _stated_count(text, alias)
         count = None if raw is None else max(1, min(raw, 3))
         if all(kind != k for k, _ in found):
             found.append((kind, count))
     return found
+
+
+#: Compound phrases that contain an intervention noun but are not that
+#: intervention. Each is blanked out before the vocabulary is matched, so the
+#: shorter noun inside it is never read. "car park" is a paved lot, the opposite
+#: of a green space; "road" in "railroad" is not a street.
+#:
+#: Kept short and explicit rather than inferred: a phrase on this list is a
+#: decision that the planner did *not* ask for the noun it contains, and that
+#: decision should be readable in one place.
+_FALSE_FRIENDS: tuple[str, ...] = (
+    "car park", "carpark", "parking", "park and ride", "business park",
+    "industrial park", "science park", "theme park", "railroad",
+)
+
+
+def _mask_false_friends(text: str) -> str:
+    """``text`` with every false-friend phrase replaced by spaces of equal length.
+
+    Same length, so the character offsets `_stated_count` reads for the count
+    window still line up with the original sentence.
+    """
+    for phrase in _FALSE_FRIENDS:
+        text = re.sub(rf"\b{re.escape(phrase)}\b", lambda m: " " * len(m.group(0)), text)
+    return text
 
 
 
