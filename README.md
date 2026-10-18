@@ -2,8 +2,6 @@
 
 A Hack4SDG prototype for exploring planning scenarios in Hung Shui Kiu / Ha Tsuen (HSK/HT). It renders terrain, buildings and environmental overlays (heat, flood/wet grid, ventilation corridors) in a 3D Cesium viewer. You can place interventions, re-run the analysis and ask questions about a run in a grounded chat panel.
 
-This prototype is no longer being developed.
-
 ## Stack
 
 - **Backend:** FastAPI (Python 3.14), with numpy, scipy, rasterio and trimesh for the analysis. Data is stored as files in `backend/data` (`STORE_MODE=file`).
