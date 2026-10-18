@@ -1484,16 +1484,45 @@ def parse_intent_counts(instruction: str) -> list[tuple[str, int | None]]:
     :func:`parse_intent` exactly, so the two never disagree about *what* was
     asked for, only about whether a quantity was stated.
     """
-    text = instruction.lower()
+    text = _mask_false_friends(instruction.lower().replace("-", " "))
     found: list[tuple[str, int | None]] = []
     for alias, kind in EN_ALIASES.items():
-        if alias not in text:
+        # Whole words, with an optional English plural -- the same rule
+        # `agent/intent.py::_match_noun` uses, so the parser and the classifier
+        # cannot disagree about whether a noun is present. A bare substring test
+        # read "car park" as a *park* and proposed three green spaces for it.
+        if not re.search(rf"\b{re.escape(alias)}(?:e?s)?\b", text):
             continue
         raw = _stated_count(text, alias)
         count = None if raw is None else max(1, min(raw, 3))
         if all(kind != k for k, _ in found):
             found.append((kind, count))
     return found
+
+
+#: Compound phrases that contain an intervention noun but are not that
+#: intervention. Each is blanked out before the vocabulary is matched, so the
+#: shorter noun inside it is never read. "car park" is a paved lot, the opposite
+#: of a green space; "road" in "railroad" is not a street.
+#:
+#: Kept short and explicit rather than inferred: a phrase on this list is a
+#: decision that the planner did *not* ask for the noun it contains, and that
+#: decision should be readable in one place.
+_FALSE_FRIENDS: tuple[str, ...] = (
+    "car park", "carpark", "parking", "park and ride", "business park",
+    "industrial park", "science park", "theme park", "railroad",
+)
+
+
+def _mask_false_friends(text: str) -> str:
+    """``text`` with every false-friend phrase replaced by spaces of equal length.
+
+    Same length, so the character offsets `_stated_count` reads for the count
+    window still line up with the original sentence.
+    """
+    for phrase in _FALSE_FRIENDS:
+        text = re.sub(rf"\b{re.escape(phrase)}\b", lambda m: " " * len(m.group(0)), text)
+    return text
 
 
 

@@ -32,6 +32,7 @@ import re
 from app.agent.answer import AnswerCard
 from app.services.ai_plan import (
     EN_ALIASES,
+    _mask_false_friends,
     MASSING_TOOL,
     POOL_FOR_KIND,
     REGION_FRACTIONS,
@@ -171,7 +172,9 @@ def _match_noun(text: str) -> tuple[str, str] | None:
     the single vocabulary (`ai_plan.EN_ALIASES`) rather than typing the plurals
     into it, where they would drift from the singulars.
     """
-    lowered = text.lower().replace("-", " ")
+    # False friends are blanked first ("car park" is not a park), so the
+    # classifier and `ai_plan.parse_intent_counts` read the same nouns.
+    lowered = _mask_false_friends(text.lower().replace("-", " "))
     best_key: tuple[int, int] | None = None
     best: tuple[str, str] | None = None
     for alias, kind in NOUNS.items():
